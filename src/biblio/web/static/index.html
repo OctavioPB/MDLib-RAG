@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Biblioteca</title>
+  <script src="/static/theme.js"></script>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+  <script src="/static/guias.js" defer></script>
+  <script src="/static/practicar.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <a class="brand" href="#/conversar">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"></path><path d="M4 21V5"></path><path d="M9 7h6"></path></svg>
+        <span>Biblioteca</span>
+      </a>
+      <nav class="pages" aria-label="Secciones">
+        <a href="#/conversar" data-page="conversar">Conversar</a>
+        <a href="#/guias" data-page="guias">Guías</a>
+        <a href="#/practicar" data-page="practicar">Practicar</a>
+      </nav>
+    </div>
+    <div class="topbar-right">
+      <div class="segmented theme-switch" role="radiogroup" aria-label="Tema de colores">
+        <label title="Claro"><input type="radio" name="theme" value="light" aria-label="Tema claro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></span></label>
+        <label title="Como el sistema"><input type="radio" name="theme" value="system" aria-label="Tema del sistema"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg></span></label>
+        <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg></span></label>
+      </div>
+      <span id="status" class="pill" role="status">Cargando…</span>
+      <button id="new-thread" class="btn" type="button">Nueva conversación</button>
+    </div>
+  </header>
+
+  <!-- Conversar (ADR-019) ------------------------------------------------------------------>
+  <main id="page-conversar" class="page conversar" hidden>
+    <section class="chat" aria-label="Conversación">
+      <div id="thread" class="thread">
+        <div id="welcome" class="welcome">
+          <h1>¿Qué quieres encontrar o entender?</h1>
+          <p>Escribe una pregunta para que te la explique con tus notas, o un tema para ver dónde está.
+            Cada respuesta cita sus fuentes; pulsa un número para leer el fragmento original.</p>
+        </div>
+      </div>
+
+      <div class="composer-wrap">
+        <form id="composer" class="composer" autocomplete="off">
+          <label for="message" class="sr-only">Mensaje</label>
+          <textarea id="message" rows="2" maxlength="2000"
+            placeholder="Pregunta algo o escribe un tema para ubicarlo en tus notas…"></textarea>
+          <div class="composer-row">
+            <div class="segmented" role="radiogroup" aria-label="Qué hacer">
+              <label><input type="radio" name="mode" value="explain" checked><span>Explicar</span></label>
+              <label><input type="radio" name="mode" value="find"><span>Solo ubicar</span></label>
+            </div>
+            <div class="composer-actions">
+              <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings">Ajustes</button>
+              <button id="send" class="btn-send" type="submit" aria-label="Enviar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>
+              </button>
+            </div>
+          </div>
+          <div id="settings" class="settings" hidden>
+            <label>Precisión
+              <select id="set-precision">
+                <option value="precise">Precisa (reranker)</option>
+                <option value="fast">Rápida</option>
+              </select>
+            </label>
+            <label>Resultados
+              <select id="set-k">
+                <option value="8">8</option>
+                <option value="12">12</option>
+                <option value="20">20</option>
+              </select>
+            </label>
+            <label>Buscar en
+              <select id="set-scope"><option value="">Toda la biblioteca</option></select>
+            </label>
+            <label>Respuesta
+              <select id="set-strategy">
+                <option value="direct">Directa</option>
+                <option value="map-reduce">Por guía (experimental)</option>
+              </select>
+            </label>
+            <p class="settings-help">Atajos al inicio del mensaje: <code>/ubicar</code> · <code>/explicar</code> · <code>/en Math</code> (cualquier carpeta). «Por guía» cita con menos fidelidad: revisa las fuentes.</p>
+          </div>
+          <p class="composer-note">Cada mensaje se responde por separado y solo con tus notas.</p>
+        </form>
+      </div>
+    </section>
+
+    <aside id="source-panel" class="source-panel" aria-label="Fuente seleccionada">
+      <p id="source-empty" class="muted">Pulsa un número de cita o un resultado para leer aquí el fragmento original.</p>
+      <div id="source-view" hidden>
+        <div class="source-head">
+          <span id="source-count" class="eyebrow"></span>
+          <div class="source-nav">
+            <button id="source-prev" class="btn-icon" type="button" aria-label="Fuente anterior"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg></button>
+            <button id="source-next" class="btn-icon" type="button" aria-label="Fuente siguiente"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg></button>
+          </div>
+        </div>
+        <h2 id="source-section"></h2>
+        <p id="source-guide" class="muted"></p>
+        <div id="source-text" class="source-text"></div>
+        <a id="source-open" class="btn-soft" href="#">Abrir en Obsidian</a>
+        <p id="source-path" class="path"></p>
+      </div>
+    </aside>
+  </main>
+
+  <template id="icons">
+    <svg data-icon="up" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6"></path></svg>
+    <svg data-icon="down" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+    <svg data-icon="remove" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12"></path><path d="M18 6L6 18"></path></svg>
+  </template>
+
+  <!-- Guías (ADR-019) ---------------------------------------------------------------------->
+  <main id="page-guias" class="page guias" hidden>
+    <aside class="drafts-side" aria-label="Tus borradores">
+      <button id="new-guide" class="btn-primary" type="button">Nueva guía</button>
+      <h2 class="eyebrow">Tus borradores</h2>
+      <ul id="draft-list" class="draft-list"></ul>
+      <p class="small muted">Se guardan en <code>drafts/</code>, fuera de tu biblioteca, para que nunca se indexen.
+        También puedes continuarlos con <code>biblio draft</code>.</p>
+    </aside>
+
+    <section class="guide-main">
+      <form id="guide-topic-form" class="guide-topic" autocomplete="off">
+        <h1>Nueva guía</h1>
+        <label for="guide-topic">¿Sobre qué tema?</label>
+        <div class="row">
+          <input id="guide-topic" type="text" maxlength="200" required
+            placeholder="p. ej. Validación cruzada en machine learning">
+          <button id="propose" class="btn-primary" type="submit">Proponer índice</button>
+        </div>
+        <p class="muted">Propongo un índice a partir de tus notas, imitando la estructura de tus guías más
+          parecidas. Lo revisas y después escribo el borrador sección por sección, citando las fuentes.</p>
+        <p id="propose-status" class="muted" hidden></p>
+        <pre id="outline-live" class="live" hidden></pre>
+        <p id="topic-error" class="error" hidden></p>
+      </form>
+
+      <div id="guide-view" class="guide-view" hidden>
+        <div>
+          <span class="muted">Tema</span>
+          <h1 id="guide-title"></h1>
+        </div>
+        <ol class="steps" aria-label="Pasos">
+          <li><span class="step">1 · Tema</span></li>
+          <li><button id="step-outline" class="step" type="button">2 · Revisa el índice</button></li>
+          <li><button id="step-draft" class="step" type="button">3 · Borrador</button></li>
+        </ol>
+
+        <section id="outline-step" class="outline-step">
+          <p id="outline-siblings" class="info"></p>
+          <ol id="outline-list" class="outline-list"></ol>
+          <div class="row-between">
+            <div class="row">
+              <button id="add-section" class="btn" type="button">Añadir sección</button>
+              <button id="repropose" class="btn" type="button">Proponer otro índice</button>
+            </div>
+            <button id="write-draft" class="btn-primary" type="button">Escribir borrador</button>
+          </div>
+          <p id="outline-status" class="muted" hidden></p>
+          <pre id="repropose-live" class="live" hidden></pre>
+          <p id="outline-error" class="error" hidden></p>
+        </section>
+
+        <section id="draft-step" class="draft-layout" hidden>
+          <ol id="draft-progress" class="draft-progress" aria-label="Secciones"></ol>
+          <article class="draft-doc">
+            <div class="row-between">
+              <span id="draft-status" class="muted" role="status"></span>
+              <div class="row">
+                <button id="copy-md" class="btn" type="button">Copiar Markdown</button>
+                <a id="download-md" class="btn" href="#" download>Descargar .md</a>
+              </div>
+            </div>
+            <p class="flag warn">Es un borrador para editar, no una guía terminada. Cada afirmación cita su
+              fuente con [n]: revísala contra la sección original.</p>
+            <p id="draft-error" class="error" hidden></p>
+            <div id="draft-body" class="draft-body"></div>
+            <p id="draft-path" class="path"></p>
+          </article>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <!-- Practicar (ADR-020) ------------------------------------------------------------------>
+  <main id="page-practicar" class="page practicar" hidden>
+    <div id="practice-setup" class="practice-setup">
+      <form id="practice-form" class="practice-card practice-form" autocomplete="off">
+        <h1>¿Qué quieres practicar?</h1>
+
+        <fieldset class="scope-options">
+          <legend>De dónde salen las preguntas</legend>
+          <label class="scope-option">
+            <input type="radio" name="practice-scope" value="guide" checked>
+            <span class="scope-name">Una guía</span>
+            <input id="scope-guide" type="text" list="guide-options" maxlength="300"
+              placeholder="Escribe parte del título…" aria-label="Guía">
+          </label>
+          <label class="scope-option">
+            <input type="radio" name="practice-scope" value="folder">
+            <span class="scope-name">Una carpeta del temario</span>
+            <input id="scope-folder" type="text" list="folder-options" maxlength="300"
+              placeholder="p. ej. Data Science/Syllabus/LLMs" aria-label="Carpeta">
+          </label>
+          <label class="scope-option">
+            <input type="radio" name="practice-scope" value="topic">
+            <span class="scope-name">Un tema</span>
+            <input id="scope-topic" type="text" maxlength="300"
+              placeholder="p. ej. regularización L1 y L2" aria-label="Tema">
+          </label>
+          <datalist id="guide-options"></datalist>
+          <datalist id="folder-options"></datalist>
+        </fieldset>
+
+        <fieldset>
+          <legend>Cuántas preguntas</legend>
+          <div class="segmented">
+            <label><input type="radio" name="practice-count" value="5"><span>5</span></label>
+            <label><input type="radio" name="practice-count" value="10" checked><span>10</span></label>
+            <label><input type="radio" name="practice-count" value="20"><span>20</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="kinds">
+          <legend>Tipos de pregunta</legend>
+          <label><input type="checkbox" name="practice-kind" value="mc" checked>Opción múltiple</label>
+          <label><input type="checkbox" name="practice-kind" value="tf" checked>Verdadero o falso</label>
+          <label><input type="checkbox" name="practice-kind" value="open_self" checked>Respuesta abierta: tú decides si acertaste</label>
+          <label><input type="checkbox" name="practice-kind" value="open_model">
+            <span>Respuesta abierta: la califica el modelo
+              <span class="badge warn">Experimental: puedes corregir su nota</span></span></label>
+        </fieldset>
+
+        <p id="practice-error" class="error" hidden></p>
+        <button id="practice-start" class="btn-primary btn-big" type="submit">Empezar</button>
+      </form>
+
+      <aside id="practice-progress" class="practice-card progress-card" aria-label="Tu progreso"></aside>
+    </div>
+
+    <div id="practice-quiz" class="practice-quiz" hidden></div>
+    <div id="practice-results" class="practice-quiz" hidden></div>
+  </main>
+</body>
+</html>

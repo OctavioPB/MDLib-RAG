@@ -1,0 +1,11 @@
+Tema de la guía: {topic}
+
+Estructura de guías de referencia de la biblioteca:
+
+{siblings}
+
+Fragmentos disponibles sobre el tema:
+
+{evidence}
+
+Esquema:

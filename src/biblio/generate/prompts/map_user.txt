@@ -1,0 +1,7 @@
+Pregunta: {question}
+
+Fragmentos de la guía «{guide}»:
+
+{evidence}
+
+Viñetas:

@@ -1,0 +1,7 @@
+Notas por guía:
+
+{notes}
+
+Pregunta: {question}
+
+Responde en un párrafo breve o una lista corta, citando cada afirmación con su número entre corchetes.

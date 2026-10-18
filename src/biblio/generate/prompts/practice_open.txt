@@ -1,0 +1,9 @@
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Escribe UNA pregunta abierta sobre una idea importante de este fragmento, que se pueda responder con una a tres frases, y su respuesta de referencia tomada del fragmento.
+
+Formato:
+{{"pregunta": "...", "respuesta": "la respuesta de referencia", "explicacion": "qué debe incluir una buena respuesta"}}

@@ -1,0 +1,104 @@
+# Default values. Override them in config/local.toml (gitignored); it is merged key by key.
+# Relative paths are resolved against the project root.
+
+[paths]
+library = ""                 # path to the library; required via local.toml or --library
+include = ["**/*.md"]
+exclude = [
+    "**/node_modules/**", "**/.git/**", "**/_drafts/**",
+    "**/.obsidian/**", "**/.trash/**",   # Obsidian vault settings and deleted notes
+]
+models_dir = "models"
+index_db = "data/index.db"
+drafts_dir = "drafts"         # `biblio draft` output, outside the library so drafts are never indexed
+
+[runtime]
+offline = true               # sets HF_HUB_OFFLINE=1, TRANSFORMERS_OFFLINE=1, etc. at startup
+
+[chunking]
+min_tokens = 60              # smaller sections are merged with the next sibling or the parent
+target_tokens = 450
+max_tokens = 800             # above this, split by paragraphs (never inside atomic units)
+
+[embedding]
+model = "BAAI/bge-m3"
+revision = "5617a9f61b028005a4858fdac845db406aefb181"   # HF commit (2024-07-03), license MIT
+device = "cpu"               # query-time embedding (ADR-012)
+index_device = "cuda"        # batch indexing; falls back to CPU if CUDA is unavailable (ADR-012)
+index_dtype = "float32"      # float16 is ~3x faster but needs its own evaluation (ADR-012)
+batch_size = 16
+max_seq_length = 1024
+index_flush_chunks = 512      # chunks embedded together before their documents are written
+download_ignore = ["onnx/*", "imgs/*", "*.jpg", "*.webp", ".DS_Store"]   # skips the ~2.2 GB ONNX copy
+
+[retrieval]
+default_mode = "hybrid-rerank"  # dense | bm25 | hybrid | dense-rerank | hybrid-rerank; change only with eval data (rule 3, ADR-014)
+dense_top_n = 50
+bm25_top_n = 50
+rrf_k = 60
+rerank_candidates = 40       # first-stage hits the reranker reads on the GPU (ADR-014)
+final_k = 8
+latency_p95_target_ms = 3000
+
+[reranker]
+model = "BAAI/bge-reranker-v2-m3"
+revision = "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e"   # HF commit (2024-06-24), license Apache-2.0
+device = "cuda"              # used while the GPU is free (no LLM server running), ADR-014
+fallback = "skip"            # GPU not free: "skip" = plain hybrid (p95 0.4 s) | "cpu" = rerank on CPU
+cpu_candidates = 10          # only with fallback = "cpu" (p95 ~8 s with 10, ~33 s with 40)
+max_tokens = 512             # query + passage, truncated beyond this
+batch_size = 8
+download_ignore = ["assets/*"]
+
+[llm]
+base_url = "http://127.0.0.1:11434/v1"   # Ollama (ADR-015); start it with scripts/serve-llm.ps1
+model = "qwen3:4b-instruct-2507-q4_K_M"
+model_digest = "0edcdef34593eac1aa2be9c7d06c432dcf81945adca5eca2f27662c18f168ba0"   # checked by doctor
+tokenizer = "Qwen/Qwen3-4B-Instruct-2507"                     # to count context tokens offline
+tokenizer_revision = "cdbee75f17c01a7cc42f958dc650907174af0554"
+tokenizer_files = ["tokenizer.json", "tokenizer_config.json", "LICENSE"]
+request_timeout_s = 300                  # the first call loads the model from disk (~46 s measured)
+temperature = 0.2
+context_budget_tokens = 6000             # evidence + prompt, in Qwen3 tokens (memory-budget, ADR-015)
+max_fragments = 6                        # 4-6 good fragments beat 12 mediocre ones (rag-prompting)
+map_reduce = "off"                       # auto | on | off; opt-in only, lower measured faithfulness (ADR-017)
+map_reduce_min_guides = 3                # auto: evidence from this many guides triggers it...
+map_reduce_max_fragments = 12            # ...or fragments dropped by the budget; fragments it reads
+max_answer_tokens = 1024
+probe_timeout_s = 0.5                    # loopback check for a running server (ADR-012)
+
+[draft]
+min_sections = 4
+max_sections = 10
+sibling_guides = 2           # related guides whose structure the outline imitates
+sibling_outline_lines = 25   # headings shown per sibling guide
+
+[web]
+host = "127.0.0.1"           # loopback only; anything else is refused (ADR-016)
+port = 8765
+
+[practice]
+db = "data/practice.db"      # quiz history (ADR-020); apart from the index so `index --full` never deletes it
+max_questions = 20
+min_section_tokens = 120     # shorter sections rarely hold a question worth asking
+max_section_tokens = 1500    # longer ones (mostly big tables) are more than one question can use
+question_max_tokens = 600    # LLM output budget for one generated question
+grade_max_tokens = 300       # LLM output budget for grading one open answer
+grader_min_agreement = 0.8   # model grades agreeing with yours less than this...
+grader_min_samples = 20      # ...after this many reviewed grades: the page warns they are unreliable
+
+[launcher]
+ollama_path = ""             # Ollama executable for `biblio start`; "" = find it on PATH or in its default folder
+llm_start_timeout_s = 30     # wait this long for a freshly started LLM server to answer
+open_browser = true          # open the web UI when `biblio start` is ready
+watch = true                 # keep the index up to date while `biblio start` runs (ADR-018)
+
+[watch]
+interval_s = 30              # seconds between snapshots of the library (ADR-018)
+settle_s = 10                # a change must stay stable this long before reindexing (Obsidian autosaves)
+
+[eval]
+questions = "eval/questions.jsonl"
+answers = "eval/answers.jsonl"   # answer evaluation set (key_points), `biblio ask-eval`
+results_dir = "eval/results"
+ks = [1, 5, 8, 20]

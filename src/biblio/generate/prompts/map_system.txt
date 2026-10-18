@@ -1,0 +1,6 @@
+Extraes de unos fragmentos de una guía lo que sirve para responder una pregunta.
+
+Reglas:
+1. Usa solo los fragmentos. No añadas conocimiento propio.
+2. Escribe entre 2 y 5 viñetas breves; cada una termina con el número de su fragmento entre corchetes, por ejemplo [3].
+3. Si los fragmentos no dicen nada útil para la pregunta, responde exactamente «{empty}» y nada más.

@@ -1,0 +1,4 @@
+# Keep LF in the working tree regardless of core.autocrlf: tools, uv.lock and fixtures expect it.
+# CRLF input is still covered by tests/test_chunker.py::test_crlf_and_bom_keep_line_numbers.
+* text=auto eol=lf
+*.cmd text eol=crlf

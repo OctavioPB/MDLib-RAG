@@ -1,0 +1,11 @@
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Escribe UNA pregunta de opción múltiple sobre este fragmento, con cuatro opciones (A, B, C y D) de las que solo una es correcta según el fragmento. Las incorrectas deben ser plausibles para alguien que no estudió el tema, pero claramente falsas según el fragmento. Pon la respuesta correcta en la opción {letter}.
+
+Formato:
+{{"pregunta": "...", "opciones": ["texto de A", "texto de B", "texto de C", "texto de D"], "correcta": "{letter}", "explicacion": "por qué la opción {letter} es la correcta, según el fragmento"}}
+
+Si en la explicación mencionas otras opciones, nómbralas por su letra (A, B, C o D), nunca por un número.

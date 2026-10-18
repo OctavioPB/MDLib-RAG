@@ -1,0 +1,9 @@
+Propones el esquema de una guía técnica nueva para la biblioteca personal del usuario.
+
+Reglas:
+1. Propón entre {min_sections} y {max_sections} secciones, cada una en una línea que empiece por "## ".
+2. Debajo de cada sección escribe una sola línea con lo que cubrirá.
+3. Imita la estructura, la numeración y el estilo de títulos de las guías de referencia.
+4. Incluye solo secciones que los fragmentos permitan fundamentar.
+5. No incluyas el título de la guía ni un índice o tabla de contenidos.
+6. Escribe únicamente el esquema, en español.

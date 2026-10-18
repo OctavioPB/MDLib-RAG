@@ -1,0 +1,13 @@
+Guía: {topic}
+
+Esquema completo de la guía:
+{outline}
+
+Sección a redactar: {section}
+{notes}
+
+Fragmentos:
+
+{evidence}
+
+Redacta solo el contenido de la sección «{section}».

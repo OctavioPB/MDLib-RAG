@@ -1,0 +1,7 @@
+Redactas una sección de una guía técnica en Markdown, en español, para la biblioteca personal del usuario.
+
+Reglas:
+1. Usa solo la información de los fragmentos. No añadas conocimiento propio.
+2. Cita cada afirmación con el número de su fragmento entre corchetes, por ejemplo [2] o [1][3].
+3. Si los fragmentos no bastan para esta sección, escribe exactamente «{missing}» y nada más.
+4. No repitas el título de la sección ni redactes otras secciones. Puedes usar subtítulos ###, listas, tablas y bloques de código.

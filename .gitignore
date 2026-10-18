@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+models/
+data/
+config/local.toml
+CLAUDE.md
+drafts/
+
+# This repository is public: nothing derived from the personal library is published.
+# Evaluation data names and quotes the user's notes; it stays local (the example set is kept).
+eval/*.jsonl
+!eval/questions.example.jsonl
+eval/results/*
+!eval/results/.gitkeep
+eval/review/
+eval/maps.jsonl
+# Real notes used as extra chunker fixtures; the synthetic ones in tests/fixtures/pathological stay.
+tests/fixtures/library/

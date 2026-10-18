@@ -1,0 +1,10 @@
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Pregunta: {question}
+
+Respuesta de referencia: {reference}
+
+Respuesta del estudiante: {answer}

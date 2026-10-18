@@ -1,0 +1,9 @@
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Escribe UNA afirmación sobre una idea importante de este fragmento. La afirmación debe ser {truth} según el fragmento.{false_hint}
+
+Formato:
+{{"afirmacion": "...", "verdadera": {truth_json}, "explicacion": "por qué es {truth}, según el fragmento"}}

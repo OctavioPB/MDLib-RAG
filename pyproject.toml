@@ -1,0 +1,77 @@
+[project]
+name = "biblio-rag"
+version = "0.1.0"
+description = "100% local RAG over a personal Markdown library"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13",
+    "markdown-it-py>=3",
+    "pyyaml>=6",
+    "numpy>=1.26",
+    "torch>=2.3",
+    "sentence-transformers>=3",
+    "sqlite-vec>=0.1.6",
+    "httpx>=0.27",
+    "huggingface-hub>=0.24",
+    "psutil>=6",
+    "mdit-py-plugins>=0.4",
+    "tokenizers>=0.19",
+]
+
+[project.scripts]
+biblio = "biblio.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-socket>=0.7",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-pyyaml",
+    "types-psutil",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/biblio"]
+
+# CUDA build of torch: batch indexing embeds on the GPU while no LLM server is running (ADR-012).
+# Query-time embedding and the reranker stay on CPU (ADR-008). CUDA >= 12.8 is required by
+# Blackwell GPUs (RTX 50xx); cu130 needs NVIDIA driver >= 580. macOS uses the default PyPI build (Metal/CPU).
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu130", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--disable-socket --allow-hosts=127.0.0.1,localhost -m 'not models'"
+markers = ["models: requires real weights downloaded into models/"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+# `›` is the breadcrumb separator of heading paths.
+allowed-confusables = ["›"]
+
+[tool.ruff.lint.isort]
+known-local-folder = ["fakes"]  # tests/fakes.py, shared test doubles
+
+[tool.mypy]
+strict = true
+packages = ["biblio"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["sqlite_vec", "sentence_transformers.*", "pytest_socket"]
+ignore_missing_imports = true
