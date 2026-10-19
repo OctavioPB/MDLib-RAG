@@ -361,3 +361,49 @@ def test_maps_are_kept_searched_reopened_and_deleted(server: tuple[str, int]) ->
     assert _post(server, "/api/maps/delete", {"id": first})[0] == 404
     _, listed = _get(server, "/api/maps/history?q=spam")
     assert [m["id"] for m in listed["maps"]] == [second]  # «spam» is a concept of «filtros»
+
+
+def test_moved_nodes_are_kept_and_used_when_saving(server: tuple[str, int], tmp_path: Path) -> None:
+    _, events = _post(server, "/api/maps", {"topic": "spam"})
+    map_id = events[-1][1]["map_id"]
+    _, stored = _get(server, f"/api/maps/history/{map_id}")
+    assert stored["positions"] == {}
+    child = stored["map"]["nodes"][1]["id"]
+    moved = {"positions": {child: [1234.4, -55], "no-such-node": [1, 2]}, "id": map_id}
+    assert _post(server, "/api/maps/positions", moved)[1] == {"ok": True}
+    _, stored = _get(server, f"/api/maps/history/{map_id}")
+    assert stored["positions"] == {child: [1234, -55]}  # unknown ids are ignored
+    assert stored["map"]["nodes"][1]["x"] != 1234  # the automatic layout is kept apart
+    _, saved = _post(server, "/api/maps/save", {"id": map_id})
+    canvas = json.loads(Path(saved["canvas"]).read_text(encoding="utf-8"))
+    node = next(n for n in canvas["nodes"] if n["id"] == child)
+    assert node["x"] + node["width"] // 2 == 1234  # the canvas uses where the user left it
+    assert _post(server, "/api/maps/positions", {"id": map_id, "positions": {}})[1] == {"ok": True}
+    assert _get(server, f"/api/maps/history/{map_id}")[1]["positions"] == {}
+    for bad in ({"x": "1,2"}, {"x": [1]}, {"x": [True, 2]}, []):
+        assert _post(server, "/api/maps/positions", {"id": map_id, "positions": bad})[0] == 400
+    assert _post(server, "/api/maps/positions", {"id": 999, "positions": {}})[0] == 404
+
+
+def test_an_older_maps_db_gains_the_positions_column(tmp_path: Path) -> None:
+    import sqlite3
+
+    from biblio.maps.history import MapStore
+
+    path = tmp_path / "maps.db"
+    old = sqlite3.connect(path)
+    old.execute(
+        "CREATE TABLE maps (id INTEGER PRIMARY KEY, topic TEXT NOT NULL, created TEXT NOT NULL, "
+        "concepts INTEGER NOT NULL, names TEXT NOT NULL, map TEXT NOT NULL, "
+        "fragments TEXT NOT NULL)"
+    )
+    page_map = {"topic": "t", "nodes": [{"id": "root", "label": "t", "level": 0}], "edges": []}
+    old.execute(
+        "INSERT INTO maps VALUES (1, 't', '2026-10-19', 0, '', ?, '[]')", (json.dumps(page_map),)
+    )
+    old.commit()
+    old.close()
+    store = MapStore(path)
+    stored = store.get(1)
+    assert stored is not None and stored.positions == {}
+    assert store.set_positions(1, {"root": (5, 6)}) and store.get(1).positions == {"root": (5, 6)}  # type: ignore[union-attr]

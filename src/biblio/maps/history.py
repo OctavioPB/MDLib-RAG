@@ -34,6 +34,7 @@ class StoredMap:
     summary: MapSummary
     map: dict[str, Any]  # as sent to the page (map_json)
     fragments: list[dict[str, Any]]  # as sent to the page (fragment_json)
+    positions: dict[str, tuple[int, int]]  # nodes the user moved: id → (x, y)
 
 
 def _now() -> str:
@@ -56,7 +57,8 @@ class MapStore:
                     concepts  INTEGER NOT NULL,
                     names     TEXT NOT NULL,        -- concept names, for search
                     map       TEXT NOT NULL,        -- JSON, as sent to the page
-                    fragments TEXT NOT NULL         -- JSON, as sent to the page
+                    fragments TEXT NOT NULL,        -- JSON, as sent to the page
+                    positions TEXT NOT NULL DEFAULT '{}'  -- nodes moved by the user
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS maps_fts USING fts5(
                     topic, names, content='maps', content_rowid='id',
@@ -71,6 +73,11 @@ class MapStore:
                 END;
                 """
             )
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(maps)")}
+            if "positions" not in columns:  # maps.db created before nodes could be moved
+                self._conn.execute(
+                    "ALTER TABLE maps ADD COLUMN positions TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -91,6 +98,20 @@ class MapStore:
                 ),
             )
             return int(cur.lastrowid or 0)
+
+    def set_positions(self, map_id: int, positions: dict[str, tuple[int, int]]) -> bool:
+        """Replace the positions of the nodes the user moved; `{}` restores the automatic layout.
+        Ids that are not nodes of the map are ignored."""
+        with self._lock, self._conn:
+            row = self._conn.execute("SELECT map FROM maps WHERE id = ?", (map_id,)).fetchone()
+            if row is None:
+                return False
+            ids = {n["id"] for n in json.loads(row[0])["nodes"]}
+            kept = {k: [int(x), int(y)] for k, (x, y) in positions.items() if k in ids}
+            self._conn.execute(
+                "UPDATE maps SET positions = ? WHERE id = ?", (json.dumps(kept), map_id)
+            )
+            return True
 
     def delete(self, map_id: int) -> bool:
         with self._lock, self._conn:
@@ -117,20 +138,33 @@ class MapStore:
     def get(self, map_id: int) -> StoredMap | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, topic, created, concepts, map, fragments FROM maps WHERE id = ?",
+                "SELECT id, topic, created, concepts, map, fragments, positions FROM maps "
+                "WHERE id = ?",
                 (map_id,),
             ).fetchone()
         if row is None:
             return None
-        return StoredMap(MapSummary(*row[:4]), json.loads(row[4]), json.loads(row[5]))
+        positions = {k: (int(v[0]), int(v[1])) for k, v in json.loads(row[6]).items()}
+        return StoredMap(MapSummary(*row[:4]), json.loads(row[4]), json.loads(row[5]), positions)
 
 
 # --- back to domain objects, for saving to drafts/maps ------------------------------------------
 
 
-def concept_map_from_page(page_map: dict[str, Any]) -> ConceptMap:
+def concept_map_from_page(
+    page_map: dict[str, Any], positions: dict[str, tuple[int, int]] | None = None
+) -> ConceptMap:
+    """The stored map as domain objects, with the nodes the user moved where they left them."""
+    moved = positions or {}
     nodes = tuple(
-        MapNode(n["id"], n["label"], n["level"], n["parent"], tuple(n["sources"]), n["x"], n["y"])
+        MapNode(
+            n["id"],
+            n["label"],
+            n["level"],
+            n["parent"],
+            tuple(n["sources"]),
+            *moved.get(n["id"], (n["x"], n["y"])),
+        )
         for n in page_map["nodes"]
     )
     edges = tuple(

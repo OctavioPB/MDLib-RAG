@@ -199,6 +199,10 @@ to one guide.
 - Click a concept to see its relations and the fragments where it appears. **Expandir** makes a map of
   that concept (the trail above lets you go back), **Explicar** asks about it in Conversar, and
   **Practicar** makes a quiz on it.
+- **Drag a concept** to move it; its lines and labels follow and the relations stay as they are
+  (with a concept focused, the arrow keys move it too, Shift for bigger steps). The layout is kept
+  with the map and used by **Guardar**; **Reorganizar** goes back to the automatic layout.
+- **Concepto** shows or hides the panel of the selected concept, giving its width to the drawing.
 - **Esquema** shows the same map as an indented list with each relation written as a sentence.
 - **Every map is kept** (ADR-024) in `data/maps.db`: the list on the left shows them newest first,
   can be searched by topic or by the concepts in them, and reopens a map instantly, without the LLM.

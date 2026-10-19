@@ -62,6 +62,7 @@ async function createMap(topic, expand = false) {
           if (!mapState.moved) fitView();
         } else if (name === "done") {
           entry.id = data.map_id;
+          applyPositions(entry, {});
           loadMapHistory();
           const left = data.omitted ? ` · ${data.omitted} conceptos sin relación clara se dejaron fuera` : "";
           const skipped = data.skipped ? ` · ${data.skipped} fragmentos no se pudieron leer` : "";
@@ -100,6 +101,7 @@ function drawMap() {
   const entry = current();
   const viewport = $("map-viewport");
   viewport.replaceChildren();
+  mapState.drawn = { nodes: new Map(), edges: [] };
   if (!entry || !entry.map) return;
   const byId = new Map(entry.map.nodes.map((n) => [n.id, n]));
   const edges = svgEl("g", { class: "map-edges" });
@@ -109,12 +111,15 @@ function drawMap() {
     const b = byId.get(e.target);
     if (!a || !b) continue;
     const touches = mapState.selected && (e.source === mapState.selected || e.target === mapState.selected);
-    edges.append(svgEl("path", { d: edgePath(a, b), class: `map-edge ${e.kind}${touches ? " active" : ""}` }));
+    const path = svgEl("path", { d: edgePath(a, b), class: `map-edge ${e.kind}${touches ? " active" : ""}` });
+    edges.append(path);
+    const drawn = { a, b, path, text: null, halo: null };
     if (e.label && (e.kind === "tree" || touches)) {
-      const text = svgEl("text", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, class: "map-edge-label" });
-      text.textContent = e.label;
-      labels.append(text);
+      drawn.text = svgEl("text", { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, class: "map-edge-label" });
+      drawn.text.textContent = e.label;
+      labels.append(drawn.text);
     }
+    mapState.drawn.edges.push(drawn);
   }
   const nodes = svgEl("g", { class: "map-nodes" });
   for (const n of entry.map.nodes) {
@@ -124,33 +129,127 @@ function drawMap() {
       transform: `translate(${n.x},${n.y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${n.label}, ${n.sources.length} ${n.sources.length === 1 ? "fuente" : "fuentes"}`,
+      "aria-label": `${n.label}, ${n.sources.length} ${n.sources.length === 1 ? "fuente" : "fuentes"}. Flechas para moverlo.`,
     });
     g.append(svgEl("rect", { x: -width / 2, y: -height / 2, width, height, rx: height / 2 }));
     const text = svgEl("text", { y: 1, "font-size": font, "dominant-baseline": "middle", "text-anchor": "middle" });
     text.textContent = n.label.length > 34 ? `${n.label.slice(0, 33)}…` : n.label;
     g.append(text);
-    const select = () => {
-      mapState.selected = n.id;
-      renderAll();
-    };
-    g.addEventListener("click", select);
+    // a click selects, a drag moves the node (decided on release: see bindNodeDragging)
+    g.addEventListener("pointerdown", (event) => startNodeDrag(event, n));
     g.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        select();
+        selectNode(n.id);
+        return;
       }
+      const step = event.shiftKey ? 50 : 10;
+      const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+      if (!delta || mapState.busy) return;
+      event.preventDefault(); // move the node, not the page
+      moveNode(n, n.x + delta[0], n.y + delta[1]);
+      rememberPosition(n);
     });
     nodes.append(g);
+    mapState.drawn.nodes.set(n.id, g);
   }
   viewport.append(edges, labels, nodes);
   applyZoom();
   // halo behind edge labels so they stay readable over lines (needs the drawing on screen)
   if ($("map-stage").hidden) return;
-  for (const text of [...labels.children]) {
-    const box = text.getBBox();
-    labels.insertBefore(svgEl("rect", { x: box.x - 4, y: box.y - 1, width: box.width + 8, height: box.height + 2, rx: 4, class: "map-edge-halo" }), text);
+  for (const drawn of mapState.drawn.edges) {
+    if (!drawn.text) continue;
+    const box = drawn.text.getBBox();
+    drawn.halo = svgEl("rect", { x: box.x - 4, y: box.y - 1, width: box.width + 8, height: box.height + 2, rx: 4, class: "map-edge-halo" });
+    labels.insertBefore(drawn.halo, drawn.text);
   }
+}
+
+/** «Concepto»: show or hide the panel of the selected concept; the choice is remembered. */
+function setConceptPanelOpen(open) {
+  $("map-panel").hidden = !open;
+  $("map-panel-toggle").setAttribute("aria-expanded", String(open));
+  $("map-panel-toggle").classList.toggle("active", open);
+  store.set("biblio.mapPanelOpen", open);
+}
+
+function selectNode(id) {
+  mapState.selected = id;
+  renderAll();
+}
+
+// --- moving nodes: the relations stay, only the drawing follows -----------------------------
+
+/** Put a node at (x, y) and bring its lines and their labels along, without redrawing. */
+function moveNode(node, x, y) {
+  node.x = Math.round(x);
+  node.y = Math.round(y);
+  const g = mapState.drawn.nodes.get(node.id);
+  if (g) g.setAttribute("transform", `translate(${node.x},${node.y})`);
+  for (const drawn of mapState.drawn.edges) {
+    if (drawn.a !== node && drawn.b !== node) continue;
+    drawn.path.setAttribute("d", edgePath(drawn.a, drawn.b));
+    if (!drawn.text) continue;
+    const mx = (drawn.a.x + drawn.b.x) / 2;
+    const my = (drawn.a.y + drawn.b.y) / 2;
+    drawn.text.setAttribute("x", mx);
+    drawn.text.setAttribute("y", my);
+    if (drawn.halo) {
+      drawn.halo.setAttribute("x", mx - Number(drawn.halo.getAttribute("width")) / 2);
+      drawn.halo.setAttribute("y", my - Number(drawn.halo.getAttribute("height")) / 2);
+    }
+  }
+}
+
+let layoutTimer = null;
+
+/** Keep where the user left a node: saved with the map in the history (ADR-024). */
+function rememberPosition(node) {
+  const entry = current();
+  entry.positions = entry.positions || {};
+  entry.positions[node.id] = [node.x, node.y];
+  $("map-reset").disabled = false;
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => saveLayout(entry), 400);
+}
+
+async function saveLayout(entry) {
+  if (!entry.id) return; // still being built: kept in the page, saved once the map is stored
+  try {
+    const response = await postJSON("/api/maps/positions", { id: entry.id, positions: entry.positions || {} });
+    if (!response.ok) throw new Error(await errorText(response));
+  } catch (error) {
+    showError("map-error", `No se pudo guardar la posición de los nodos: ${error.message}`);
+  }
+}
+
+function resetLayout() {
+  const entry = current();
+  if (!entry || !entry.map || !entry.layout) return;
+  for (const n of entry.map.nodes) {
+    const original = entry.layout[n.id];
+    if (original) [n.x, n.y] = original;
+  }
+  entry.positions = {};
+  saveLayout(entry);
+  renderAll();
+  fitView();
+}
+
+/** The automatic layout of a map, kept to undo the user's moves; then their moves applied. */
+function applyPositions(entry, positions) {
+  entry.layout = Object.fromEntries(entry.map.nodes.map((n) => [n.id, [n.x, n.y]]));
+  entry.positions = positions || {};
+  for (const n of entry.map.nodes) {
+    const moved = entry.positions[n.id];
+    if (moved) [n.x, n.y] = moved;
+  }
+}
+
+function startNodeDrag(event, node) {
+  event.stopPropagation(); // the stage would start panning
+  mapState.nodeDrag = { node, x: event.clientX, y: event.clientY, ox: node.x, oy: node.y, moved: false };
+  $("map-stage").setPointerCapture(event.pointerId);
 }
 
 function applyZoom() {
@@ -323,6 +422,7 @@ function renderAll() {
   $("map-create").disabled = mapState.busy;
   $("map-save").disabled = !hasMap || !entry.id || mapState.busy;
   $("map-delete").disabled = !hasMap || !entry.id || mapState.busy;
+  $("map-reset").disabled = !hasMap || mapState.busy || !entry.positions || !Object.keys(entry.positions).length;
   markActiveMap();
   $("map-svg").disabled = !hasMap || mapState.busy;
   renderTrail();
@@ -379,7 +479,9 @@ async function openStoredMap(id) {
     return;
   }
   const data = await response.json();
-  mapState.trail = [{ id: data.id, topic: data.topic, map: data.map, fragments: data.fragments }];
+  const entry = { id: data.id, topic: data.topic, map: data.map, fragments: data.fragments };
+  applyPositions(entry, data.positions);
+  mapState.trail = [entry];
   mapState.selected = null;
   mapState.moved = false;
   $("map-topic").value = data.topic;
@@ -464,6 +566,12 @@ function bindMapas() {
   $("map-save").addEventListener("click", saveMap);
   $("map-svg").addEventListener("click", downloadSvg);
   $("map-delete").addEventListener("click", deleteMap);
+  $("map-reset").addEventListener("click", resetLayout);
+  setConceptPanelOpen(store.get("biblio.mapPanelOpen", true));
+  $("map-panel-toggle").addEventListener("click", () => {
+    setConceptPanelOpen($("map-panel").hidden);
+    fitView(); // the drawing gains or gives back the panel's width
+  });
   let timer = null;
   $("map-history-search").addEventListener("input", () => {
     clearTimeout(timer);
@@ -483,12 +591,37 @@ function bindMapas() {
     stage.setPointerCapture(event.pointerId);
   });
   stage.addEventListener("pointermove", (event) => {
+    const nd = mapState.nodeDrag;
+    if (nd) {
+      const dx = event.clientX - nd.x;
+      const dy = event.clientY - nd.y;
+      if (!nd.moved && Math.hypot(dx, dy) < 4) return; // still a click
+      if (mapState.busy) return; // the map is still growing: it would be redrawn under the pointer
+      nd.moved = true;
+      stage.classList.add("dragging-node");
+      moveNode(nd.node, nd.ox + dx / mapState.zoom.k, nd.oy + dy / mapState.zoom.k);
+      return;
+    }
     if (!drag) return;
     mapState.zoom = { ...drag.start, x: drag.start.x + event.clientX - drag.x, y: drag.start.y + event.clientY - drag.y };
     mapState.moved = true;
     applyZoom();
   });
-  stage.addEventListener("pointerup", () => (drag = null));
+  const release = () => {
+    const nd = mapState.nodeDrag;
+    mapState.nodeDrag = null;
+    drag = null;
+    stage.classList.remove("dragging-node");
+    if (!nd) return;
+    if (nd.moved) {
+      rememberPosition(nd.node);
+      drawMap(); // label halos re-measured at their new place
+    } else {
+      selectNode(nd.node.id);
+    }
+  };
+  stage.addEventListener("pointerup", release);
+  stage.addEventListener("pointercancel", release);
 }
 
 let mapasStarted = false;

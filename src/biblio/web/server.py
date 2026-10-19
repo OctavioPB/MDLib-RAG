@@ -54,6 +54,7 @@ _SECURITY_HEADERS = {
 _MAX_TITLE = 200
 _MAX_NOTES = 1000
 _MAX_SECTIONS = 20
+_MAX_NODE_POSITIONS = 500
 
 
 def parse_sections(raw: Any) -> list[OutlineSection] | None:
@@ -237,6 +238,7 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 "/api/maps": self._map,
                 "/api/maps/save": self._map_save,
                 "/api/maps/delete": self._map_delete,
+                "/api/maps/positions": self._map_positions,
                 "/api/reindex": lambda _payload: self._stream(engine.reindex, needs_llm=False),
                 "/api/conversations/rename": self._conversation_rename,
                 "/api/conversations/delete": self._conversation_delete,
@@ -392,6 +394,35 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 ok = engine.map_history.delete(map_id)
                 self._send_json({"ok": True}) if ok else self._not_found()
 
+        def _map_positions(self, payload: dict[str, Any]) -> None:
+            """Where the user dragged nodes: {id, positions: {node id: [x, y]}}; {} resets."""
+            map_id = self._id_field(payload, "id")
+            raw = payload.get("positions")
+            if map_id is None:
+                return
+            ok_shape = isinstance(raw, dict) and len(raw) <= _MAX_NODE_POSITIONS
+            positions: dict[str, tuple[int, int]] = {}
+            for key, value in raw.items() if ok_shape and isinstance(raw, dict) else []:
+                if (
+                    isinstance(key, str)
+                    and isinstance(value, list)
+                    and len(value) == 2
+                    and all(
+                        isinstance(v, int | float) and not isinstance(v, bool) and abs(v) < 1e6
+                        for v in value
+                    )
+                ):
+                    positions[key] = (round(value[0]), round(value[1]))
+                else:
+                    ok_shape = False
+            if not ok_shape:
+                self._send_json(
+                    {"error": "'positions' must map node ids to [x, y]"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            ok = engine.map_history.set_positions(map_id, positions)
+            self._send_json({"ok": True}) if ok else self._not_found()
+
         def _maps_get(self) -> bool:
             """GET /api/maps/history[?q=…] and /api/maps/history/<id> (ADR-024); False if not."""
             parts = urlsplit(self.path)
@@ -408,7 +439,12 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 self._not_found()
                 return True
             self._send_json(
-                {**asdict(stored.summary), "map": stored.map, "fragments": stored.fragments}
+                {
+                    **asdict(stored.summary),
+                    "map": stored.map,
+                    "fragments": stored.fragments,
+                    "positions": {k: list(v) for k, v in stored.positions.items()},
+                }
             )
             return True
 

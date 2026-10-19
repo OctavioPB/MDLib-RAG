@@ -706,7 +706,7 @@ class Engine:
         stored = self.map_history.get(map_id)
         if stored is None:
             return None
-        cmap = concept_map_from_page(stored.map)
+        cmap = concept_map_from_page(stored.map, stored.positions)
         fragments = [fragment_from_page(f) for f in stored.fragments]
         slug = slugify(cmap.topic)
         folder = self.config.paths.drafts_dir / "maps"
