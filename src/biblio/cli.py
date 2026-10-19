@@ -962,6 +962,91 @@ def ask_eval_score(
     console.print(f"[dim]Saved to {path}[/dim]")
 
 
+@app.command("eval-feynman")
+def eval_feynman(
+    ctx: typer.Context,
+    tag: Annotated[
+        str | None, typer.Option("--tag", help="Name of this run (default: feynman-<time>).")
+    ] = None,
+    items_file: Annotated[
+        Path | None, typer.Option("--set", help="Default: eval.feynman in config.")
+    ] = None,
+) -> None:
+    """Measure «Explícamelo tú» on eval/feynman.jsonl: how many expected gaps and unsupported
+    claims it reports, and how many it reports beyond them (ADR-027). Needs the LLM server."""
+    from datetime import datetime
+
+    from biblio.eval.feynman import (
+        FeynmanSetError,
+        append_feynman_run,
+        load_feynman_set,
+        run_feynman_eval,
+    )
+    from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.index.embedder import load_query_embedder
+    from biblio.models import ModelNotAvailableError
+    from biblio.offline import loopback_port_open
+    from biblio.retrieve.pipeline import build_retriever
+    from biblio.retrieve.store import IndexNotFoundError, QueryEmbedderMismatchError
+
+    config = _config(ctx)
+    try:
+        items = load_feynman_set(items_file or config.eval.feynman)
+    except FeynmanSetError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    if not loopback_port_open(config.llm.base_url, config.llm.probe_timeout_s):
+        console.print(
+            f"[red]No LLM server on {config.llm.base_url}.[/red] "
+            "Start it with scripts/serve-llm.ps1."
+        )
+        raise typer.Exit(2)
+    try:
+        embedder = load_query_embedder(config)
+        retriever = build_retriever(
+            config, config.retrieval.default_mode, embedder_factory=lambda _c: embedder
+        )
+    except (IndexNotFoundError, QueryEmbedderMismatchError, ModelNotAvailableError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    llm = load_llm_client(config.llm)
+
+    def show(item: object, row: dict[str, object]) -> None:
+        console.print(
+            f"[dim]{row['id']}: gaps {row['found_missing']}/{row['expected_missing']} · "
+            f"claims {row['found_unsupported']}/{row['expected_unsupported']} · "
+            f"{row['seconds']}s[/dim]"
+        )
+
+    try:
+        record = run_feynman_eval(
+            config,
+            retriever,
+            llm,
+            embedder.embed,
+            items,
+            tag or f"feynman-{datetime.now():%Y%m%d-%H%M%S}",
+            show,
+        )
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        retriever.close()
+        llm.close()
+    path = append_feynman_run(config.eval.results_dir, record)
+    table = Table("metric", "value", title=f"{record['tag']} · {record['n_items']} explanations")
+    for key, value in record["metrics"].items():
+        table.add_row(key, "—" if value is None else str(value))
+    latency = record["latency_s"]
+    table.add_row("latency p50 / p95", f"{latency['p50']} s / {latency['p95']} s")
+    console.print(table)
+    for row in record["items"]:
+        for point in row["not_found"]:
+            console.print(f"[yellow]not reported[/yellow] {row['id']}: {point}")
+    console.print(f"[dim]Saved to {path}[/dim]")
+
+
 @app.command("map")
 def concept_map(
     ctx: typer.Context,

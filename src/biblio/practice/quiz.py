@@ -21,7 +21,8 @@ from biblio.practice.store import KINDS, QuestionContent, Section, StoredQuestio
 from biblio.retrieve.store import scope_prefix
 from biblio.retrieve.types import Retriever
 
-SCOPE_KINDS = ("guide", "folder", "topic", "review")
+SCOPE_KINDS = ("guide", "folder", "topic", "review", "srs", "sections")
+# "srs": today's spaced-repetition reviews (ADR-025); "sections": given sections (ADR-026)
 _MAX_TEXT = 500  # characters of a question, statement or option
 _MAX_EXPLANATION = 1200
 # sections with nothing to ask about: navigation and reference lists

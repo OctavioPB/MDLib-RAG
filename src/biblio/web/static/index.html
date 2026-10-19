@@ -9,6 +9,8 @@
   <script src="/static/app.js" defer></script>
   <script src="/static/guias.js" defer></script>
   <script src="/static/practicar.js" defer></script>
+  <script src="/static/feynman.js" defer></script>
+  <script src="/static/plan.js" defer></script>
   <script src="/static/mapas.js" defer></script>
 </head>
 <body>
@@ -21,7 +23,7 @@
       <nav class="pages" aria-label="Secciones">
         <a href="#/conversar" data-page="conversar">Conversar</a>
         <a href="#/guias" data-page="guias">Guías</a>
-        <a href="#/practicar" data-page="practicar">Practicar</a>
+        <a href="#/practicar" data-page="practicar">Practicar<span id="today-badge" class="nav-badge" hidden></span></a>
         <a href="#/mapas" data-page="mapas">Mapas</a>
       </nav>
     </div>
@@ -151,8 +153,63 @@
   </template>
 
   <!-- Guías (ADR-019) ---------------------------------------------------------------------->
-  <main id="page-guias" class="page guias" hidden>
+  <main id="page-guias" class="page guias-page" hidden>
+    <div id="guias-home" class="practice-hub guias-pad">
+      <section id="guias-next" class="hub-hero" aria-labelledby="guias-next-title" hidden>
+        <div class="hub-hero-text">
+          <span id="guias-next-eyebrow" class="hub-eyebrow">Tu plan</span>
+          <h1 id="guias-next-title"></h1>
+          <p id="guias-next-summary"></p>
+        </div>
+        <div class="row">
+          <a id="guias-next-open" class="hub-hero-btn hub-hero-link" href="#">Abrir en Obsidian</a>
+          <button id="guias-next-plan" class="hub-hero-btn hub-hero-secondary" type="button">Ver el plan</button>
+        </div>
+      </section>
+      <section class="hub-modes" aria-labelledby="guias-modes-title">
+        <h2 id="guias-modes-title">¿Qué quieres hacer?</h2>
+        <div class="hub-tiles">
+          <button id="tile-plan" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h10M5 18h6"></path><circle cx="19" cy="18" r="2"></circle></svg>
+            <strong>Plan de estudio</strong>
+            <span class="hub-tile-text">Elige una carpeta de tu temario y te propongo por dónde empezar y cómo seguir.</span>
+            <span class="hub-tile-go">Elegir carpeta →</span>
+          </button>
+          <button id="tile-write" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="m13 7 4 4"></path></svg>
+            <strong>Escribir una guía</strong>
+            <span class="hub-tile-text">Un borrador nuevo a partir de tus notas, con el estilo de tus guías y sus fuentes citadas.</span>
+            <span class="hub-tile-go">Empezar →</span>
+          </button>
+        </div>
+      </section>
+      <section id="guias-gaps" class="hub-gaps" aria-labelledby="guias-gaps-title" hidden>
+        <h2 id="guias-gaps-title">Temas pendientes</h2>
+        <p class="small muted">Lo que preguntaste y tus notas no tenían, y los mapas que salieron pobres.</p>
+        <ul id="gap-list" class="plan-list"></ul>
+      </section>
+    </div>
+
+    <div id="guias-plan" class="practice-sub plan-screen guias-pad" hidden>
+      <button class="back-link" type="button" data-guias-back>← Guías</button>
+      <section class="practice-card plan-card" aria-labelledby="plan-title">
+        <h1 id="plan-title">Plan de estudio</h1>
+        <form id="plan-form" class="feynman-form" autocomplete="off">
+          <input id="plan-folder" type="text" list="plan-folder-options" maxlength="300"
+            placeholder="Carpeta, p. ej. Data Science/Syllabus/LLMs" aria-label="Carpeta del temario">
+          <button id="plan-create" class="btn-primary" type="submit">Crear plan</button>
+          <datalist id="plan-folder-options"></datalist>
+        </form>
+        <p id="plan-status" class="muted" role="status" hidden></p>
+        <p id="plan-error" class="error" hidden></p>
+        <div id="plan-saved" class="plan-saved"></div>
+      </section>
+      <div id="plan-view" class="plan-view"></div>
+    </div>
+
+    <div id="guias-write" class="guias" hidden>
     <aside class="drafts-side" aria-label="Tus borradores">
+      <button class="back-link" type="button" data-guias-back>← Guías</button>
       <button id="new-guide" class="btn-primary" type="button">Nueva guía</button>
       <h2 class="eyebrow">Tus borradores</h2>
       <ul id="draft-list" class="draft-list"></ul>
@@ -221,6 +278,7 @@
         </section>
       </div>
     </section>
+    </div>
   </main>
 
   <!-- Mapas (ADR-022) ---------------------------------------------------------------------->
@@ -246,6 +304,8 @@
         <button id="map-zoom-out" class="btn-icon" type="button" aria-label="Alejar">−</button>
         <button id="map-zoom-in" class="btn-icon" type="button" aria-label="Acercar">+</button>
         <button id="map-fit" class="btn" type="button">Centrar</button>
+        <button id="map-mastery" class="btn" type="button" aria-pressed="false" disabled
+          title="Colorear cada concepto según cuánto lo recuerdas hoy">Dominio</button>
         <button id="map-panel-toggle" class="btn" type="button" aria-controls="map-panel" aria-expanded="true"
           title="Mostrar u ocultar el panel del concepto seleccionado">Concepto</button>
         <button id="map-reset" class="btn" type="button" disabled
@@ -257,6 +317,7 @@
     </div>
     <nav id="map-trail" class="map-trail" aria-label="Mapas abiertos" hidden></nav>
     <p id="map-status" class="muted map-status" role="status"></p>
+    <div id="map-gap" class="map-gap" hidden></div>
     <p id="map-error" class="error" hidden></p>
 
     <div class="map-layout">
@@ -269,6 +330,12 @@
         </div>
         <div id="map-stage" class="map-stage" hidden>
           <svg id="map-svg-root" class="map-svg" role="group" aria-label="Mapa conceptual"><g id="map-viewport"></g></svg>
+          <ul id="map-legend" class="map-legend" aria-label="Leyenda de dominio" hidden>
+            <li><span class="swatch mastered"></span>Dominado</li>
+            <li><span class="swatch partial"></span>A medias</li>
+            <li><span class="swatch weak"></span>Por repasar</li>
+            <li><span class="swatch new"></span>Sin practicar</li>
+          </ul>
         </div>
         <div id="map-outline" class="map-outline md" hidden></div>
       </div>
@@ -282,7 +349,47 @@
 
   <!-- Practicar (ADR-020) ------------------------------------------------------------------>
   <main id="page-practicar" class="page practicar" hidden>
-    <div id="practice-setup" class="practice-setup">
+    <div id="practice-setup" class="practice-hub">
+      <section id="practice-today" class="hub-hero" aria-labelledby="today-title">
+        <div class="hub-hero-text">
+          <span class="hub-eyebrow">Hoy</span>
+          <h1 id="today-title">Practicar</h1>
+          <p id="today-summary"></p>
+          <p id="today-note" class="small"></p>
+        </div>
+        <button id="today-start" class="hub-hero-btn" type="button" hidden>Empezar repaso</button>
+      </section>
+      <p id="hub-error" class="error" hidden></p>
+
+      <section class="hub-modes" aria-labelledby="hub-modes-title">
+        <h2 id="hub-modes-title">O practica otra cosa</h2>
+        <div class="hub-tiles">
+          <button id="tile-quiz" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"></rect><path d="M8 8h8M8 12h8M8 16h5"></path></svg>
+            <strong>Cuestionario</strong>
+            <span class="hub-tile-text">Preguntas de una guía, una carpeta o un tema.</span>
+            <span class="hub-tile-go">Elegir de qué →</span>
+          </button>
+          <button id="tile-feynman" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9h8M8 12h5"></path></svg>
+            <span class="hub-tile-title"><strong>Explícamelo tú</strong><span class="badge warn">Experimental</span></span>
+            <span class="hub-tile-text">Explica un concepto con tus palabras y lo comparo con tus notas.</span>
+            <span class="hub-tile-go">Elegir concepto →</span>
+          </button>
+          <button id="tile-review" class="hub-tile" type="button" disabled>
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 3-6.2"></path><path d="M4 4v5h5"></path></svg>
+            <strong>Repasar mis fallos</strong>
+            <span id="tile-review-text" class="hub-tile-text">Las secciones que fallaste la última vez.</span>
+            <span class="hub-tile-go">Empezar →</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="hub-progress" class="hub-progress" aria-label="Tu progreso"></section>
+    </div>
+
+    <div id="practice-form-screen" class="practice-sub" hidden>
+      <button class="back-link" type="button" data-back>← Practicar</button>
       <form id="practice-form" class="practice-card practice-form" autocomplete="off">
         <h1>¿Qué quieres practicar?</h1>
 
@@ -332,12 +439,31 @@
         <p id="practice-error" class="error" hidden></p>
         <button id="practice-start" class="btn-primary btn-big" type="submit">Empezar</button>
       </form>
+    </div>
 
+    <div id="practice-feynman-intro" class="practice-sub" hidden>
+      <button class="back-link" type="button" data-back>← Practicar</button>
+      <section class="practice-card practice-form" aria-labelledby="feynman-title">
+        <h1 id="feynman-title" class="title-with-badge">Explícamelo tú <span class="badge warn">Experimental</span></h1>
+        <p class="muted">Elige un concepto y explícalo con tus palabras. Lo comparo con tus notas: qué ideas
+          clave te faltaron y qué dijiste que tus notas no respaldan, con la cita de cada cosa.</p>
+        <form id="feynman-form" class="feynman-form" autocomplete="off">
+          <input id="feynman-concept" type="text" maxlength="200" placeholder="p. ej. teorema de Bayes"
+            aria-label="Concepto que vas a explicar">
+          <button class="btn-primary btn-big" type="submit">Empezar</button>
+        </form>
+        <p id="feynman-error" class="error" hidden></p>
+      </section>
+    </div>
+
+    <div id="practice-progress-screen" class="practice-sub" hidden>
+      <button class="back-link" type="button" data-back>← Practicar</button>
       <aside id="practice-progress" class="practice-card progress-card" aria-label="Tu progreso"></aside>
     </div>
 
     <div id="practice-quiz" class="practice-quiz" hidden></div>
     <div id="practice-results" class="practice-quiz" hidden></div>
+    <div id="practice-feynman" class="practice-quiz" hidden></div>
   </main>
 </body>
 </html>

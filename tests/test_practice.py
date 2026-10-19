@@ -356,3 +356,87 @@ def test_practice_requests_are_validated(server: tuple[str, int, Engine]) -> Non
     assert _call(server, "POST", "/api/practice/check", {"question_id": "1", "choice": 1})[0] == 400
     _, guides = _call(server, "GET", "/api/practice/guides")
     assert {g["path"] for g in guides["guides"]} == {"est/bayes.md", "alg/svd.md"}
+
+
+# --- spaced repetition (ADR-025) ----------------------------------------------------------------
+
+
+def _age_answers(engine: Engine, days: int) -> None:
+    """Move every recorded answer `days` into the past, so their reviews come due."""
+    from datetime import datetime, timedelta
+
+    store = engine.practice
+    rows = store._conn.execute("SELECT id, answered FROM attempts").fetchall()
+    for aid, answered in rows:
+        old = datetime.fromisoformat(answered) - timedelta(days=days)
+        store._conn.execute(
+            "UPDATE attempts SET answered = ? WHERE id = ?",
+            (old.isoformat(timespec="seconds"), aid),
+        )
+    store._conn.commit()
+
+
+def test_todays_reviews_come_from_the_answer_history(server: tuple[str, int, Engine]) -> None:
+    engine = server[2]
+    _, today = _call(server, "GET", "/api/practice/today")
+    assert today["due"] == 0 and today["today"] == 0 and today["limit"] == 20
+    start = {"scope": {"kind": "guide", "value": "est/bayes.md"}, "count": 2, "kinds": ["mc"]}
+    _, events = _call(server, "POST", "/api/practice/start", start)
+    for _, q in [e for e in events if e[0] == "question"]:
+        _call(server, "POST", "/api/practice/check", {"question_id": q["id"], "choice": 0})
+    assert _call(server, "GET", "/api/practice/today")[1]["due"] == 0  # just answered
+    _age_answers(engine, 30)
+    _, today = _call(server, "GET", "/api/practice/today")
+    assert today["due"] == 2 and today["today"] == 2 and today["minutes"] >= 1
+
+    review = {"scope": {"kind": "srs", "value": ""}, "count": 20, "kinds": ["tf"]}
+    status, events = _call(server, "POST", "/api/practice/start", review)
+    questions = [q for n, q in events if n == "question"]
+    assert status == 200 and len(questions) == 2 and {q["kind"] for q in questions} == {"tf"}
+    _call(
+        server, "POST", "/api/practice/check", {"question_id": questions[0]["id"], "choice": True}
+    )
+    _, today = _call(server, "GET", "/api/practice/today")
+    assert today["done"] == 1 and today["due"] == 1  # reviewed today: no longer due
+
+
+def test_a_review_without_the_llm_reuses_stored_questions(
+    server: tuple[str, int, Engine], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = server[2]
+    start = {"scope": {"kind": "folder", "value": "alg"}, "count": 1, "kinds": ["mc"]}
+    _, events = _call(server, "POST", "/api/practice/start", start)
+    qid = events[1][1]["id"]
+    _call(server, "POST", "/api/practice/check", {"question_id": qid, "choice": 1})
+    _age_answers(engine, 10)
+    monkeypatch.setattr(engine, "llm_running", lambda: False)
+    review = {"scope": {"kind": "srs", "value": ""}, "count": 20, "kinds": ["tf"]}
+    status, events = _call(server, "POST", "/api/practice/start", review)
+    assert status == 200 and events[0][1]["reused"] is True
+    (question,) = [q for n, q in events if n == "question"]
+    assert question["kind"] == "mc" and question["text"] == "¿Qué invierte?"  # the stored one
+    assert question["id"] != qid  # a copy in the review quiz, so it counts as a review
+
+
+def test_the_daily_limit_and_nothing_due(
+    server: tuple[str, int, Engine], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine = server[2]
+    review = {"scope": {"kind": "srs", "value": ""}, "count": 20, "kinds": ["mc"]}
+    status, body = _call(server, "POST", "/api/practice/start", review)
+    assert status == 400 and "repasos pendientes" in body["error"]
+    monkeypatch.setattr(
+        engine,
+        "config",
+        replace(engine.config, practice=replace(engine.config.practice, daily_reviews=1)),
+    )
+    start = {"scope": {"kind": "guide", "value": "est/bayes.md"}, "count": 2, "kinds": ["mc"]}
+    _, events = _call(server, "POST", "/api/practice/start", start)
+    for _, q in [e for e in events if e[0] == "question"]:
+        _call(server, "POST", "/api/practice/check", {"question_id": q["id"], "choice": 0})
+    _age_answers(engine, 30)
+    _, today = _call(server, "GET", "/api/practice/today")
+    assert today["due"] == 2 and today["today"] == 1  # the limit
+    as_the_page = {**review, "count": today["today"]}  # the page asks for today's number
+    _, events = _call(server, "POST", "/api/practice/start", as_the_page)
+    assert events[0][1]["planned"] == 1

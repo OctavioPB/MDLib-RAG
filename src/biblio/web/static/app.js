@@ -419,6 +419,29 @@ function answerNode(turn) {
   return markdownNode(turn.answer || "", (n) => citeButton(turn, Number(n), known), "md answer");
 }
 
+// «Apuntado como tema pendiente · Deshacer» under an answer or a map (ADR-029)
+function gapNote(gap) {
+  const box = el("p", "gap-note");
+  if (gap.undone) {
+    box.append(el("span", "muted", "No se apuntó como tema pendiente."));
+    return box;
+  }
+  const times = gap.count > 1 ? ` · preguntado ${gap.count} veces` : "";
+  box.append(el("span", null, `Apuntado como tema pendiente: «${gap.topic}»${times}. `));
+  const guides = el("a", null, "Ver en Guías");
+  guides.href = "#/guias";
+  const undo = el("button", "link-button", "Deshacer");
+  undo.type = "button";
+  undo.addEventListener("click", async () => {
+    const response = await postJSON("/api/gaps/undo", { event_id: gap.event_id });
+    if (!response.ok) return;
+    gap.undone = true;
+    box.replaceWith(gapNote(gap));
+  });
+  box.append(guides, el("span", "muted", " · "), undo);
+  return box;
+}
+
 function flagsNode(done) {
   const flags = el("div", "flags");
   const add = (kind, text) => flags.append(el("span", `flag ${kind}`, text));
@@ -510,6 +533,7 @@ function turnNode(turn) {
     if (turn.answer) reply.append(answerNode(turn));
     if (turn.done) {
       reply.append(flagsNode(turn.done));
+      if (turn.gap) reply.append(gapNote(turn.gap));
       reply.append(followupsNode(turn));
     }
   }
@@ -613,7 +637,7 @@ async function runExplain(turn) {
       else if (name === "done") {
         turn.done = data;
         setConversation(data.conversation_id);
-      }
+      } else if (name === "gap") turn.gap = data;
       rerender(turn);
     });
   } catch (error) {

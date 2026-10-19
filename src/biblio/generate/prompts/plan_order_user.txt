@@ -1,0 +1,9 @@
+Carpeta: {folder}
+
+Guías:
+{guides}
+
+Ordena las {count} guías como una ruta de estudio, de la primera a la última.
+
+Formato:
+{{"orden": [{{"guia": 1, "razon": "..."}}]}}

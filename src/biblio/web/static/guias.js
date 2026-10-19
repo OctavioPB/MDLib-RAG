@@ -110,6 +110,8 @@ async function propose(topic, liveId, statusId, errorId) {
         guide.live = null;
         guide.step = "outline";
         store.set("biblio.guide", guide.slug);
+        // plan.js: a pending topic this outline was written from is now «en borrador» (ADR-029)
+        document.dispatchEvent(new CustomEvent("guide-outlined", { detail: { slug: data.slug } }));
       }
     });
     if (guide.step === "outline" && !guide.sections.length) {

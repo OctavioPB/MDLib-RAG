@@ -32,10 +32,18 @@ function newQuiz(label) {
   };
 }
 
+const SCREENS = {
+  setup: "practice-setup", // the hub
+  form: "practice-form-screen",
+  "feynman-intro": "practice-feynman-intro",
+  progress: "practice-progress-screen",
+};
+
 function showScreen(name) {
-  $("practice-setup").hidden = name !== "setup";
+  for (const [screen, id] of Object.entries(SCREENS)) $(id).hidden = name !== screen;
   $("practice-quiz").hidden = name !== "quiz";
   $("practice-results").hidden = name !== "results";
+  $("practice-feynman").hidden = name !== "feynman"; // «Explícamelo tú», feynman.js
 }
 
 function plainText(text) {
@@ -95,8 +103,10 @@ async function renderProgress() {
     data = await (await fetch("/api/practice/progress")).json();
   } catch {
     box.replaceChildren(el("p", "muted", "No se pudo leer tu progreso."));
+    renderHubProgress(null);
     return;
   }
+  renderHubProgress(data);
   const nodes = [el("h2", null, "Tu progreso")];
   if (!data.guides.length) {
     nodes.push(el("p", "muted", "Aún no has practicado. Tus resultados aparecerán aquí."));
@@ -117,18 +127,18 @@ async function renderProgress() {
     }
     nodes.push(row);
   }
-  const review = el("button", "btn", `Repasar mis fallos (${data.to_review})`);
-  review.type = "button";
-  review.disabled = data.to_review === 0;
-  review.addEventListener("click", () =>
-    startQuiz({ kind: "review", value: "", label: "Repaso de fallos" }, Math.min(10, data.to_review)),
-  );
-  nodes.push(review);
   const notes = el("div", "progress-notes");
   if (data.grader.reviewed) {
     notes.append(el("p", null, `Calificación del modelo: coincidió contigo en ${data.grader.agreed} de ${data.grader.reviewed} respuestas.`));
     if (data.grader.unreliable) {
       notes.append(el("p", "flag warn", "Sus notas coinciden poco con las tuyas: no te fíes de ellas."));
+    }
+  }
+  if (data.feynman && data.feynman.votes) {
+    const f = data.feynman;
+    notes.append(el("p", null, `«Explícamelo tú»: te pareció justo ${f.fair} de ${f.votes} puntos señalados.`));
+    if (f.unreliable) {
+      notes.append(el("p", "flag warn", "Lo que señala coincide poco con tu criterio: tómalo con cautela."));
     }
   }
   if (data.questions) {
@@ -145,11 +155,15 @@ function formatScore(score) {
 
 // --- running a quiz ------------------------------------------------------------------------
 
-async function startQuiz(scope, count) {
+// `origin`: the screen the quiz was started from, where its errors are shown
+async function startQuiz(scope, count, origin = "setup") {
+  const errorBox = origin === "form" ? "practice-error" : "hub-error";
   const kinds = [...document.querySelectorAll('input[name="practice-kind"]:checked')].map((i) => i.value);
   showError("practice-error", "");
+  showError("hub-error", "");
   if (!kinds.length) {
-    showError("practice-error", "Elige al menos un tipo de pregunta.");
+    showScreen(origin);
+    showError(errorBox, "Elige al menos un tipo de pregunta en Cuestionario.");
     return;
   }
   if (practice.quiz && practice.quiz.generating) practice.quiz.controller.abort();
@@ -158,7 +172,8 @@ async function startQuiz(scope, count) {
   $("practice-start").disabled = true;
   try {
     await loadStatus();
-    if (!app.llmRunning) {
+    // a review can ask its stored questions again without the model (ADR-025)
+    if (!app.llmRunning && scope.kind !== "srs") {
       throw new Error("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
     }
     showScreen("quiz");
@@ -168,7 +183,10 @@ async function startQuiz(scope, count) {
       { scope: { kind: scope.kind, value: scope.value }, count, kinds },
       (name, data) => {
         if (practice.quiz !== quiz) return;
-        if (name === "quiz") quiz.planned = data.planned;
+        if (name === "quiz") {
+          quiz.planned = data.planned;
+          quiz.reused = data.reused;
+        }
         else if (name === "question") quiz.questions.push(data);
         else if (name === "skipped") quiz.skipped += 1;
         else if (name === "done") quiz.generating = false;
@@ -182,8 +200,8 @@ async function startQuiz(scope, count) {
   } catch (error) {
     if (error.name === "AbortError") return;
     if (!quiz.questions.length) {
-      showScreen("setup");
-      showError("practice-error", error.message);
+      showScreen(origin);
+      showError(errorBox, error.message);
     } else {
       quiz.error = error.message;
     }
@@ -192,6 +210,86 @@ async function startQuiz(scope, count) {
     $("practice-start").disabled = false;
     if (practice.quiz === quiz && !$("practice-quiz").hidden) renderQuiz();
   }
+}
+
+// --- today's reviews (ADR-025) --------------------------------------------------------------
+
+async function fetchToday() {
+  try {
+    const response = await fetch("/api/practice/today");
+    return response.ok ? await response.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+function showTodayBadge(data) {
+  const badge = $("today-badge");
+  badge.hidden = !data || !data.today;
+  badge.textContent = data && data.today ? String(data.today) : "";
+  badge.title = data && data.today ? `${data.today} repasos pendientes hoy` : "";
+}
+
+// The hub's hero: today's reviews first (ADR-025); with none due, the way to start.
+async function renderToday() {
+  const data = await fetchToday();
+  showTodayBadge(data);
+  const start = $("today-start");
+  let title, summary, note = "", mode = null;
+  if (data && data.today) {
+    const word = data.today === 1 ? "sección" : "secciones";
+    title = `${data.today} ${word} que empiezas a olvidar`;
+    summary = `Unos ${data.minutes} ${data.minutes === 1 ? "minuto" : "minutos"}. Primero las que más se te escapan.`;
+    const later = data.due - data.today;
+    if (later > 0) note = `Quedan ${later} más para otro día: el límite es ${data.limit} al día.`;
+    mode = "srs";
+  } else if (data && data.done) {
+    title = "Repaso de hoy terminado";
+    summary = `${data.done} ${data.done === 1 ? "pregunta" : "preguntas"}. ${data.due ? `Quedan ${data.due} para mañana.` : "Mañana te diré qué toca."}`;
+  } else {
+    title = "Nada que repasar hoy";
+    summary = "Las secciones que practiques volverán aquí justo cuando empieces a olvidarlas.";
+    mode = "quiz";
+  }
+  $("today-title").textContent = title;
+  $("today-summary").textContent = summary;
+  $("today-note").textContent = note;
+  $("today-note").hidden = !note;
+  $("practice-today").classList.toggle("calm", mode !== "srs");
+  start.hidden = mode === null;
+  start.dataset.mode = mode || "";
+  start.textContent = mode === "srs" ? "Empezar repaso" : "Hacer un cuestionario";
+}
+
+function renderHubProgress(data) {
+  const box = $("hub-progress");
+  const review = $("tile-review");
+  review.disabled = !data || !data.to_review;
+  $("tile-review-text").textContent = data && data.to_review
+    ? `${data.to_review} ${data.to_review === 1 ? "sección que fallaste" : "secciones que fallaste"} la última vez.`
+    : "No tienes fallos pendientes.";
+  practice.toReview = data ? data.to_review : 0;
+  const nodes = [el("h2", null, "Tu progreso")];
+  if (!data || !data.guides.length) {
+    nodes.push(el("p", "muted hub-progress-empty", data ? "Aún no has practicado. Tus resultados aparecerán aquí." : "No se pudo leer tu progreso."));
+  } else {
+    for (const g of data.guides.slice(0, 2)) {
+      const row = el("div", "hub-progress-row");
+      const head = el("div", "progress-head");
+      head.append(el("span", null, g.title), el("span", "mono", `${formatScore(g.score)}/${g.answered}`));
+      const bar = el("div", "bar");
+      const fill = el("div", "bar-fill");
+      fill.style.width = `${Math.round((100 * g.score) / Math.max(g.answered, 1))}%`;
+      bar.append(fill);
+      row.append(head, bar);
+      nodes.push(row);
+    }
+  }
+  const all = el("button", "link-button hub-progress-all", "Ver todo →");
+  all.type = "button";
+  all.addEventListener("click", () => showScreen("progress"));
+  if (data && data.guides.length) nodes.push(all);
+  box.replaceChildren(...nodes);
 }
 
 function finishQuiz() {
@@ -511,6 +609,7 @@ function nextQuestion() {
 // --- results -------------------------------------------------------------------------------
 
 function renderResults() {
+  fetchToday().then(showTodayBadge); // answers may have cleared some of today's reviews
   const quiz = practice.quiz;
   const answered = quiz.questions.filter((q) => quiz.answers.get(q.id)?.result);
   const score = answered.reduce((sum, q) => sum + { correct: 1, partial: 0.5, wrong: 0 }[quiz.answers.get(q.id).result], 0);
@@ -539,11 +638,12 @@ function renderResults() {
     list.append(li);
   }
   const actions = el("div", "row");
-  const again = el("button", "btn-primary", "Nuevo cuestionario");
+  const again = el("button", "btn-primary", "Volver a Practicar");
   again.type = "button";
   again.addEventListener("click", () => {
     showScreen("setup");
     renderProgress();
+    renderToday();
   });
   const ask = el("a", "btn", "Preguntar sobre este tema");
   ask.href = "#/conversar";
@@ -559,10 +659,43 @@ function bindPracticar() {
     try {
       const scope = selectedScope();
       const count = Number(document.querySelector('input[name="practice-count"]:checked').value);
-      startQuiz(scope, count);
+      startQuiz(scope, count, "form");
     } catch (error) {
       showError("practice-error", error.message);
     }
+  });
+  const openForm = () => {
+    showError("hub-error", "");
+    showScreen("form");
+    $("scope-guide").focus();
+  };
+  $("tile-quiz").addEventListener("click", openForm);
+  $("tile-feynman").addEventListener("click", () => {
+    showError("hub-error", "");
+    showScreen("feynman-intro");
+    $("feynman-concept").focus();
+  });
+  $("tile-review").addEventListener("click", () =>
+    startQuiz({ kind: "review", value: "", label: "Repaso de fallos" }, Math.min(10, practice.toReview)),
+  );
+  for (const back of document.querySelectorAll("#page-practicar [data-back]")) {
+    back.addEventListener("click", () => {
+      showScreen("setup");
+      renderProgress();
+      renderToday();
+    });
+  }
+  $("today-start").addEventListener("click", async () => {
+    if ($("today-start").dataset.mode === "quiz") {
+      openForm();
+      return;
+    }
+    const data = await fetchToday();
+    if (!data || !data.today) {
+      renderToday();
+      return;
+    }
+    startQuiz({ kind: "srs", value: "", label: "Repaso de hoy" }, data.today);
   });
   for (const kind of ["guide", "folder", "topic"]) {
     $(`scope-${kind}`).addEventListener("focus", () => {
@@ -583,7 +716,18 @@ pageHooks.practicar = () => {
   if (topic && (!practice.quiz || $("practice-quiz").hidden)) {
     document.querySelector('input[name="practice-scope"][value="topic"]').checked = true;
     $("scope-topic").value = decodeURIComponent(topic[1]);
-    showScreen("setup");
+    showScreen("form");
   }
-  if (!$("practice-setup").hidden) renderProgress();
+  const pending = app.pendingPractice; // from Mapas' «Practicar esto» (ADR-026)
+  app.pendingPractice = null;
+  if (pending && (!practice.quiz || !practice.quiz.generating)) {
+    startQuiz(pending.scope, pending.count);
+    return;
+  }
+  if (!$("practice-setup").hidden) {
+    renderProgress();
+    renderToday();
+  }
 };
+
+fetchToday().then(showTodayBadge); // the nav badge shows on every page

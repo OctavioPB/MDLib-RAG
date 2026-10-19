@@ -29,6 +29,12 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 022 | Concept maps by LLM extraction per fragment, checked against the text | Accepted |
 | 023 | Conversation history in a local SQLite file on the server | Accepted |
 | 024 | Concept-map history in a local SQLite file on the server, as ADR-023 | Accepted |
+| 025 | Spaced repetition with FSRS over practised sections, 20 reviews a day | Accepted |
+| 026 | Mastery map: concepts coloured by how well their sections are remembered today | Accepted |
+| 027 | «Explícamelo tú»: explanations checked idea by idea against retrieved notes | Accepted |
+| 028 | Study plan per folder: an order proposed by the LLM, states from reading marks and practice | Accepted |
+| 029 | Gap detector: abstentions and thin maps become pending topics, offered in Guías | Partly superseded by ADR-030 (merging, thin map) |
+| 030 | Gap detector: thin maps include an absent topic; merging confirmed by the LLM | Accepted · Supersedes part of ADR-029 |
 
 ---
 
@@ -434,3 +440,99 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 **Decision.** `data/maps.db`, apart from the index. Every map is stored when it is complete, with its topic, the map (nodes, edges, layout) and its source fragments, so reopening one shows it as it was without calling the LLM again; an expanded map («Expandir») is stored as a map of its own. The list is newest first and can be searched by topic or by the names of the concepts in the map (FTS5 with the index's accent folding); a map can be deleted. «Guardar» now writes any stored map to `drafts/maps/`, not only those still in memory. The page's «Historial» button shows or hides the list on Mapas as it does on Conversar, each page remembering its own choice in the browser.
 
 **Consequences.** (+) Maps that took ~30 s to build are kept and reopen instantly. (+) The same pattern and code shape as the conversation history. (−) One more file that grows without limit (a map with its sources is ~50–100 KB); deleting is manual. (−) A stored map reflects the library when it was built; it is not refreshed when notes change.
+
+---
+
+## ADR-025 — Spaced repetition with FSRS over practised sections, 20 reviews a day
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** PLAN 9.1. The practice history (ADR-020) records every answer per library section (path and heading path), but nothing says when to practise a section again, so the user has to decide what to review. Spaced repetition schedules each item just before it is likely to be forgotten.
+
+**Options.**
+- Algorithm: FSRS (the scheduler Anki adopted in 2023: a model of each item's stability and difficulty that estimates the probability of recall and schedules the review when it falls to a target); SM-2 (intervals that grow with each success and reset on failure); Leitner boxes (fixed intervals per box).
+- Question at review time: always a new one (no memorising the wording; needs the LLM, ~3 s each); always the stored one (instant, but the wording gets memorised); new one, falling back to a stored one when the LLM server is off.
+- Daily limit: 20, 40 or none.
+
+**Decision.** The user chose FSRS, a new question with fallback to a stored one, and 20 reviews a day.
+- The review item is a library section, as in the practice history. Answers map to FSRS ratings: correct → Good, partial → Hard, wrong → Again (Easy is not used).
+- FSRS-4.5 with its published default parameters, implemented in `biblio.practice.srs` (no dependency). Desired retention and the parameters live in `[practice]` in the config.
+- The memory state of a section is not stored: it is computed by replaying its answers in order, so every past answer counts, including those given before this ADR, and nothing can get out of step.
+- Today's queue: sections whose review date has come, most at risk of being forgotten first; sections with a question marked faulty and sections no longer in the index are left out. At most `practice.daily_reviews` (20) a day, counting the reviews already done today; the rest wait for the next day.
+- A review asks a new question of the section (any kind the user chooses in Practicar) when the LLM server is running, and otherwise the most recent stored question of that section that was not marked faulty. Its answer is recorded like any other.
+- The Practicar page opens with «Hoy toca repasar» (questions due and estimated minutes) and the Practicar tab shows the number due.
+
+**Consequences.** (+) The app says what to study today, with evidence-based scheduling and no new model. (+) Every answer, in a quiz or a review, feeds the schedule. (−) FSRS's default parameters are fitted to Anki users, not to this user; they are a reasonable start, and could later be fitted to the user's own history. (−) Ratings come from three outcomes only (no Easy), so intervals grow more slowly than in Anki. (−) Generated review questions depend on the LLM's quality (ADR-020 safeguards apply).
+
+---
+
+## ADR-026 — Mastery map: concepts coloured by how well their sections are remembered today
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** PLAN 9.2. Concept maps (ADR-022) and practice (ADR-020) share the library sections a concept comes from, but a map does not show what the user knows. The user chose to define «mastered» by how well a concept is remembered today, which decays with time, rather than by the last answer.
+
+**Decision.** A concept's mastery is the average estimated probability of recall today (FSRS retrievability, ADR-025) of the source sections of its node that have been practised; sections never practised do not count, and a node with none is «sin practicar». Four states, with thresholds in config: «dominado» (≥ 0.85), «a medias» (≥ 0.6), «por repasar» (below), «sin practicar». Mapas gets a «Dominio» switch that colours the nodes by state, with a legend; the concept panel shows the percentage and «Practicar esto», which starts a quiz on that node's source sections. Mastery is computed when asked, never stored, so it always reflects today.
+
+**Consequences.** (+) The user sees at a glance where the gaps are, on the map they are studying. (+) No new data: it reads the practice history. (−) A concept whose sections are shared by other concepts shares their mastery; mastery is per section, not per concept. (−) A concept never practised looks grey even if the user knows it well; «Practicar esto» is the way to find out.
+
+## ADR-027 — «Explícamelo tú»: explanations checked idea by idea against retrieved notes
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** PLAN 9.3. Explaining a concept in one's own words (the Feynman technique) tests understanding more than recognising an answer. The system must say which key ideas of the user's notes the explanation missed and which of its claims the notes do not support, each with its source (rule 2), with a 4B local model (ADR-015) that skips and invents more when asked for everything at once. The user chose: evidence from retrieval, a two-step comparison by ideas, the result counting as practice after confirmation, and evaluation by per-point votes plus a small offline set.
+
+**Decision.**
+- **Evidence.** The concept is searched like a question in Conversar; the top `feynman.fragments` content sections (navigation sections skipped, as in maps) are the evidence. Too little evidence ends the session with «tus notas no tienen suficiente sobre esto» instead of judging.
+- **Step 1, key ideas (before the user explains).** Starts as soon as the concept is chosen, while the user writes. The model lists up to `feynman.max_ideas` key ideas, each with its fragment number and a literal quote; an idea whose quote is not in that fragment (accent and case folded, as ADR-022) is dropped. The ideas are not sent to the page before the user submits the explanation.
+- **Step 2, checking.** Two calls. (a) Coverage: for each idea, «cubierta», «parcial» or «falta», with the user's phrase that covers it; a covered or partial verdict whose phrase is not literally in the explanation becomes «falta» («no encontré dónde lo dices»). (b) Claims: the explanation split into at most `feynman.max_claims` claims, each «respaldada», «contradice» or «sin respaldo»; a claim not taken literally from the explanation is dropped, and «respaldada» or «contradice» need a valid fragment and literal quote, or the claim is dropped. «Sin respaldo» means the notes do not mention it, not that it is false.
+- **Proposed grade.** Coverage = (covered + ½ partial) / ideas. «Bien» if coverage ≥ `feynman.correct_at` and nothing contradicts the notes, «a medias» if ≥ `feynman.partial_at`, else «mal». Thresholds in config.
+- **Practice.** The user accepts or changes the grade; it is then recorded in `data/practice.db` as an open self-graded question («Explica con tus palabras: …», reference = the key ideas) on each section that gave an idea, in a quiz of scope `feynman`. So it moves the FSRS schedule (ADR-025) and the mastery map (ADR-026), and a later review can ask it again without the LLM.
+- **Evaluation.** Every reported point has «¿Es justo?» Sí / No; the votes are stored per session and Practicar shows how often the user agrees, with a warning below `feynman.min_agreement` after `feynman.min_samples` votes (as ADR-020). Offline, `eval/feynman.jsonl` (written by the user, gitignored like the other eval sets) lists explanations with the ideas that should be reported missing and the claims that should be reported unsupported; `biblio eval-feynman` measures how many are found and how many points are reported beyond them, matching by embedding similarity. The mode is labelled experimental until both are measured.
+- **Where.** A «Explícamelo tú» mode in Practicar, also reachable from the concept panel of Mapas.
+
+**Consequences.** (+) Every reported gap or unsupported claim carries a checked quote, so the user can verify it. (+) Ideas are extracted while the user writes, so the wait after submitting is only the checking (~10–15 s). (+) Reuses retrieval, the practice history, FSRS and the agreement tracking. (−) Three LLM calls per explanation. (−) Literal-quote checks drop some true points the model paraphrased; a false «falta» is possible when the user said it in other words and the model did not quote them. The votes measure how often. (−) Retrieval decides what «the notes» are; a concept spread over many guides may miss ideas outside the top fragments.
+
+## ADR-028 — Study plan per folder: an order proposed by the LLM, states from reading marks and practice
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** PLAN 9.4. The user wants to choose a syllabus folder and get an ordered path through its guides, each with a state (por leer, leída, practicada, dominada), to answer «¿por dónde sigo?». The library gives no order: file names carry no numbers and the folder's index note lists its guides alphabetically (`Data Science/Syllabus/LLMs`). The user chose the LLM to propose the order, a reading mark set by hand, and «dominada» requiring coverage as well as recall. The plan lives in the Guías page, next to «Escribir una guía».
+
+**Decision.**
+- **Order by the LLM, validated.** The model gets each guide of the folder as a number, its title and up to `plan.headings_per_guide` of its section titles, and returns an order with a short reason per guide («usa los tokens de 3»). The reply must name guides by their numbers: unknown numbers and repeats are dropped, guides the model left out are appended at the end in title order and marked as not placed by the model. The order is a proposal: the user can move guides up and down, and «Proponer otro orden» asks again.
+- **Big folders by module.** A folder with more than `plan.max_guides` guides is split by its first-level subfolders (guides directly in it form one more module): the model orders the modules from their names and guide titles, then the guides inside each module, recursively, with progress shown.
+- **Kept, not regenerated.** A plan is stored per folder in `data/practice.db` with its order and reasons; opening it again costs no LLM call. Guides added to the folder later appear at the end as «nuevas» until the next proposal; deleted ones disappear.
+- **States, computed when shown.** «Leída»: the user marked it (practising it also implies it). «Practicada»: at least one of its sections has an answer in the practice history. «Dominada»: at least `plan.mastered_coverage` of its content sections have been practised and their mean recall today (FSRS, ADR-025) is at least `practice.mastered_at`. Otherwise «por leer».
+- **Next step.** The first guide in the order not yet practised is «Sigue con»; when all are, the first not mastered. Each guide offers Abrir en Obsidian, Marcar como leída, Practicar (a quiz on that guide, ADR-020) and Explícamelo tú (ADR-027).
+- **Guías page.** It opens on two tiles, «Plan de estudio» and «Escribir una guía», each on its own screen with «← Guías», and a «Sigue con» line when a plan exists (the layout chosen for Practicar).
+
+**Consequences.** (+) Answers «¿por dónde sigo?» from the folder alone, with a reason for each place. (+) States reuse the practice history and FSRS; nothing new to keep beyond the order and the reading marks. (−) The order is the model's judgement, not measured; it varies between proposals, which is why it is stored and editable. (−) Reading is only known when the user says so. (−) A large folder costs one LLM call per module (~10 s each).
+
+## ADR-029 — Gap detector: abstentions and thin maps become pending topics, offered in Guías
+
+**Date:** 2026-10-19 · **State:** Accepted; its «What is a gap» (b) and «Merged» superseded by ADR-030
+
+**Context.** PLAN 9.10. When the tutor answers «No encuentro esto en tu biblioteca» (rule 2) or a concept map comes out thin, the user has found something their library lacks, and today that is forgotten. The user chose: a short topic taken by the LLM from the question, recorded automatically with an undo, a map with fewer than 6 concepts counting as thin, and similar topics merged and closed when the guide is written.
+
+**Decision.**
+- **What is a gap.** (a) A Conversar answer that is the abstention (`is_abstention`, the same check the answer evaluation uses); (b) a map whose concepts (topic excluded) are fewer than `gaps.map_min_concepts`, or a map request that finds no sections at all. Partial answers are not gaps: the tutor never abstains partly.
+- **Topic.** For an abstention, the LLM writes the question's topic in 2–8 words (one short call after the answer, `gaps.topic_max_tokens`); a reply that is not JSON, empty or too long falls back to the question itself. For a map, the map's topic. The original question is kept with each occurrence.
+- **Recorded automatically.** The answer or the map shows «Apuntado como tema pendiente» with «Deshacer», which removes that occurrence (and the topic if it was its only one). Web only; the CLI does not record.
+- **Merged.** A new topic whose embedding (the query embedder, on CPU) has cosine ≥ `gaps.merge_similarity` with an existing one adds an occurrence to it («preguntado 3 veces») instead of a new entry. A match that was resolved is reopened (the library still lacks it); one dismissed stays dismissed and nothing is shown.
+- **States.** Pendiente → En borrador (a draft outline was proposed from it in Guías) → Resuelto (the user marks it once the guide is in the library); or Descartado. Stored in `data/practice.db`.
+- **Guías.** The hub lists the open and drafting topics, most asked first, each with «Escribir guía» (opens «Escribir una guía» with the topic filled in, editable), «Resuelto» and «Descartar».
+
+**Consequences.** (+) Every question the library could not answer becomes a writing task, without the user having to note it. (+) Reuses the abstention check, the query embedder and the drafting flow. (−) One extra LLM call per abstention (~2 s, after the answer has been shown). (−) The merge threshold is a heuristic: two different questions on one subject may merge, or one subject split in two; the list shows the questions so the user can tell. (−) A thin map can mean a narrow topic rather than missing notes; the user can dismiss it.
+
+## ADR-030 — Gap detector: thin maps include an absent topic; merging confirmed by the LLM
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-029, «What is a gap» (b) and «Merged»
+
+**Context.** Trying ADR-029 on the live library showed two of its rules failing. A map of «salsa bechamel», a subject absent from the library, came out with 34 concepts from unrelated notes (sorting algorithms, supply-chain security…): retrieval always returns something and the extraction keeps what each fragment says, so «fewer than 6 concepts» did not flag it. And merging by embedding similarity cannot work with bge-m3 on short topics: measured on pairs, the same subject reworded scores 0.41–0.81 and different subjects 0.31–0.73 («Salsa bechamel» / «Salsa holandesa» 0.66, two questions on the roux 0.65), so no threshold separates them. The user chose the two rules below.
+
+**Decision.**
+- **Thin map.** A map is thin when it has fewer than `gaps.map_min_concepts` concepts **or** when its topic is not written in any of the fragments it read (accent and case folded, articles and plural ignored, as the maps' own topic check). In the second case Mapas also says that the notes do not treat the topic and the concepts come from related notes.
+- **Merging.** Embeddings only shortlist: topics with cosine ≥ `gaps.candidate_similarity` (0.55) to the new one, up to `gaps.max_candidates`, most similar first. With candidates, the LLM is asked whether the new question is on the same subject as one of them, answering with its number or 0; a number outside the list counts as 0. Without candidates, or when the model's reply is unusable, the topic is new. `gaps.merge_similarity` is removed.
+
+**Consequences.** (+) The clearest gaps (a topic the notes never mention) are caught by maps too. (+) Merging follows meaning, not surface similarity. (−) One more short LLM call when there are candidates (~1 s, after the answer). (−) A topic mentioned only in passing in one fragment does not count as absent.

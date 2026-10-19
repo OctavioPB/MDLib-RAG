@@ -189,6 +189,29 @@ the list on the left shows drafts made from the CLI too, and either can continue
 or quiz is generated at a time; the other pages keep working meanwhile. `#/guias/<tema>` links straight
 to one guide.
 
+**Guías** opens on two tiles, **Plan de estudio** and **Escribir una guía**, with **Sigue con: …**
+on top once you have a plan.
+
+- **Plan de estudio** (ADR-028): write a folder of your syllabus (e.g. `Data Science/Syllabus/LLMs`)
+  and the model proposes the order to study its guides, with a reason for each place (~15 s; the
+  guide that links to all the others goes first). Folders with more than 30 guides are ordered by
+  subfolder, then inside each. Each guide shows its state: **Por leer**, **Leída** (you mark it),
+  **Practicada** (any answer on its sections) or **Dominada** (60 % of its sections practised and
+  remembered today at 85 % or more). The first guide not yet practised is **Sigue aquí**. Each one
+  can be opened in Obsidian, marked as read, practised (a quiz on that guide) or explained
+  (Explícamelo tú), and moved up or down; **Proponer otro orden** asks the model again. Plans are
+  kept in `data/practice.db`, with your order; guides added to the folder later appear at the end
+  as new.
+
+**Temas pendientes** (ADR-029, ADR-030), also in the Guías hub: whenever the tutor answers «No
+encuentro esto en tu biblioteca», or a map comes out thin (fewer than 6 concepts, or its topic is
+not written in any of the notes it read), the subject is noted as a pending topic. The model turns
+the question into a short topic («Preparación de roux para bechamel»); a new question on a subject
+already noted is added to it («3 veces»): embeddings pick the similar topics and the model decides
+whether it is the same subject. The answer or map says «Apuntado como tema pendiente» with
+**Deshacer**. In Guías each topic offers **Escribir guía** (the topic filled in; the topic then
+shows «En borrador»), **Resuelto** and **Descartar**.
+
 **Mapas** draws a concept map of a topic from your notes (ADR-022):
 
 - Write a topic and press **Crear mapa**. The ten most relevant sections are read one by one; the map
@@ -198,10 +221,14 @@ to one guide.
   connected concepts around it, and their sub-concepts further out.
 - Click a concept to see its relations and the fragments where it appears. **Expandir** makes a map of
   that concept (the trail above lets you go back), **Explicar** asks about it in Conversar, and
-  **Practicar** makes a quiz on it.
+  **Practicar** makes a quiz on it (**Practicar esto** once the map is kept: a quiz on the very
+  sections the concept comes from).
 - **Drag a concept** to move it; its lines and labels follow and the relations stay as they are
   (with a concept focused, the arrow keys move it too, Shift for bigger steps). The layout is kept
   with the map and used by **Guardar**; **Reorganizar** goes back to the automatic layout.
+- **Dominio** (ADR-026) colours each concept by how well you remember its sections today, from your
+  practice: green mastered, amber half-remembered, red to review, dashed grey never practised. The
+  panel gives the percentage.
 - **Concepto** shows or hides the panel of the selected concept, giving its width to the drawing.
 - **Esquema** shows the same map as an indented list with each relation written as a sentence.
 - **Every map is kept** (ADR-024) in `data/maps.db`: the list on the left shows them newest first,
@@ -214,7 +241,11 @@ to one guide.
 The model can still state a wrong relation between two real concepts; the map's quality is to be
 measured on an evaluation set before it is considered finished (PLAN Phase 8).
 
-**Practicar** makes quizzes from your own notes (ADR-020):
+**Practicar** makes quizzes from your own notes (ADR-020). The page opens on what is due today, with
+one button to start it; below, three ways to practise something else (**Cuestionario**,
+**Explícamelo tú**, **Repasar mis fallos**), each on its own screen with **← Practicar** to come back,
+and a strip with your progress (**Ver todo** for the details).
+
 
 - Choose where the questions come from: one guide, one folder of your syllabus, or a topic.
 - Choose how many (5, 10 or 20) and of which kinds: multiple choice, true or false, open answers you
@@ -224,8 +255,23 @@ measured on an evaluation set before it is considered finished (PLAN Phase 8).
   link to it in Obsidian. **La pregunta está mal** discards a faulty question for good.
 - The model's grades of open answers can be accepted or changed; how often it agrees with you is
   shown, with a warning if it agrees too little to be trusted.
+- **Hoy toca repasar** (ADR-025): every section you have practised is scheduled again just before
+  you are likely to forget it (the FSRS algorithm): an answer right pushes it further away, a miss
+  brings it back soon. The card shows how many are due today and the minutes it takes, up to 20 a
+  day, the ones you are closest to forgetting first; the number also shows next to **Practicar** in
+  the top bar. Each review writes a new question on the section; with the LLM off it asks the last
+  stored one again.
 - **Tu progreso** shows your score per guide and the sections you missed; **Repasar mis fallos**
   makes a quiz from those. Sections you missed are asked first, then new ones.
+- **Explícamelo tú** (ADR-027, experimental): write a concept and explain it in your own words, as
+  if to someone who knows nothing about it. While you write, the app reads the five sections of your
+  notes most about it and takes their key ideas (~10 s). Then **Comprobar** (~6 s) shows which key
+  ideas you covered, half covered or left out, and which of your claims your notes back, contradict
+  or do not mention (which does not mean they are false), each with the literal quote of the note
+  it comes from. Accept or change the proposed grade and it counts as practice of those sections,
+  for your reviews and the mastery map. **¿Es justo?** on every point tells the app how often it
+  gets it right; **Tu progreso** shows the share. Concept panels in Mapas have an
+  **Explícamelo tú** button too.
 
 The history stays on this machine in `data/practice.db`, apart from the index, so rebuilding the
 index never deletes it. The answer to a question is never sent to the page before you answer it.
@@ -269,6 +315,7 @@ uv run biblio compare v2-hybrid-rerank my-change
 uv run biblio candidates my-change           # what the search returned for missed questions, for you to judge
 uv run biblio ask-eval run --tag my-run      # tutor answers → a review sheet in eval/review/ for you to grade
 uv run biblio ask-eval score my-run          # faithfulness, coverage, abstention → eval/results/answers.jsonl
+uv run biblio eval-feynman --tag my-run      # «Explícamelo tú»: expected gaps reported, false alarms → eval/results/feynman_runs.jsonl
 ```
 
 Current numbers (section level, 64 questions; `PLAN.md` has the history):
@@ -277,6 +324,10 @@ Current numbers (section level, 64 questions; `PLAN.md` has the history):
 |---|---|---|---|
 | hybrid + reranker (default) | 0.770 | 0.597 | 1.85 s |
 | hybrid (LLM server running) | 0.647 | 0.467 | 0.49 s |
+
+`eval/feynman.jsonl` holds your own explanations of concepts in your library, each with the
+ideas it leaves out and the claims your notes do not back; `eval/feynman.example.jsonl` shows the
+format.
 
 Agreed targets: recall@8 ≥ 0.75, MRR ≥ 0.55, p95 ≤ 3 s. The tutor's measured faithfulness (claims
 supported by their citations) is 0.87 on the 14-question answer set.

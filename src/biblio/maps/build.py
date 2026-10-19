@@ -242,6 +242,13 @@ def _is_topic(folded: str, topic: str) -> bool:
     return folded == topic or _core(folded) == _core(topic)
 
 
+def topic_in_text(topic: str, text: str) -> bool:
+    """Whether the topic is written in the text, give or take accents, case, an article or a plural
+    (a gap when no fragment of a map has it, ADR-030)."""
+    core = _core(fold(topic))
+    return bool(core) and re.search(rf"(?<!\w){re.escape(core)}", fold(text)) is not None
+
+
 def build_map(
     topic: str, extractions: Sequence[Extraction], embed: Embed | None, cfg: MapsConfig
 ) -> ConceptMap:

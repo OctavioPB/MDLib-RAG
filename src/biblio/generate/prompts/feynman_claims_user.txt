@@ -1,0 +1,14 @@
+Concepto: {concept}
+
+Fragmentos de las notas:
+{fragments}
+
+Explicación del usuario:
+---
+{explanation}
+---
+
+Revisa hasta {max_claims} afirmaciones de la explicación, las más importantes.
+
+Formato:
+{{"afirmaciones": [{{"afirmacion": "texto literal de la explicación", "veredicto": "respaldada", "fragmento": 1, "cita": "texto literal del fragmento"}}]}}

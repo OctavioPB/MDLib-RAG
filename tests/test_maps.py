@@ -308,16 +308,20 @@ def _post(server: tuple[str, int], path: str, body: Any) -> tuple[int, Any]:
     return resp.status, json.loads(raw)
 
 
+def _done(events: list[tuple[str, Any]]) -> Any:
+    return next(d for n, d in events if n == "done")
+
+
 def test_a_map_is_streamed_and_saved(server: tuple[str, int], tmp_path: Path) -> None:
     status, events = _post(server, "/api/maps", {"topic": "spam"})
     names = [n for n, _ in events]
-    assert status == 200 and names[0] == "start" and names[-1] == "done"
+    assert status == 200 and names[0] == "start" and names[-2:] == ["done", "gap"]  # a thin map
     assert names.count("map") == len(events[0][1]["fragments"]) == 2  # one update per fragment
     final = [d for n, d in events if n == "map"][-1]["map"]
     labels = {n["label"]: n for n in final["nodes"]}
     assert labels["spam"]["level"] == 0  # the topic is the centre
     assert labels["teorema de Bayes"]["sources"] == [1, 2]
-    map_id = events[-1][1]["map_id"]
+    map_id = _done(events)["map_id"]
     status, saved = _post(server, "/api/maps/save", {"id": map_id})
     assert status == 200 and Path(saved["canvas"]).is_file()
     canvas = json.loads(Path(saved["canvas"]).read_text(encoding="utf-8"))
@@ -342,9 +346,9 @@ def _get(server: tuple[str, int], path: str) -> tuple[int, Any]:
 
 def test_maps_are_kept_searched_reopened_and_deleted(server: tuple[str, int]) -> None:
     _, events = _post(server, "/api/maps", {"topic": "spam"})
-    first = events[-1][1]["map_id"]
+    first = _done(events)["map_id"]
     _, events = _post(server, "/api/maps", {"topic": "filtros"})
-    second = events[-1][1]["map_id"]
+    second = _done(events)["map_id"]
     _, listed = _get(server, "/api/maps/history")
     assert [(m["id"], m["topic"]) for m in listed["maps"]] == [(second, "filtros"), (first, "spam")]
     assert listed["maps"][1]["concepts"] == 2  # «spam» is the centre, not a concept
@@ -365,7 +369,7 @@ def test_maps_are_kept_searched_reopened_and_deleted(server: tuple[str, int]) ->
 
 def test_moved_nodes_are_kept_and_used_when_saving(server: tuple[str, int], tmp_path: Path) -> None:
     _, events = _post(server, "/api/maps", {"topic": "spam"})
-    map_id = events[-1][1]["map_id"]
+    map_id = _done(events)["map_id"]
     _, stored = _get(server, f"/api/maps/history/{map_id}")
     assert stored["positions"] == {}
     child = stored["map"]["nodes"][1]["id"]
@@ -407,3 +411,45 @@ def test_an_older_maps_db_gains_the_positions_column(tmp_path: Path) -> None:
     stored = store.get(1)
     assert stored is not None and stored.positions == {}
     assert store.set_positions(1, {"root": (5, 6)}) and store.get(1).positions == {"root": (5, 6)}  # type: ignore[union-attr]
+
+
+# --- mastery map (ADR-026) ----------------------------------------------------------------------
+
+
+def test_mastery_follows_the_practice_of_each_concepts_sections(
+    server: tuple[str, int], config: Config
+) -> None:
+    from datetime import datetime, timedelta
+
+    from biblio.practice.store import PracticeStore, QuestionContent, Section
+
+    _, events = _post(server, "/api/maps", {"topic": "spam"})
+    map_id = _done(events)["map_id"]
+    _, stored = _get(server, f"/api/maps/history/{map_id}")
+    _, mastery = _get(server, f"/api/maps/history/{map_id}/mastery")
+    assert {n["state"] for n in mastery["nodes"].values()} == {"new"}  # nothing practised yet
+
+    store = PracticeStore(config.practice.db)  # the same file the server uses
+    first = stored["fragments"][0]
+    section = Section(
+        first["doc_path"], (first["guide"], *first["sections"]), *first["lines"], first["text"]
+    )
+    quiz = store.new_quiz("guide", first["doc_path"], 1)
+    qid = store.add_question(
+        quiz, "mc", section, QuestionContent("q", "e", ("a", "b", "c", "d"), 0)
+    )
+    store.record_attempt(qid, "0", "correct", "code")
+    node = next(n for n in stored["map"]["nodes"] if n["sources"] == [1, 2])  # in both fragments
+    _, mastery = _get(server, f"/api/maps/history/{map_id}/mastery")
+    info = mastery["nodes"][node["id"]]
+    assert info["state"] == "mastered" and info["practiced"] == 1 and info["recall"] > 0.95
+    assert len(info["sections"]) == 2  # «Practicar esto» gets both of its sections
+
+    # two months later, without reviews, the memory has faded
+    old = (datetime.now().astimezone() - timedelta(days=60)).isoformat(timespec="seconds")
+    store._conn.execute("UPDATE attempts SET answered = ?", (old,))
+    store._conn.commit()
+    _, mastery = _get(server, f"/api/maps/history/{map_id}/mastery")
+    assert mastery["nodes"][node["id"]]["state"] in ("partial", "weak")
+    assert _get(server, "/api/maps/history/999/mastery")[0] == 404
+    store.close()

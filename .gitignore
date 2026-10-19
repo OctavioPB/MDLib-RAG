@@ -14,6 +14,7 @@ drafts/
 # Evaluation data names and quotes the user's notes; it stays local (the example set is kept).
 eval/*.jsonl
 !eval/questions.example.jsonl
+!eval/feynman.example.jsonl
 eval/results/*
 !eval/results/.gitkeep
 eval/review/

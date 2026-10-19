@@ -187,6 +187,57 @@ meets the agreed target, and a map from 10 fragments completes within the agreed
 may also drop synonyms and abstractions. Readability past ~40 nodes: a cap per level (config).
 Few cross-guide links, because the link graph is sparse.
 
+
+## Phase 9 — Study companion
+
+Goal: turn the tools that exist (cited tutor, quizzes with history, concept maps, conversation
+history) into a study companion that says what to study today, makes the user recall instead of
+reread, and shows what they master and what they do not. Requested by the user on 2026-10-19, all
+items wanted, built at the user's pace in the order below. Every item needs its own ADR before
+code (Phase 7 rule); generated content keeps citing its sources (rule 2) and anything with model
+output is measured before it is adopted.
+
+Next up: 9.3b (needs the user's evaluation set), or 9.5 (needs its ADR first).
+
+- [x] **9.1 Spaced repetition: «Hoy toca repasar».** Each practised section gets a next review
+      date from its answer history (an SRS algorithm such as FSRS or SM-2) in `data/practice.db`;
+      the app opens with today's queue («12 preguntas, ~15 min») and reviews update the schedule.
+      Decisions for the ADR: algorithm, review unit (section), whether a review asks a stored
+      question again or generates a new one, daily limits.
+- [x] **9.2 Mastery map.** Concept-map nodes coloured by the practice results of their source
+      sections (mastered, partial, failing, not practised); a failing node offers «Practicar esto».
+      Joins Mapas (ADR-022/024) and Practicar (ADR-020) through the sections they share.
+- [x] **9.3 «Explícamelo tú» (Feynman mode).** The user explains a concept in their own words;
+      the model compares it with the user's notes and lists the key ideas missing and the claims
+      the notes do not support, each with its source. Reuses the model grading of ADR-020 and its
+      agreement tracking; needs an evaluation of the feedback before adoption.
+- [ ] **9.3b Measure «Explícamelo tú» before dropping «Experimental».** The user writes
+      `eval/feynman.jsonl` (~15 explanations of concepts in the library, with the ideas each leaves
+      out and the claims the notes do not back); run `biblio eval-feynman` and agree targets for
+      `missing_recall`, `unsupported_recall` and the false-alarm rates; read the «¿Es justo?»
+      agreement in Practicar after 20+ votes.
+- [x] **9.4 Study plan per syllabus.** Choose a folder; the app builds an ordered path from the
+      guides' structure and tracks each guide as to read, read, practised or mastered, and answers
+      «¿por dónde sigo?».
+- [ ] **9.5 Flashcards.** Cards (concept → cited definition) generated from a map or a guide,
+      reviewed with the 9.1 schedule; optional export for Anki.
+- [ ] **9.6 Mock exam.** Questions mixed across the guides of a syllabus (interleaving), timed,
+      answers shown only at the end, with a per-guide report.
+- [ ] **9.7 Review sheet.** A one-page cited summary (definitions, formulas, relations) of a map
+      or a folder, for the last review before an exam; saved to `drafts/`.
+- [ ] **9.8 Follow-up questions in Conversar.** «Dame un ejemplo», «profundiza»: memory of the
+      conversation for the model. Revisits ADR-019 (independent turns); changes retrieval and
+      prompts, so it needs a chained-question evaluation set written by the user and before/after
+      measurements (rule 3).
+- [ ] **9.9 Built-in reader.** Open a note inside the app; select a passage to ask «explícame
+      esto» or «pregúntame sobre esto».
+- [x] **9.10 Gap detector.** Questions the tutor could not answer from the notes and thin maps are
+      recorded as missing topics, with an offer to draft the guide in Guías.
+- [ ] **9.11 Progress dashboard.** Streak, study time, sections mastered per folder, reviews due.
+
+**Exit criterion:** set per item in its ADR; the phase is done when the user considers the
+companion complete.
+
 ---
 
 ## Log
@@ -245,3 +296,9 @@ Few cross-guide links, because the link graph is sparse.
 | 2026-10-19 | 8 | Fix reported by the user (map of «quimica» off-topic): retrieval was right (10 fragments from `Cosas/Quimica`), but the topic rule merged every concept containing the topic word into the centre, so 21 branches («química orgánica», «bioquímica»…) vanished and their relations were attributed to the topic («quimica estudia carbono»). Now only the topic itself (give or take an article or plural) is the centre (regression test). Also: level 1 ranked by fragments more than by relations (a method's 5-step list no longer outranks the branches), `level1_max` 7→9, children need a relation stated in a fragment (shared fragments alone nested sibling branches under each other), prompt asks for relations to the topic and for reading direction. Live: «quimica» now 9 branches around the topic, children by stated relations, 40 s. |
 | 2026-10-19 | 8 | Mapas: nodes can be dragged with the mouse (a click still selects; the background still pans) or moved with the arrow keys; lines and labels follow without a redraw, relations unchanged. Moves are stored apart from the automatic layout (`positions` column, migrated into existing `maps.db`; `/api/maps/positions`, `{}` resets), applied when a map is reopened and used by «Guardar» (Canvas). «Reorganizar» restores the automatic layout. Checked in headless Edge with real mouse events. 2 new tests (359). |
 | 2026-10-19 | 8 | Mapas: «Concepto» button shows or hides the concept panel (remembered; the map re-fits to the space). The drawing area has its own theme tokens: soft mid-grey background in the light theme (`#dfe2e6`) with darker lines and labels, so white and green nodes and the relations stand out; a slightly lighter grey in the dark theme. Checked in headless Edge in both themes. |
+| 2026-10-19 | 9 | Phase 9 (study companion) planned at the user's request: 11 items, all wanted, built at the user's pace starting with 9.1 (spaced repetition) and 9.2 (mastery map). Each needs its own ADR first. |
+| 2026-10-19 | 9 | 9.1 and 9.2 done. Spaced repetition (ADR-025): FSRS-4.5 with default weights, memory state replayed from the attempts in `data/practice.db` (wrong→Again, partial→Hard, correct→Good), up to 20 reviews a day, most-forgotten first; Practicar shows «Hoy toca repasar» with the count and minutes, a badge on the nav; a review writes a new question, or asks the stored one again when the LLM is off. Mastery map (ADR-026): **Dominio** colours each node by the mean recall today of its practised source sections (≥0.85 mastered, ≥0.6 partial, else weak; never practised = new), with a legend; the panel gives the recall and **Practicar esto** quizzes the node's own sections. New `practice/srs.py`, `GET /api/practice/today`, `GET /api/maps/history/<id>/mastery`, scope kinds `srs` and `sections`. 366 tests pass; checked live in Edge (light and dark) with the user's history. |
+| 2026-10-19 | 9 | 9.3 done (ADR-027), labelled experimental. «Explícamelo tú» in Practicar and from Mapas' concept panel: the concept is retrieved like a question (5 content sections); step 1 takes up to 6 key ideas, each with a literal quote checked against its fragment, while the user writes (~12 s on PESTEL); step 2 (~6 s) checks coverage (a covered/partial verdict needs a phrase literally in the explanation, else «falta») and the explanation's claims (supported/contradicts need a checked quote; «sin respaldo» means not in the notes). Proposed grade from coverage (≥0.8 and no contradiction = bien, ≥0.4 a medias); the grade the user keeps is recorded as open self-graded practice on the sections that gave ideas, so it moves FSRS and mastery. «¿Es justo?» votes per point with agreement in Tu progreso; `biblio eval-feynman` + `eval/feynman.example.jsonl` for the offline set (9.3b, written by the user). Live check on PESTEL: verdicts right on a planted explanation (a false claim flagged as contradicting in one run, as not in the notes in another). 376 tests pass. |
+| 2026-10-19 | 9 | Practicar reorganised (user chose proposal A of three on a design canvas): a hub that opens on today's reviews (one button; «Nada que repasar hoy» / «Repaso de hoy terminado» otherwise), three tiles (Cuestionario, Explícamelo tú, Repasar mis fallos) each opening its own screen with «← Practicar», and a one-line progress strip with «Ver todo». No behaviour change; errors show on the screen the quiz was started from. Checked in Edge: light, dark, 390 px wide. |
+| 2026-10-19 | 9 | 9.4 done (ADR-028). Guías opens on a hub (Plan de estudio, Escribir una guía; «Sigue con» on top). Study plan per folder: the LLM orders the guides by number with a reason each, the reply checked (unknown/repeated dropped, one retry when guides are left out, the rest appended by title); the guide linking to ≥ half of the others is marked as the overview so it goes first; folders over 30 guides ordered by subfolder modules, recursively. States per guide: por leer / leída (manual mark) / practicada / dominada (≥60 % of content sections practised, mean recall today ≥ 0.85). Plans and reading marks in `data/practice.db`; manual up/down order; new guides appended. On `Data Science/Syllabus/LLMs` (15 guides, 14 s): overview, tokens, BPE, embeddings, attention, RoPE, pretraining, fine-tuning, LoRA… — sensible, with a few debatable places (causal masking late). 383 tests pass; checked in Edge (light, dark, 390 px). |
+| 2026-10-19 | 9 | 9.10 done (ADR-029, partly superseded by ADR-030 after the live test). An abstention in Conversar (`is_abstention`) records a pending topic: the LLM turns the question into a 2–8 word topic (fallback: the question). A map is thin with < 6 concepts or when its topic is written in none of its fragments (new `maps.build.topic_in_text`); a map that finds no sections is recorded too. Live test showed (1) «salsa bechamel» produced a 34-concept map from unrelated notes, missed by the concept count alone, and (2) bge-m3 cosines overlap for same vs different subjects (0.41–0.81 vs 0.31–0.73), so merging became: candidates by cosine ≥ 0.55 (≤ 5), then the LLM picks the same subject or none; dismissed topics take part and stay hidden. After the change: two roux questions merged, «salsa holandesa» kept apart, the bechamel map flagged as absent. «Apuntado como tema pendiente · Deshacer» under answers and maps; Guías hub lists them (Escribir guía → «En borrador» when an outline is proposed; Resuelto; Descartar). Stored in `data/practice.db`. Also filled the missing ADR-027–029 rows in the DECISIONS index. 391 tests pass. |

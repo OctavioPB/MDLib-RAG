@@ -11,6 +11,7 @@ const mapState = {
   busy: false,
   controller: null,
   moved: false, // the user panned or zoomed: stop re-fitting the growing map
+  mastery: false, // colour the nodes by how well they are remembered today (ADR-026)
 };
 
 const current = () => mapState.trail[mapState.trail.length - 1] || null;
@@ -67,6 +68,9 @@ async function createMap(topic, expand = false) {
           const left = data.omitted ? ` · ${data.omitted} conceptos sin relación clara se dejaron fuera` : "";
           const skipped = data.skipped ? ` · ${data.skipped} fragmentos no se pudieron leer` : "";
           setStatus(`${entry.map.nodes.length - 1} conceptos de ${entry.fragments.length} fragmentos${left}${skipped}`);
+        } else if (name === "gap") {
+          entry.gap = data; // a thin map: the topic is pending in Guías (ADR-029)
+          renderGap();
         }
       },
       mapState.controller.signal,
@@ -81,6 +85,16 @@ async function createMap(topic, expand = false) {
     mapState.busy = false;
     renderAll();
   }
+}
+
+function renderGap() {
+  const entry = current();
+  const box = $("map-gap");
+  box.hidden = !(entry && entry.gap);
+  const why = entry && entry.gap && entry.gap.absent
+    ? "Tus notas no tratan este tema: los conceptos vienen de notas parecidas. "
+    : "Tus notas tratan poco este tema. ";
+  box.replaceChildren(...(entry && entry.gap ? [el("span", null, why), gapNote(entry.gap)] : []));
 }
 
 function setStatus(text) {
@@ -124,8 +138,9 @@ function drawMap() {
   const nodes = svgEl("g", { class: "map-nodes" });
   for (const n of entry.map.nodes) {
     const { width, height, font } = nodeSize(n);
+    const known = mapState.mastery && entry.mastery && entry.mastery.nodes[n.id];
     const g = svgEl("g", {
-      class: `map-node level-${n.level}${n.id === mapState.selected ? " selected" : ""}`,
+      class: `map-node level-${n.level}${known ? ` m-${known.state}` : ""}${n.id === mapState.selected ? " selected" : ""}`,
       transform: `translate(${n.x},${n.y})`,
       tabindex: 0,
       role: "button",
@@ -358,6 +373,12 @@ function renderPanel() {
     for (const e of related) list.append(el("li", null, sentence(entry.map, e)));
     parts.push(list);
   }
+  const known = entry.mastery && entry.mastery.nodes[node.id];
+  if (known && node.level > 0) {
+    parts.push(el("p", "mastery-line", known.recall === null
+      ? "Aún no has practicado sus secciones."
+      : `Lo recuerdas hoy en un ${Math.round(known.recall * 100)} % (${known.practiced} de ${known.sections.length} ${known.sections.length === 1 ? "sección practicada" : "secciones practicadas"}).`));
+  }
   const actions = el("div", "row");
   if (node.level > 0) {
     const expand = el("button", "btn-primary", "Expandir");
@@ -369,9 +390,27 @@ function renderPanel() {
   }
   const explain = el("a", "btn", "Explicar");
   explain.href = `#/conversar?q=${encodeURIComponent(`¿Qué es ${node.label}?`)}`;
-  const practice = el("a", "btn", "Practicar");
-  practice.href = `#/practicar?tema=${encodeURIComponent(node.label)}`;
-  actions.append(explain, practice);
+  let practice;
+  if (known && known.sections.length && node.level > 0) {
+    // the node's own sections, not a new search on its name (ADR-026)
+    practice = el("button", "btn", "Practicar esto");
+    practice.type = "button";
+    practice.title = "Preguntas sobre las secciones donde aparece este concepto";
+    practice.addEventListener("click", () => {
+      app.pendingPractice = {
+        scope: { kind: "sections", value: JSON.stringify(known.sections), label: node.label },
+        count: Math.min(known.sections.length, 10),
+      };
+      location.hash = "#/practicar";
+    });
+  } else {
+    practice = el("a", "btn", "Practicar");
+    practice.href = `#/practicar?tema=${encodeURIComponent(node.label)}`;
+  }
+  const feynmanLink = el("a", "btn", "Explícamelo tú");
+  feynmanLink.href = `#/practicar?explicar=${encodeURIComponent(node.label)}`;
+  feynmanLink.title = "Explícalo con tus palabras y lo comparo con tus notas";
+  actions.append(explain, practice, feynmanLink);
   parts.push(actions);
   parts.push(el("h3", null, `Aparece en ${node.sources.length} ${node.sources.length === 1 ? "fragmento" : "fragmentos"}`));
   const fragments = new Map(entry.fragments.map((f) => [f.number, f]));
@@ -425,10 +464,31 @@ function renderAll() {
   $("map-reset").disabled = !hasMap || mapState.busy || !entry.positions || !Object.keys(entry.positions).length;
   markActiveMap();
   $("map-svg").disabled = !hasMap || mapState.busy;
+  const masteryReady = hasMap && Boolean(entry.id) && !mapState.busy;
+  $("map-mastery").disabled = !masteryReady;
+  $("map-mastery").setAttribute("aria-pressed", String(mapState.mastery));
+  $("map-legend").hidden = !(mapState.mastery && masteryReady && entry.mastery);
+  if (masteryReady && !entry.mastery && !entry.masteryLoading) loadMastery(entry);
   renderTrail();
+  renderGap();
   drawMap();
   renderOutline();
   renderPanel();
+}
+
+// --- mastery (ADR-026) --------------------------------------------------------------------
+
+async function loadMastery(entry) {
+  entry.masteryLoading = true;
+  try {
+    const response = await fetch(`/api/maps/history/${entry.id}/mastery`);
+    if (response.ok) entry.mastery = await response.json();
+  } catch {
+    // without mastery the map is drawn as before
+  } finally {
+    entry.masteryLoading = false;
+  }
+  if (entry.mastery && current() === entry && !mapState.busy) renderAll();
 }
 
 // --- the history of maps (ADR-024) --------------------------------------------------------
@@ -567,6 +627,12 @@ function bindMapas() {
   $("map-svg").addEventListener("click", downloadSvg);
   $("map-delete").addEventListener("click", deleteMap);
   $("map-reset").addEventListener("click", resetLayout);
+  mapState.mastery = store.get("biblio.mapMastery", false);
+  $("map-mastery").addEventListener("click", () => {
+    mapState.mastery = !mapState.mastery;
+    store.set("biblio.mapMastery", mapState.mastery);
+    renderAll();
+  });
   setConceptPanelOpen(store.get("biblio.mapPanelOpen", true));
   $("map-panel-toggle").addEventListener("click", () => {
     setConceptPanelOpen($("map-panel").hidden);
@@ -633,5 +699,7 @@ pageHooks.mapas = () => {
     loadMapHistory();
     renderAll();
   }
+  for (const entry of mapState.trail) entry.mastery = null; // practice may have changed it
+  if (mapasStarted && current()) renderAll();
   if (current() && mapState.view === "map") fitView();
 };

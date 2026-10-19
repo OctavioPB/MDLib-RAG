@@ -90,6 +90,46 @@ question_max_tokens = 600    # LLM output budget for one generated question
 grade_max_tokens = 300       # LLM output budget for grading one open answer
 grader_min_agreement = 0.8   # model grades agreeing with yours less than this...
 grader_min_samples = 20      # ...after this many reviewed grades: the page warns they are unreliable
+daily_reviews = 20           # spaced-repetition reviews per day at most (ADR-025)
+desired_retention = 0.9      # FSRS schedules a review when recall is expected to fall to this
+max_interval_days = 365
+review_minutes_per_question = 0.75  # for the «~N min» estimate
+# FSRS-4.5 default parameters (w0..w16); could be fitted to the user's own history one day
+fsrs_weights = [0.4872, 1.4003, 3.7145, 13.8206, 5.1618, 1.2298, 0.8975, 0.031, 1.6474, 0.1367, 1.0461, 2.1072, 0.0793, 0.3246, 1.587, 0.2272, 2.8755]
+mastered_at = 0.85           # mastery map (ADR-026): recall today at or above this is «dominado»
+partial_at = 0.6             # ...at or above this «a medias», below «por repasar»
+
+[feynman]                    # «Explícamelo tú» (ADR-027); history in [practice].db
+fragments = 5                # retrieved sections the explanation is compared with
+max_fragment_chars = 2400
+min_fragments = 1            # fewer: «tus notas no tienen suficiente sobre esto»
+max_ideas = 6                # key ideas taken from the notes
+max_claims = 6               # claims taken from the explanation
+min_explanation_chars = 40
+max_explanation_chars = 4000
+ideas_max_tokens = 900       # LLM output budgets
+check_max_tokens = 900
+correct_at = 0.8             # coverage for a proposed «bien» (and nothing contradicting the notes)
+partial_at = 0.4             # ...for «a medias»
+min_agreement = 0.8          # votes «¿Es justo?» agreeing less than this...
+min_samples = 20             # ...after this many votes: the page warns
+eval_match_similarity = 0.75 # `biblio eval-feynman`: an expected point is found above this cosine
+
+[plan]                       # study plan per folder (ADR-028); kept in [practice].db
+max_guides = 30              # more guides than this: ordered by subfolder modules
+headings_per_guide = 8       # section titles shown to the model per guide
+order_max_tokens = 1600      # LLM output budget for one ordering
+reason_max_chars = 220
+mastered_coverage = 0.6      # «dominada»: this share of its content sections practised…
+                             # …and their mean recall today ≥ practice.mastered_at
+
+[gaps]                       # gap detector (ADR-029); kept in [practice].db
+topic_max_tokens = 60        # LLM output budget for a question's topic
+topic_max_words = 8
+candidate_similarity = 0.55  # known topics this close (cosine) are shown to the LLM… (ADR-030)
+max_candidates = 5           # …at most this many, which decides whether it is the same subject
+same_max_tokens = 30
+map_min_concepts = 6         # a map with fewer concepts than this is thin
 
 [maps]
 fragments = 10               # retrieved sections read for one map (~3 s each with the LLM, ADR-022)
@@ -116,5 +156,6 @@ settle_s = 10                # a change must stay stable this long before reinde
 [eval]
 questions = "eval/questions.jsonl"
 answers = "eval/answers.jsonl"   # answer evaluation set (key_points), `biblio ask-eval`
+feynman = "eval/feynman.jsonl"   # «Explícamelo tú» evaluation set, `biblio eval-feynman` (ADR-027)
 results_dir = "eval/results"
 ks = [1, 5, 8, 20]

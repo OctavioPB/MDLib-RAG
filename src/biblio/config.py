@@ -129,6 +129,50 @@ class PracticeConfig:
     grade_max_tokens: int
     grader_min_agreement: float
     grader_min_samples: int
+    daily_reviews: int
+    desired_retention: float
+    max_interval_days: int
+    review_minutes_per_question: float
+    fsrs_weights: tuple[float, ...]
+    mastered_at: float
+    partial_at: float
+
+
+@dataclass(frozen=True)
+class FeynmanConfig:
+    fragments: int
+    max_fragment_chars: int
+    min_fragments: int
+    max_ideas: int
+    max_claims: int
+    min_explanation_chars: int
+    max_explanation_chars: int
+    ideas_max_tokens: int
+    check_max_tokens: int
+    correct_at: float
+    partial_at: float
+    min_agreement: float
+    min_samples: int
+    eval_match_similarity: float
+
+
+@dataclass(frozen=True)
+class PlanConfig:
+    max_guides: int
+    headings_per_guide: int
+    order_max_tokens: int
+    reason_max_chars: int
+    mastered_coverage: float
+
+
+@dataclass(frozen=True)
+class GapsConfig:
+    topic_max_tokens: int
+    topic_max_words: int
+    candidate_similarity: float
+    max_candidates: int
+    same_max_tokens: int
+    map_min_concepts: int
 
 
 @dataclass(frozen=True)
@@ -163,6 +207,7 @@ class WatchConfig:
 class EvalConfig:
     questions: Path
     answers: Path
+    feynman: Path
     results_dir: Path
     ks: tuple[int, ...]
 
@@ -181,6 +226,9 @@ class Config:
     web: WebConfig
     conversations: ConversationsConfig
     practice: PracticeConfig
+    feynman: FeynmanConfig
+    plan: PlanConfig
+    gaps: GapsConfig
     maps: MapsConfig
     launcher: LauncherConfig
     watch: WatchConfig
@@ -199,6 +247,9 @@ _SECTIONS: dict[str, type[Any]] = {
     "web": WebConfig,
     "conversations": ConversationsConfig,
     "practice": PracticeConfig,
+    "feynman": FeynmanConfig,
+    "plan": PlanConfig,
+    "gaps": GapsConfig,
     "maps": MapsConfig,
     "launcher": LauncherConfig,
     "watch": WatchConfig,
@@ -326,6 +377,24 @@ def _validate(config: Config) -> None:
     p = config.practice
     if not (0 < p.min_section_tokens < p.max_section_tokens and p.max_questions > 0):
         raise ConfigError("practice: expected 0 < min_section_tokens < max_section_tokens")
+    if len(p.fsrs_weights) != 17 or not 0.5 < p.desired_retention < 1:
+        raise ConfigError("practice: fsrs_weights needs 17 values and 0.5 < desired_retention < 1")
+    if not 0 < p.partial_at < p.mastered_at <= 1 or p.daily_reviews <= 0:
+        raise ConfigError("practice: expected 0 < partial_at < mastered_at <= 1, daily_reviews > 0")
+    pl = config.plan
+    if pl.max_guides < 2 or not 0 < pl.mastered_coverage <= 1:
+        raise ConfigError("plan: expected max_guides >= 2 and 0 < mastered_coverage <= 1")
+    gp = config.gaps
+    if not 0 < gp.candidate_similarity <= 1 or gp.topic_max_words < 2 or gp.max_candidates < 1:
+        raise ConfigError(
+            "gaps: expected 0 < candidate_similarity <= 1, topic_max_words >= 2, "
+            "max_candidates >= 1"
+        )
+    fy = config.feynman
+    if not 0 < fy.partial_at < fy.correct_at <= 1 or not 0 < fy.min_fragments <= fy.fragments:
+        raise ConfigError(
+            "feynman: expected 0 < partial_at < correct_at <= 1, 0 < min_fragments <= fragments"
+        )
     if not 0 <= p.grader_min_agreement <= 1:
         raise ConfigError("practice.grader_min_agreement must be between 0 and 1")
     m = config.maps

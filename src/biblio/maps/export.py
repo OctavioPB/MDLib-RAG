@@ -24,6 +24,11 @@ _NODE_HEIGHT = 64
 
 def map_fragments(hits: Sequence[Hit], cfg: MapsConfig) -> list[Fragment]:
     """The retrieved sections a map reads, numbered from 1; navigation sections are skipped."""
+    return numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+
+
+def numbered_fragments(hits: Sequence[Hit], count: int, max_chars: int) -> list[Fragment]:
+    """Up to `count` distinct content sections, numbered from 1 (maps, ADR-022; ADR-027)."""
     fragments: list[Fragment] = []
     seen: set[tuple[str, int]] = set()
     for hit in hits:
@@ -36,12 +41,12 @@ def map_fragments(hits: Sequence[Hit], cfg: MapsConfig) -> list[Fragment]:
                 number=len(fragments) + 1,
                 doc_path=hit.doc_path,
                 heading_path=hit.heading_path,
-                text=hit.text[: cfg.max_fragment_chars],
+                text=hit.text[:max_chars],
                 start_line=hit.start_line,
                 end_line=hit.end_line,
             )
         )
-        if len(fragments) == cfg.fragments:
+        if len(fragments) == count:
             break
     return fragments
 

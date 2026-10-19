@@ -32,7 +32,16 @@ GUIDES = {
 
 
 # every file the page loads from /static/ (each must load nothing from outside)
-ASSETS = ("app.js", "app.css", "theme.js", "guias.js", "practicar.js", "mapas.js")
+ASSETS = (
+    "app.js",
+    "app.css",
+    "theme.js",
+    "guias.js",
+    "practicar.js",
+    "feynman.js",
+    "plan.js",
+    "mapas.js",
+)
 
 
 class _Reranker:

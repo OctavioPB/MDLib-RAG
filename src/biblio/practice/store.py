@@ -10,6 +10,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 SCHEMA_VERSION = 1
 
@@ -81,12 +82,28 @@ class Progress:
     grader_agreed: int
 
 
+@dataclass(frozen=True)
+class FeynmanSession:
+    id: int
+    concept: str
+    fragments: list[dict[str, Any]]
+    ideas: list[dict[str, Any]]
+    explanation: str | None
+    review: dict[str, Any] | None
+    proposed: str | None
+    result: str | None
+
+
 @dataclass
 class _Tally:
     title: str
     answered: int = 0
     score: float = 0.0
     last: str = ""
+
+
+def _dumps(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _now() -> str:
@@ -139,6 +156,34 @@ class PracticeStore:
                     model_reason TEXT,
                     user_agrees  INTEGER                -- NULL until the user reviews a model grade
                 );
+                CREATE TABLE IF NOT EXISTS feynman (    -- «Explícamelo tú» sessions (ADR-027)
+                    id          INTEGER PRIMARY KEY,
+                    created     TEXT NOT NULL,
+                    concept     TEXT NOT NULL,
+                    fragments   TEXT NOT NULL,          -- JSON: the notes compared with
+                    ideas       TEXT NOT NULL,          -- JSON: step 1
+                    explanation TEXT,
+                    review      TEXT,                   -- JSON: step 2
+                    proposed    TEXT,                   -- the model's grade
+                    result      TEXT,                   -- the grade the user kept
+                    quiz_id     INTEGER REFERENCES quizzes(id)
+                );
+                CREATE TABLE IF NOT EXISTS feynman_votes (  -- «¿Es justo?» per reported point
+                    session_id INTEGER NOT NULL REFERENCES feynman(id),
+                    point      TEXT NOT NULL,           -- "idea:<i>" or "claim:<i>"
+                    fair       INTEGER NOT NULL,
+                    voted      TEXT NOT NULL,
+                    PRIMARY KEY (session_id, point)
+                );
+                CREATE TABLE IF NOT EXISTS study_plans (  -- study plan per folder (ADR-028)
+                    folder  TEXT PRIMARY KEY,
+                    created TEXT NOT NULL,
+                    items   TEXT NOT NULL    -- JSON: [{doc_path, reason, module, placed}]
+                );
+                CREATE TABLE IF NOT EXISTS guide_reads (  -- «Marcar como leída»
+                    doc_path TEXT PRIMARY KEY,
+                    marked   TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS questions_section ON questions(doc_path, heading_path);
                 CREATE INDEX IF NOT EXISTS attempts_question ON attempts(question_id);
                 """
@@ -149,6 +194,10 @@ class PracticeStore:
 
     def close(self) -> None:
         self._conn.close()
+
+    def shared(self) -> tuple[sqlite3.Connection, threading.Lock]:
+        """The connection and its lock, for stores kept in the same file (gaps, ADR-029)."""
+        return self._conn, self._lock
 
     # --- writing ------------------------------------------------------------------------------
 
@@ -268,6 +317,161 @@ class PracticeStore:
                 "JOIN questions q ON q.id = a.question_id ORDER BY a.id"
             ).fetchall()
         return {(path, heading): (result, when) for path, heading, result, when in rows}
+
+    def section_histories(self) -> dict[tuple[str, str], list[tuple[datetime, str]]]:
+        """{(doc_path, heading_path JSON): [(when, result), …] oldest first}, for FSRS (ADR-025)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT q.doc_path, q.heading_path, a.answered, a.result FROM attempts a "
+                "JOIN questions q ON q.id = a.question_id ORDER BY a.id"
+            ).fetchall()
+        out: dict[tuple[str, str], list[tuple[datetime, str]]] = {}
+        for path, heading, answered, result in rows:
+            out.setdefault((path, heading), []).append((datetime.fromisoformat(answered), result))
+        return out
+
+    def reviews_done_on(self, day: str) -> int:
+        """Answers given on `day` (YYYY-MM-DD, local) in spaced-repetition reviews."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT count(*) FROM attempts a JOIN questions q ON q.id = a.question_id "
+                "JOIN quizzes z ON z.id = q.quiz_id "
+                "WHERE z.scope_kind = 'srs' AND substr(a.answered, 1, 10) = ?",
+                (day,),
+            ).fetchone()
+        return int(row[0])
+
+    def latest_question(self, key: tuple[str, str]) -> StoredQuestion | None:
+        """The most recent question of a section not marked faulty (review without the LLM)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id FROM questions WHERE doc_path = ? AND heading_path = ? AND flagged = 0 "
+                "ORDER BY id DESC LIMIT 1",
+                key,
+            ).fetchone()
+        return self.question(int(row[0])) if row else None
+
+    # --- «Explícamelo tú» (ADR-027) -------------------------------------------------------------
+
+    def new_feynman(
+        self, concept: str, fragments: list[dict[str, Any]], ideas: list[dict[str, Any]]
+    ) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO feynman (created, concept, fragments, ideas) VALUES (?, ?, ?, ?)",
+                (_now(), concept, _dumps(fragments), _dumps(ideas)),
+            )
+            return int(cur.lastrowid or 0)
+
+    def feynman(self, session_id: int) -> FeynmanSession | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, concept, fragments, ideas, explanation, review, proposed, result "
+                "FROM feynman WHERE id = ?",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        sid, concept, fragments, ideas, explanation, review, proposed, result = row
+        return FeynmanSession(
+            sid,
+            concept,
+            json.loads(fragments),
+            json.loads(ideas),
+            explanation,
+            json.loads(review) if review else None,
+            proposed,
+            result,
+        )
+
+    def set_feynman_review(
+        self, session_id: int, explanation: str, review: dict[str, Any], proposed: str
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE feynman SET explanation = ?, review = ?, proposed = ? WHERE id = ?",
+                (explanation, _dumps(review), proposed, session_id),
+            )
+            # votes were on the points of the previous check
+            self._conn.execute("DELETE FROM feynman_votes WHERE session_id = ?", (session_id,))
+
+    def set_feynman_result(self, session_id: int, result: str, quiz_id: int | None) -> None:
+        if result not in RESULTS:
+            raise ValueError(f"unknown result {result!r}")
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE feynman SET result = ?, quiz_id = ? WHERE id = ?",
+                (result, quiz_id, session_id),
+            )
+
+    def vote_feynman(self, session_id: int, point: str, fair: bool) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO feynman_votes VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (session_id, point) DO UPDATE SET fair = excluded.fair, "
+                "voted = excluded.voted",
+                (session_id, point, int(fair), _now()),
+            )
+
+    def feynman_agreement(self) -> tuple[int, int]:
+        """(votes, of them «fair»): how often the user agrees with the reported points."""
+        with self._lock:
+            votes, fair = self._conn.execute(
+                "SELECT count(*), coalesce(sum(fair), 0) FROM feynman_votes"
+            ).fetchone()
+        return int(votes), int(fair)
+
+    # --- study plans (ADR-028) -----------------------------------------------------------------
+
+    def save_plan(self, folder: str, items: list[dict[str, Any]]) -> str:
+        created = _now()
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO study_plans VALUES (?, ?, ?) ON CONFLICT (folder) DO UPDATE SET "
+                "created = excluded.created, items = excluded.items",
+                (folder, created, _dumps(items)),
+            )
+        return created
+
+    def plan(self, folder: str) -> tuple[str, list[dict[str, Any]]] | None:
+        """(created, items) of the folder's plan."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT created, items FROM study_plans WHERE folder = ?", (folder,)
+            ).fetchone()
+        return (row[0], json.loads(row[1])) if row else None
+
+    def plans(self) -> list[str]:
+        """Folders with a plan, the most recent first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT folder FROM study_plans ORDER BY created DESC"
+            ).fetchall()
+        return [r[0] for r in rows]
+
+    def set_plan_items(self, folder: str, items: list[dict[str, Any]]) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE study_plans SET items = ? WHERE folder = ?", (_dumps(items), folder)
+            )
+
+    def delete_plan(self, folder: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM study_plans WHERE folder = ?", (folder,))
+        return cur.rowcount > 0
+
+    def set_read(self, doc_path: str, read: bool) -> None:
+        with self._lock, self._conn:
+            if read:
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO guide_reads VALUES (?, ?)", (doc_path, _now())
+                )
+            else:
+                self._conn.execute("DELETE FROM guide_reads WHERE doc_path = ?", (doc_path,))
+
+    def reads(self) -> set[str]:
+        with self._lock:
+            return {r[0] for r in self._conn.execute("SELECT doc_path FROM guide_reads")}
 
     def flagged_sections(self) -> set[tuple[str, str]]:
         """Sections with a question marked faulty: they get no new questions (ADR-020)."""

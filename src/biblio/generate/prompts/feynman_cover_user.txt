@@ -1,0 +1,14 @@
+Concepto: {concept}
+
+Ideas clave de las notas:
+{ideas}
+
+Explicación del usuario:
+---
+{explanation}
+---
+
+Da un veredicto para cada idea, en el mismo orden y con su número.
+
+Formato:
+{{"ideas": [{{"numero": 1, "veredicto": "cubierta", "frase": "trozo literal de la explicación"}}]}}

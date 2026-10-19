@@ -1,0 +1,5 @@
+Decides si una pregunta nueva trata del mismo tema que alguno de los temas pendientes de un usuario.
+
+Reglas:
+1. «El mismo tema» quiere decir que una sola guía de estudio respondería a las dos: la misma pregunta con otras palabras, o una parte de ese tema. Temas vecinos no cuentan: «salsa bechamel» y «salsa holandesa» son temas distintos.
+2. Responde solo con un objeto JSON válido, sin texto antes ni después: {"mismo": n}, con el número del tema, o 0 si no es ninguno.

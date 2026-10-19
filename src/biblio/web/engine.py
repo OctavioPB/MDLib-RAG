@@ -8,6 +8,7 @@ the GPU with the LLM. One request at a time uses the models (single user, `lock`
 from __future__ import annotations
 
 import json
+import math
 import queue
 import random
 import sqlite3
@@ -15,7 +16,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import quote
@@ -47,10 +48,17 @@ from biblio.index.embedder import (
 from biblio.index.indexer import IndexLockedError, IndexMismatchError, IndexStats, index_library
 from biblio.index.watch import choose_device
 from biblio.ingest.tokens import TokenCounter, load_llm_token_counter, load_token_counter
-from biblio.maps.build import CachedEmbed, ConceptMap, generate_map
-from biblio.maps.export import map_fragments, to_canvas, to_markdown
+from biblio.maps.build import CachedEmbed, ConceptMap, generate_map, topic_in_text
+from biblio.maps.export import map_fragments, numbered_fragments, to_canvas, to_markdown
 from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
 from biblio.offline import loopback_port_open
+from biblio.practice.feynman import (
+    Idea,
+    check_claims,
+    check_coverage,
+    extract_ideas,
+    proposed_grade,
+)
 from biblio.practice.quiz import (
     assign_kinds,
     candidate_sections,
@@ -58,7 +66,14 @@ from biblio.practice.quiz import (
     generate_question,
     grade_answer,
 )
-from biblio.practice.store import PracticeStore, StoredQuestion
+from biblio.practice.srs import FSRS, SectionSchedule, due_today, schedule
+from biblio.practice.store import (
+    FeynmanSession,
+    PracticeStore,
+    QuestionContent,
+    Section,
+    StoredQuestion,
+)
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
@@ -71,6 +86,15 @@ from biblio.retrieve.rerank import (
 )
 from biblio.retrieve.store import library_folders
 from biblio.retrieve.types import Hit, Retriever
+from biblio.study.gaps import GapStore, extract_topic, same_topic
+from biblio.study.plan import (
+    PlanItem,
+    PlanProgress,
+    folder_guides,
+    guide_states,
+    next_guide,
+    plan_folder,
+)
 from biblio.web.drafts import draft_path, outline_path
 
 _EXCERPT_CHARS = 320
@@ -185,6 +209,7 @@ class Engine:
         self._llm_lock = threading.Lock()  # quiz generation and answer grading take turns
         self._practice: PracticeStore | None = None
         self._map_history: MapStore | None = None
+        self._gap_store: GapStore | None = None
         self._conversations: ConversationStore | None = None
 
     # --- retrieval --------------------------------------------------------------------------------
@@ -407,43 +432,144 @@ class Engine:
             rng = random.Random()
             store = self.practice
             latest = store.latest_results()
-            review = [k for k, (result, _) in latest.items() if result != "correct"]
-            if kind != "review":
-                review = []
-            with self.lock:
-                retriever = self._base() if kind == "topic" else None
-                candidates = candidate_sections(
-                    self._conn, self.config, kind, value, retriever, review
+            flagged = store.flagged_sections()
+            if kind in ("srs", "sections"):
+                # explicit sections, in priority order: today's reviews (ADR-025) or a map node's
+                if kind == "srs":
+                    due, _, remaining = self._today_queue()
+                    keys = [s.key for s in due][:remaining]
+                else:
+                    keys = parse_section_keys(value)
+                with self.lock:
+                    found = candidate_sections(self._conn, self.config, "review", "", review=keys)
+                first: dict[tuple[str, str], Section] = {}
+                for c in found:
+                    first.setdefault(c.key, c.section)
+                sections = [first[k] for k in keys if k in first and k not in flagged][:count]
+            else:
+                review = [k for k, (result, _) in latest.items() if result != "correct"]
+                if kind != "review":
+                    review = []
+                with self.lock:
+                    retriever = self._base() if kind == "topic" else None
+                    candidates = candidate_sections(
+                        self._conn, self.config, kind, value, retriever, review
+                    )
+                sections = choose_sections(
+                    candidates, latest, flagged, count, rng, keep_order=kind == "topic"
                 )
-            sections = choose_sections(
-                candidates, latest, store.flagged_sections(), count, rng, keep_order=kind == "topic"
-            )
             if not sections:
+                if kind == "srs":
+                    raise ValueError("No tienes repasos pendientes hoy.")
                 raise ValueError("No encontré secciones con contenido para practicar ahí.")
             plan = list(zip(sections, assign_kinds(kinds, len(sections), rng), strict=True))
+            # a review without the LLM asks the section's last stored question again (ADR-025)
+            reuse = kind == "srs" and not self.llm_running()
             quiz_id = store.new_quiz(kind, value, count)
-            yield "quiz", {"quiz_id": quiz_id, "planned": len(plan)}
-            with self.lock:
-                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
-            llm = self._llm_factory(self.config)
+            yield "quiz", {"quiz_id": quiz_id, "planned": len(plan), "reused": reuse}
+            llm = None
+            if not reuse:
+                with self.lock:
+                    self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+                llm = self._llm_factory(self.config)
             generated = 0
             try:
                 for index, (section, question_kind) in enumerate(plan):
-                    with self._llm_lock:
-                        content = generate_question(llm, self.config, section, question_kind, rng)
-                    if content is None:
+                    if llm is None:
+                        old = store.latest_question(_section_key(section))
+                        qid = (
+                            store.add_question(quiz_id, old.kind, section, old.content)
+                            if old
+                            else None
+                        )
+                    else:
+                        with self._llm_lock:
+                            content = generate_question(
+                                llm, self.config, section, question_kind, rng
+                            )
+                        qid = (
+                            store.add_question(quiz_id, question_kind, section, content)
+                            if content
+                            else None
+                        )
+                    if qid is None:
                         yield "skipped", {"index": index, "citation": section.citation}
                         continue
-                    qid = store.add_question(quiz_id, question_kind, section, content)
                     stored = store.question(qid)
                     assert stored is not None
                     generated += 1
                     yield "question", {"index": index, **question_json(stored)}
             finally:
-                llm.close()
+                if llm is not None:
+                    llm.close()
             yield "done", {"generated": generated, "skipped": len(plan) - generated}
         finally:
             self._generating.release()
+
+    # --- spaced repetition (ADR-025) and mastery (ADR-026) ------------------------------------
+
+    def _fsrs(self) -> FSRS:
+        p = self.config.practice
+        return FSRS(p.fsrs_weights, p.desired_retention, p.max_interval_days)
+
+    def _schedules(self) -> dict[tuple[str, str], SectionSchedule]:
+        now = datetime.now().astimezone()
+        return schedule(self.practice.section_histories(), self._fsrs(), now)
+
+    def _today_queue(self) -> tuple[list[SectionSchedule], int, int]:
+        """(sections due today, most at risk first; reviews done today; reviews left today)."""
+        now = datetime.now().astimezone()
+        flagged = self.practice.flagged_sections()
+        due = [s for s in due_today(self._schedules(), now) if s.key not in flagged]
+        done = self.practice.reviews_done_on(now.date().isoformat())
+        return due, done, max(self.config.practice.daily_reviews - done, 0)
+
+    def practice_today(self) -> dict[str, Any]:
+        due, done, remaining = self._today_queue()
+        today = min(len(due), remaining)
+        minutes = math.ceil(today * self.config.practice.review_minutes_per_question)
+        return {
+            "due": len(due),
+            "today": today,
+            "done": done,
+            "limit": self.config.practice.daily_reviews,
+            "minutes": minutes,
+        }
+
+    def map_mastery(self, map_id: int) -> dict[str, Any] | None:
+        """Per node: how well its practised source sections are remembered today (ADR-026)."""
+        stored = self.map_history.get(map_id)
+        if stored is None:
+            return None
+        p = self.config.practice
+        schedules = self._schedules()
+        keys = {
+            f["number"]: (
+                f["doc_path"],
+                json.dumps([f["guide"], *f["sections"]], ensure_ascii=False),
+            )
+            for f in stored.fragments
+        }
+        nodes = {}
+        for n in stored.map["nodes"]:
+            sections = [keys[s] for s in n["sources"] if s in keys]
+            recalls = [schedules[k].recall_now for k in sections if k in schedules]
+            recall = sum(recalls) / len(recalls) if recalls else None
+            if recall is None:
+                state = "new"
+            elif recall >= p.mastered_at:
+                state = "mastered"
+            elif recall >= p.partial_at:
+                state = "partial"
+            else:
+                state = "weak"
+            nodes[n["id"]] = {
+                "state": state,
+                "recall": round(recall, 2) if recall is not None else None,
+                "practiced": len(recalls),
+                "sections": [list(k) for k in sections],
+            }
+        return {"nodes": nodes, "mastered_at": p.mastered_at, "partial_at": p.partial_at}
 
     def check_choice(self, question_id: int, choice: int | bool) -> dict[str, Any] | None:
         """Grade a multiple-choice index or a true/false answer by code and record it."""
@@ -498,6 +624,15 @@ class Engine:
             **self.feedback_json(q),
         }
 
+    def _feynman_agreement(self) -> dict[str, Any]:
+        votes, fair = self.practice.feynman_agreement()
+        cfg = self.config.feynman
+        return {
+            "votes": votes,
+            "fair": fair,
+            "unreliable": votes >= cfg.min_samples and fair / votes < cfg.min_agreement,
+        }
+
     def practice_progress(self) -> dict[str, Any]:
         p = self.practice.progress()
         cfg = self.config.practice
@@ -517,6 +652,7 @@ class Engine:
             "to_review": p.to_review,
             "questions": p.questions,
             "flagged": p.flagged,
+            "feynman": self._feynman_agreement(),
             "grader": {
                 "reviewed": p.grader_reviewed,
                 "agreed": p.grader_agreed,
@@ -525,6 +661,254 @@ class Engine:
                 and agreement < cfg.grader_min_agreement,
             },
         }
+
+    # --- «Explícamelo tú» (ADR-027) -------------------------------------------------------------
+
+    def feynman_start(self, concept: str) -> Generator[Event, None, None]:
+        """Step 1, while the user writes: find the notes and take their key ideas. One event,
+        ("ready", {session_id, …}); the ideas stay on the server until the explanation arrives.
+        Raises ValueError (before any event) when the notes say too little."""
+        self._claim_generation()
+        try:
+            cfg = self.config.feynman
+            with self.lock:
+                hits = self._base().search(concept, cfg.fragments * 2)
+            fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+            if len(fragments) < cfg.min_fragments:
+                raise ValueError(f"Tus notas no tienen suficiente sobre «{concept}».")
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            try:
+                with self._llm_lock:
+                    ideas = extract_ideas(llm, cfg, concept, fragments)
+            finally:
+                llm.close()
+            if not ideas:
+                raise ValueError(
+                    f"No encontré en tus notas ideas clave sobre «{concept}» que pueda comprobar."
+                )
+            session_id = self.practice.new_feynman(
+                concept,
+                [_fragment_record(f) for f in fragments],
+                [{"text": i.text, "fragment": i.fragment, "quote": i.quote} for i in ideas],
+            )
+            yield "ready", {"session_id": session_id, "ideas": len(ideas), "notes": len(fragments)}
+        finally:
+            self._generating.release()
+
+    def feynman_check(
+        self, session: FeynmanSession, explanation: str
+    ) -> Generator[Event, None, None]:
+        """Step 2: ("coverage", {ideas}), ("claims", {claims}), then ("done", {proposed, …})."""
+        self._claim_generation()
+        try:
+            cfg = self.config.feynman
+            fragments = [_fragment_from_record(r) for r in session.fragments]
+            ideas = [Idea(i["text"], i["fragment"], i["quote"]) for i in session.ideas]
+            with self.lock:
+                self._release_reranker()
+            llm = self._llm_factory(self.config)
+            try:
+                with self._llm_lock:
+                    coverage = check_coverage(llm, cfg, session.concept, ideas, explanation)
+                if coverage is None:
+                    raise ValueError("No pude comprobar tu explicación; inténtalo otra vez.")
+                ideas_json = [
+                    {
+                        "text": i.text,
+                        "fragment": i.fragment,
+                        "quote": i.quote,
+                        "verdict": c.verdict,
+                        "phrase": c.phrase,
+                    }
+                    for i, c in zip(ideas, coverage, strict=True)
+                ]
+                yield "coverage", {"ideas": ideas_json}
+                with self._llm_lock:
+                    claims = check_claims(llm, cfg, session.concept, fragments, explanation)
+            finally:
+                llm.close()
+            claims_json = [
+                {"text": c.text, "verdict": c.verdict, "fragment": c.fragment, "quote": c.quote}
+                for c in claims or []
+            ]
+            yield "claims", {"claims": claims_json, "failed": claims is None}
+            score, proposed = proposed_grade(coverage, claims or [], cfg)
+            review = {"ideas": ideas_json, "claims": claims_json, "score": round(score, 2)}
+            self.practice.set_feynman_review(session.id, explanation, review, proposed)
+            yield (
+                "done",
+                {
+                    "score": round(score, 2),
+                    "proposed": proposed,
+                    "sources": [fragment_json(f, self) for f in fragments],
+                },
+            )
+        finally:
+            self._generating.release()
+
+    def feynman_confirm(self, session_id: int, result: str) -> dict[str, Any] | None:
+        """The grade the user kept, recorded as practice on each section that gave an idea, so it
+        moves the review schedule (ADR-025) and the mastery map (ADR-026). None if the explanation
+        was not checked yet or the grade was already recorded."""
+        session = self.practice.feynman(session_id)
+        if session is None or session.review is None or session.result is not None:
+            return None
+        by_number = {r["number"]: r for r in session.fragments}
+        ideas_by_fragment: dict[int, list[str]] = {}
+        for idea in session.ideas:
+            ideas_by_fragment.setdefault(idea["fragment"], []).append(idea["text"])
+        store = self.practice
+        quiz_id = store.new_quiz("feynman", session.concept, len(ideas_by_fragment))
+        for number, texts in ideas_by_fragment.items():
+            r = by_number[number]
+            section = Section(
+                r["doc_path"], tuple(r["heading_path"]), r["start_line"], r["end_line"], r["text"]
+            )
+            content = QuestionContent(
+                f"Explica con tus palabras: {session.concept}",
+                "Una buena explicación recoge las ideas clave de esta sección.",
+                reference=" ".join(f"• {text}" for text in texts),
+            )
+            qid = store.add_question(quiz_id, "open_self", section, content)
+            store.record_attempt(qid, session.explanation or "", result, "self")
+        store.set_feynman_result(session_id, result, quiz_id)
+        return {"recorded": len(ideas_by_fragment)}
+
+    def feynman_vote(self, session_id: int, point: str, fair: bool) -> bool:
+        """«¿Es justo?» on one reported point: "idea:<i>" or "claim:<i>"."""
+        session = self.practice.feynman(session_id)
+        if session is None or session.review is None:
+            return False
+        kind, _, index = point.partition(":")
+        items = session.review.get({"idea": "ideas", "claim": "claims"}.get(kind, ""), [])
+        if not index.isdigit() or not 0 <= int(index) < len(items):
+            return False
+        self.practice.vote_feynman(session_id, point, fair)
+        return True
+
+    # --- study plan per folder (ADR-028) ------------------------------------------------------
+
+    def generate_plan(self, folder: str) -> Generator[Event, None, None]:
+        """Events: ("progress", {done, total, label}) after each LLM ordering, then ("plan", view).
+        Raises ValueError before any event when the folder has no guides."""
+        self._claim_generation()
+        try:
+            cfg = self.config.plan
+            with self.lock:
+                guides = folder_guides(self._conn, folder, cfg.headings_per_guide)
+            if not guides:
+                raise ValueError("Esa carpeta no tiene guías indexadas.")
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            items: list[PlanItem] = []
+            try:
+                for step in plan_folder(llm, cfg, folder, guides):
+                    if isinstance(step, PlanProgress):
+                        yield (
+                            "progress",
+                            {"done": step.done, "total": step.total, "label": step.label},
+                        )
+                    else:
+                        items = step
+            finally:
+                llm.close()
+            self.practice.save_plan(
+                folder,
+                [
+                    {
+                        "doc_path": i.doc_path,
+                        "reason": i.reason,
+                        "module": i.module,
+                        "placed": i.placed,
+                    }
+                    for i in items
+                ],
+            )
+            view = self.plan_view(folder)
+            assert view is not None
+            yield "plan", view
+        finally:
+            self._generating.release()
+
+    def plan_view(self, folder: str) -> dict[str, Any] | None:
+        """The stored plan with each guide's state today; guides added to the folder since are
+        appended as new, deleted ones dropped."""
+        stored = self.practice.plan(folder)
+        if stored is None:
+            return None
+        created, items = stored
+        with self.lock:
+            titles = {g.doc_path: g.title for g in folder_guides(self._conn, folder, 0)}
+        kept = [i for i in items if i["doc_path"] in titles]
+        planned = {i["doc_path"] for i in kept}
+        new = sorted((p for p in titles if p not in planned), key=lambda p: titles[p])
+        rows = [{**i, "new": False} for i in kept] + [
+            {"doc_path": p, "reason": "", "module": "", "placed": False, "new": True} for p in new
+        ]
+        order = [r["doc_path"] for r in rows]
+        recall = {k: s.recall_now for k, s in self._schedules().items()}
+        with self.lock:
+            states = guide_states(self._conn, self.config, order, self.practice.reads(), recall)
+        counts = {s: 0 for s in ("unread", "read", "practiced", "mastered")}
+        for st in states.values():
+            counts[st.state] += 1
+        nxt = next_guide(order, states)
+        return {
+            "folder": folder,
+            "created": created,
+            "items": [
+                {
+                    **r,
+                    "title": titles[r["doc_path"]],
+                    "state": states[r["doc_path"]].state,
+                    "sections": states[r["doc_path"]].sections,
+                    "practiced": states[r["doc_path"]].practiced,
+                    "recall": states[r["doc_path"]].recall,
+                    "open_url": self.open_url(r["doc_path"]),
+                }
+                for r in rows
+            ],
+            "counts": counts,
+            "next": {
+                "doc_path": nxt[0],
+                "title": titles[nxt[0]],
+                "why": nxt[1],
+                "open_url": self.open_url(nxt[0]),
+            }
+            if nxt
+            else None,
+        }
+
+    def plan_list(self) -> list[dict[str, Any]]:
+        out = []
+        for folder in self.practice.plans():
+            view = self.plan_view(folder)
+            if view is not None:
+                out.append(
+                    {
+                        "folder": folder,
+                        "created": view["created"],
+                        "total": len(view["items"]),
+                        "counts": view["counts"],
+                        "next": view["next"],
+                    }
+                )
+        return out
+
+    def set_plan_order(self, folder: str, order: Sequence[str]) -> bool:
+        """The user's order: must hold exactly the guides the plan shows."""
+        view = self.plan_view(folder)
+        if view is None:
+            return False
+        rows = {i["doc_path"]: i for i in view["items"]}
+        if len(order) != len(rows) or set(order) != set(rows):
+            raise ValueError("El orden debe incluir cada guía del plan una sola vez.")
+        keys = ("doc_path", "reason", "module", "placed")
+        self.practice.set_plan_items(folder, [{k: rows[p][k] for k in keys} for p in order])
+        return True
 
     def feedback_json(self, q: StoredQuestion) -> dict[str, Any]:
         """What the page shows after an answer: the key, the explanation and the source."""
@@ -627,6 +1011,7 @@ class Engine:
         map_reduce = "on" if strategy == "map-reduce" else "off"  # opt-in only (ADR-017)
         meta: dict[str, Any] = {}
         parts: list[str] = []
+        abstained = False
         try:
             for name, data in self.ask(question, scope=scope, map_reduce=map_reduce):
                 if name == "meta":
@@ -646,10 +1031,70 @@ class Engine:
                     cid, _ = self.conversations.add_turn(conversation_id, turn)
                     data = {**data, "conversation_id": cid}
                 yield name, data
+                abstained = abstained or (name == "done" and bool(data.get("abstained")))
         except Exception as exc:  # stored, then reported to the page with the conversation id
             turn = NewTurn(question, "explain", scope, strategy, "error", error=str(exc))
             cid, _ = self.conversations.add_turn(conversation_id, turn)
             yield "error", {"error": str(exc), "conversation_id": cid}
+            return
+        if abstained:  # after `ask` has finished and released the lock (ADR-029)
+            gap = self._gap_from_question(question)
+            if gap is not None:
+                yield "gap", gap
+
+    # --- gap detector (ADR-029) ----------------------------------------------------------------
+
+    @property
+    def gaps(self) -> GapStore:
+        if self._gap_store is None:
+            conn, lock = self.practice.shared()
+            self._gap_store = GapStore(conn, lock)
+        return self._gap_store
+
+    def _record_gap(self, topic: str, source: str, text: str, detail: str) -> dict[str, Any] | None:
+        """Record one occurrence; what the page shows («Apuntado… · Deshacer»), or None when it
+        could not be recorded or the topic was dismissed before."""
+        try:
+            vector = self._embed_names([topic])[0]
+            into = self._same_gap(topic, text, vector)
+            rec = self.gaps.record(topic, vector, source, text, detail, into)
+        except Exception:  # a gap is a convenience: never break the answer or the map for it
+            return None
+        if rec.status == "dismissed":  # the user said no to this subject before
+            return None
+        return {
+            "gap_id": rec.gap_id,
+            "event_id": rec.event_id,
+            "topic": rec.topic,
+            "count": rec.count,
+            "merged": rec.merged,
+        }
+
+    def _same_gap(self, topic: str, text: str, vector: np.ndarray) -> int | None:
+        """The known topic on the same subject: embeddings shortlist, the LLM decides (ADR-030)."""
+        cfg = self.config.gaps
+        found = self.gaps.candidates(vector, cfg.candidate_similarity, cfg.max_candidates)
+        if not found:
+            return None
+        llm = self._llm_factory(self.config)
+        try:
+            with self._llm_lock:
+                chosen = same_topic(llm, cfg, text, topic, [c.topic for c in found])
+        finally:
+            llm.close()
+        return found[chosen].gap_id if chosen is not None else None
+
+    def _gap_from_question(self, question: str) -> dict[str, Any] | None:
+        try:
+            llm = self._llm_factory(self.config)
+            try:
+                with self._llm_lock:
+                    topic = extract_topic(llm, self.config.gaps, question)
+            finally:
+                llm.close()
+        except Exception:
+            return None
+        return self._record_gap(topic, "ask", question, "")
 
     # --- concept maps (Mapas page, ADR-022) ---------------------------------------------------
 
@@ -667,7 +1112,11 @@ class Engine:
                 hits = self._base(scope).search(topic, cfg.fragments * 2)
             fragments = map_fragments(hits, cfg)
             if not fragments:
-                raise ValueError("No encontré secciones sobre ese tema en tus notas.")
+                self._record_gap(topic, "map", topic, "sin secciones")  # ADR-029
+                raise ValueError(
+                    "No encontré secciones sobre ese tema en tus notas. "
+                    "Lo apunté como tema pendiente en Guías."
+                )
             sources = [fragment_json(f, self) for f in fragments]
             yield "start", {"topic": topic, "fragments": sources}
             with self.lock:
@@ -692,6 +1141,17 @@ class Engine:
             map_id = self.map_history.add(topic, map_json(progress.map), sources)  # ADR-024
             done = {"map_id": map_id, "skipped": progress.skipped, "omitted": progress.map.omitted}
             yield "done", done
+            concepts = len(progress.map.nodes) - 1  # the topic is a node too
+            absent = not any(topic_in_text(topic, f.text) for f in fragments)
+            if absent or concepts < self.config.gaps.map_min_concepts:  # thin (ADR-029, 030)
+                detail = (
+                    "el tema no aparece en tus notas"
+                    if absent
+                    else f"{concepts} {'concepto' if concepts == 1 else 'conceptos'}"
+                )
+                gap = self._record_gap(topic, "map", topic, detail)
+                if gap is not None:
+                    yield "gap", {**gap, "absent": absent}
         finally:
             self._generating.release()
 
@@ -840,3 +1300,43 @@ def map_json(cmap: ConceptMap) -> dict[str, Any]:
         ],
         "omitted": cmap.omitted,
     }
+
+
+def _section_key(section: Section) -> tuple[str, str]:
+    """How the practice history names a section (ADR-020)."""
+    return section.doc_path, json.dumps(list(section.heading_path), ensure_ascii=False)
+
+
+def parse_section_keys(value: str) -> list[tuple[str, str]]:
+    """A quiz on given sections (a map node's, ADR-026): JSON [[doc_path, heading_path JSON], …]."""
+    try:
+        raw = json.loads(value)
+    except ValueError as exc:
+        raise ValueError("Las secciones no tienen un formato válido.") from exc
+    if not isinstance(raw, list) or not raw or len(raw) > 50:
+        raise ValueError("Las secciones no tienen un formato válido.")
+    keys = []
+    for item in raw:
+        if not (
+            isinstance(item, list) and len(item) == 2 and all(isinstance(x, str) for x in item)
+        ):
+            raise ValueError("Las secciones no tienen un formato válido.")
+        keys.append((item[0], item[1]))
+    return keys
+
+
+def _fragment_record(f: Fragment) -> dict[str, Any]:
+    """A fragment as kept with a «Explícamelo tú» session (ADR-027)."""
+    return {
+        "number": f.number,
+        "doc_path": f.doc_path,
+        "heading_path": list(f.heading_path),
+        "start_line": f.start_line,
+        "end_line": f.end_line,
+        "text": f.text,
+    }
+
+
+def _fragment_from_record(r: dict[str, Any]) -> Fragment:
+    heading = tuple(r["heading_path"])
+    return Fragment(r["number"], r["doc_path"], heading, r["text"], r["start_line"], r["end_line"])

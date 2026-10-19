@@ -1,0 +1,9 @@
+Concepto: {concept}
+
+Fragmentos de las notas:
+{fragments}
+
+Extrae hasta {max_ideas} ideas clave sobre «{concept}» que debería incluir una buena explicación.
+
+Formato:
+{{"ideas": [{{"idea": "...", "fragmento": 1, "cita": "texto copiado del fragmento"}}]}}

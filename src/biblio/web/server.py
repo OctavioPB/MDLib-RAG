@@ -25,6 +25,7 @@ from biblio.conversations import to_markdown as conversation_markdown
 from biblio.generate.draft import OutlineSection, slugify
 from biblio.practice.quiz import SCOPE_KINDS
 from biblio.practice.store import KINDS, RESULTS
+from biblio.study.gaps import STATUSES as GAP_STATUSES
 from biblio.web.drafts import list_drafts, read_draft
 from biblio.web.engine import BusyError, Engine, Event, hit_json, outline_json
 
@@ -37,6 +38,8 @@ _STATIC_FILES = {
     "/static/practicar.js": ("practicar.js", "text/javascript; charset=utf-8"),
     "/static/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/static/mapas.js": ("mapas.js", "text/javascript; charset=utf-8"),
+    "/static/feynman.js": ("feynman.js", "text/javascript; charset=utf-8"),
+    "/static/plan.js": ("plan.js", "text/javascript; charset=utf-8"),
 }
 _MAX_BODY = 64 * 1024
 _MAX_QUERY = 2000
@@ -180,7 +183,10 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if self.path == "/api/status":
                 self._send_json(engine.status())
                 return
-            if self._conversations_get() or self._maps_get():
+            if self._conversations_get() or self._maps_get() or self._plans_get():
+                return
+            if self.path == "/api/gaps":
+                self._send_json({"gaps": engine.gaps.gaps()})
                 return
             if self.path == "/api/folders":
                 folders = [{"path": p, "documents": n} for p, n in engine.folders()]
@@ -190,6 +196,9 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if self.path == "/api/practice/guides":
                 guides = [{"path": p, "title": t} for p, t in engine.practice_guides()]
                 self._send_json({"guides": guides})
+                return
+            if self.path == "/api/practice/today":
+                self._send_json(engine.practice_today())
                 return
             if self.path == "/api/practice/progress":
                 self._send_json(engine.practice_progress())
@@ -235,6 +244,16 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 "/api/practice/grade": self._practice_grade,
                 "/api/practice/review": self._practice_review,
                 "/api/practice/flag": self._practice_flag,
+                "/api/feynman/start": self._feynman_start,
+                "/api/feynman/check": self._feynman_check,
+                "/api/feynman/confirm": self._feynman_confirm,
+                "/api/feynman/vote": self._feynman_vote,
+                "/api/plans/generate": self._plan_generate,
+                "/api/plans/order": self._plan_order,
+                "/api/plans/read": self._plan_read,
+                "/api/plans/delete": self._plan_delete,
+                "/api/gaps/undo": self._gap_undo,
+                "/api/gaps/status": self._gap_status,
                 "/api/maps": self._map,
                 "/api/maps/save": self._map_save,
                 "/api/maps/delete": self._map_delete,
@@ -434,6 +453,10 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if not parts.path.startswith("/api/maps/history/"):
                 return False
             raw = parts.path.removeprefix("/api/maps/history/")
+            if raw.endswith("/mastery") and raw.removesuffix("/mastery").isdigit():
+                mastery = engine.map_mastery(int(raw.removesuffix("/mastery")))  # ADR-026
+                self._send_json(mastery) if mastery is not None else self._not_found()
+                return True
             stored = engine.map_history.get(int(raw)) if raw.isdigit() else None
             if stored is None:
                 self._not_found()
@@ -468,12 +491,13 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             value = scope.get("value", "") if isinstance(scope, dict) else None
             count = payload.get("count")
             kinds = payload.get("kinds")
-            limit = engine.config.practice.max_questions
+            p = engine.config.practice  # a review may hold the whole day's queue (ADR-025)
+            limit = max(p.max_questions, p.daily_reviews) if kind == "srs" else p.max_questions
             valid = (
                 kind in SCOPE_KINDS
                 and isinstance(value, str)
                 and len(value) <= _MAX_QUERY
-                and (kind == "review" or value.strip())
+                and (kind in ("review", "srs") or value.strip())
                 and isinstance(count, int)
                 and not isinstance(count, bool)
                 and 1 <= count <= limit
@@ -494,7 +518,11 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if kind == "folder" and value.strip("/") not in dict(engine.folders()):
                 self._send_json({"error": "unknown folder"}, HTTPStatus.BAD_REQUEST)
                 return
-            self._stream(lambda: engine.start_quiz(str(kind), value.strip(), count, kinds))
+            # a review can reuse stored questions when the LLM is off (ADR-025)
+            self._stream(
+                lambda: engine.start_quiz(str(kind), value.strip(), count, kinds),
+                needs_llm=kind != "srs",
+            )
 
         def _practice_check(self, payload: dict[str, Any]) -> None:
             qid = self._id_field(payload, "question_id")
@@ -570,6 +598,159 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 self._send_json({"error": "'note' must be a short string"}, HTTPStatus.BAD_REQUEST)
                 return
             ok = engine.practice.flag(qid, note.strip())
+            self._send_json({"ok": True}) if ok else self._not_found()
+
+        # --- «Explícamelo tú» (ADR-027) ---------------------------------------------------------
+
+        def _feynman_start(self, payload: dict[str, Any]) -> None:
+            concept = self._text_field(payload, "concept", _MAX_TITLE)
+            if concept is not None:
+                self._stream(lambda: engine.feynman_start(" ".join(concept.split())))
+
+        def _feynman_check(self, payload: dict[str, Any]) -> None:
+            sid = self._id_field(payload, "session_id")
+            if sid is None:
+                return
+            cfg = engine.config.feynman
+            explanation = payload.get("explanation")
+            if not (
+                isinstance(explanation, str)
+                and cfg.min_explanation_chars
+                <= len(explanation.strip())
+                <= cfg.max_explanation_chars
+            ):
+                self._send_json(
+                    {
+                        "error": f"La explicación debe tener entre {cfg.min_explanation_chars} y "
+                        f"{cfg.max_explanation_chars} caracteres."
+                    },
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            session = engine.practice.feynman(sid)
+            if session is None:
+                self._not_found()
+                return
+            if session.result is not None:
+                self._send_json(
+                    {"error": "Esta explicación ya está calificada; empieza otra."},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            self._stream(lambda: engine.feynman_check(session, explanation.strip()))
+
+        def _feynman_confirm(self, payload: dict[str, Any]) -> None:
+            sid = self._id_field(payload, "session_id")
+            result = payload.get("result")
+            if sid is None:
+                return
+            if result not in RESULTS:
+                self._send_json(
+                    {"error": f"'result' must be one of {', '.join(RESULTS)}"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            done = engine.feynman_confirm(sid, str(result))
+            self._send_json(done) if done is not None else self._not_found()
+
+        def _feynman_vote(self, payload: dict[str, Any]) -> None:
+            sid = self._id_field(payload, "session_id")
+            point, fair = payload.get("point"), payload.get("fair")
+            if sid is None:
+                return
+            if not isinstance(point, str) or len(point) > 20 or not isinstance(fair, bool):
+                self._send_json(
+                    {"error": "expected point 'idea:<i>' or 'claim:<i>' and fair true or false"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            ok = engine.feynman_vote(sid, point, fair)
+            self._send_json({"ok": True}) if ok else self._not_found()
+
+        # --- study plans (ADR-028) --------------------------------------------------------------
+
+        def _plans_get(self) -> bool:
+            """GET /api/plans and /api/plans/view?folder=…; False if the path is neither."""
+            parts = urlsplit(self.path)
+            if parts.path == "/api/plans":
+                self._send_json({"plans": engine.plan_list()})
+                return True
+            if parts.path != "/api/plans/view":
+                return False
+            folder = parse_qs(parts.query).get("folder", [""])[0].strip("/")
+            view = engine.plan_view(folder) if folder else None
+            self._send_json(view) if view is not None else self._not_found()
+            return True
+
+        def _folder_field(self, payload: dict[str, Any]) -> str | None:
+            folder = payload.get("folder")
+            if not isinstance(folder, str) or folder.strip("/") not in dict(engine.folders()):
+                self._send_json({"error": "unknown folder"}, HTTPStatus.BAD_REQUEST)
+                return None
+            return folder.strip("/")
+
+        def _plan_generate(self, payload: dict[str, Any]) -> None:
+            folder = self._folder_field(payload)
+            if folder is not None:
+                self._stream(lambda: engine.generate_plan(folder))
+
+        def _plan_order(self, payload: dict[str, Any]) -> None:
+            folder = payload.get("folder")
+            order = payload.get("order")
+            if not isinstance(folder, str) or not (
+                isinstance(order, list) and all(isinstance(p, str) for p in order)
+            ):
+                self._send_json(
+                    {"error": "expected folder and order (a list of paths)"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            try:
+                ok = engine.set_plan_order(folder.strip("/"), order)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"ok": True}) if ok else self._not_found()
+
+        def _plan_read(self, payload: dict[str, Any]) -> None:
+            path, read = payload.get("doc_path"), payload.get("read")
+            if not isinstance(path, str) or not isinstance(read, bool):
+                self._send_json(
+                    {"error": "expected doc_path and read true or false"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            if path not in dict(engine.practice_guides()):
+                self._not_found()
+                return
+            engine.practice.set_read(path, read)
+            self._send_json({"ok": True})
+
+        def _plan_delete(self, payload: dict[str, Any]) -> None:
+            folder = payload.get("folder")
+            ok = isinstance(folder, str) and engine.practice.delete_plan(folder.strip("/"))
+            self._send_json({"ok": True}) if ok else self._not_found()
+
+        # --- gap detector (ADR-029) -------------------------------------------------------------
+
+        def _gap_undo(self, payload: dict[str, Any]) -> None:
+            event = self._id_field(payload, "event_id")
+            if event is not None:
+                self._send_json({"ok": True}) if engine.gaps.undo(event) else self._not_found()
+
+        def _gap_status(self, payload: dict[str, Any]) -> None:
+            gap = self._id_field(payload, "id")
+            status, draft = payload.get("status"), payload.get("draft")
+            if gap is None:
+                return
+            if status not in GAP_STATUSES or not (
+                draft is None or (isinstance(draft, str) and 0 < len(draft) <= _MAX_TITLE)
+            ):
+                self._send_json(
+                    {"error": f"'status' must be one of {', '.join(GAP_STATUSES)}"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            ok = engine.gaps.set_status(gap, str(status), draft)
             self._send_json({"ok": True}) if ok else self._not_found()
 
         def _stream(

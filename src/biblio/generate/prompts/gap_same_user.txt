@@ -1,0 +1,5 @@
+Pregunta nueva: {text}
+Tema que se le asignó: {topic}
+
+Temas pendientes:
+{candidates}
