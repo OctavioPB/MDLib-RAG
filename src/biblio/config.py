@@ -114,6 +114,12 @@ class WebConfig:
 
 
 @dataclass(frozen=True)
+class ConversationsConfig:
+    db: Path
+    list_limit: int
+
+
+@dataclass(frozen=True)
 class PracticeConfig:
     db: Path
     max_questions: int
@@ -123,6 +129,20 @@ class PracticeConfig:
     grade_max_tokens: int
     grader_min_agreement: float
     grader_min_samples: int
+
+
+@dataclass(frozen=True)
+class MapsConfig:
+    fragments: int
+    max_fragment_chars: int
+    concepts_per_fragment: int
+    extract_max_tokens: int
+    merge_similarity: float
+    level1_max: int
+    children_max: int
+    max_nodes: int
+    history_db: Path
+    history_limit: int
 
 
 @dataclass(frozen=True)
@@ -159,7 +179,9 @@ class Config:
     llm: LLMConfig
     draft: DraftConfig
     web: WebConfig
+    conversations: ConversationsConfig
     practice: PracticeConfig
+    maps: MapsConfig
     launcher: LauncherConfig
     watch: WatchConfig
     eval: EvalConfig
@@ -175,7 +197,9 @@ _SECTIONS: dict[str, type[Any]] = {
     "llm": LLMConfig,
     "draft": DraftConfig,
     "web": WebConfig,
+    "conversations": ConversationsConfig,
     "practice": PracticeConfig,
+    "maps": MapsConfig,
     "launcher": LauncherConfig,
     "watch": WatchConfig,
     "eval": EvalConfig,
@@ -304,6 +328,11 @@ def _validate(config: Config) -> None:
         raise ConfigError("practice: expected 0 < min_section_tokens < max_section_tokens")
     if not 0 <= p.grader_min_agreement <= 1:
         raise ConfigError("practice.grader_min_agreement must be between 0 and 1")
+    m = config.maps
+    if min(m.fragments, m.concepts_per_fragment, m.level1_max, m.children_max) <= 0:
+        raise ConfigError("maps: counts must be positive")
+    if not 0 < m.merge_similarity <= 1:
+        raise ConfigError("maps.merge_similarity must be in (0, 1]")
     if config.launcher.llm_start_timeout_s <= 0:
         raise ConfigError("launcher.llm_start_timeout_s must be positive")
     if not (config.watch.interval_s > 0 and config.watch.settle_s > 0):

@@ -962,6 +962,71 @@ def ask_eval_score(
     console.print(f"[dim]Saved to {path}[/dim]")
 
 
+@app.command("map")
+def concept_map(
+    ctx: typer.Context,
+    topic: Annotated[str, typer.Argument(help="Topic of the concept map.")],
+) -> None:
+    """Build a concept map of TOPIC from your library and print it as an outline (ADR-022).
+    Needs the LLM server; the page Mapas draws the same map."""
+    import time
+
+    from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.index.embedder import load_query_embedder
+    from biblio.maps.build import CachedEmbed, generate_map, map_outline
+    from biblio.maps.export import map_fragments
+    from biblio.models import ModelNotAvailableError
+    from biblio.offline import loopback_port_open
+    from biblio.retrieve.pipeline import build_retriever
+    from biblio.retrieve.store import IndexNotFoundError, QueryEmbedderMismatchError
+
+    config = _config(ctx)
+    if not loopback_port_open(config.llm.base_url, config.llm.probe_timeout_s):
+        console.print(
+            f"[red]No LLM server on {config.llm.base_url}.[/red] "
+            "Start it with scripts/serve-llm.ps1."
+        )
+        raise typer.Exit(2)
+    try:
+        embedder = load_query_embedder(config)
+        retriever = build_retriever(
+            config, config.retrieval.default_mode, embedder_factory=lambda _c: embedder
+        )
+    except (IndexNotFoundError, QueryEmbedderMismatchError, ModelNotAvailableError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    llm = load_llm_client(config.llm)
+    t0 = time.perf_counter()
+    try:
+        fragments = map_fragments(retriever.search(topic, config.maps.fragments * 2), config.maps)
+        if not fragments:
+            console.print("[yellow]No sections about that topic in the library.[/yellow]")
+            raise typer.Exit(1)
+        progress = None
+        for progress in generate_map(
+            llm, config.maps, topic, fragments, CachedEmbed(embedder.embed)
+        ):
+            done = fragments[progress.processed - 1]
+            console.print(f"[dim]({progress.processed}/{len(fragments)}) {done.citation}[/dim]")
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        retriever.close()
+        llm.close()
+    assert progress is not None
+    console.print(f"\n[bold]{topic}[/bold]")
+    for line in map_outline(progress.map):
+        console.print(Text(line))
+    console.print(
+        f"\n{len(progress.map.nodes) - 1} concepts · {progress.map.omitted} left out "
+        "(weak, unrelated or over the caps) · "
+        f"{progress.skipped} fragments skipped · {time.perf_counter() - t0:.1f}s"
+    )
+    for f in fragments:
+        console.print(f"[dim]{f.number}. {f.citation} (líneas {f.start_line}-{f.end_line})[/dim]")
+
+
 @app.command()
 def serve(
     ctx: typer.Context,

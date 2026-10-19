@@ -26,6 +26,9 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 019 | Web UI v2: Conversar, Guías and Practicar pages on the stdlib server | Accepted |
 | 020 | Practice quizzes generated from library sections, with local history | Accepted |
 | 021 | One-step launcher: setup steps that download only when missing, after asking | Accepted |
+| 022 | Concept maps by LLM extraction per fragment, checked against the text | Accepted |
+| 023 | Conversation history in a local SQLite file on the server | Accepted |
+| 024 | Concept-map history in a local SQLite file on the server, as ADR-023 | Accepted |
 
 ---
 
@@ -374,3 +377,60 @@ Map-reduce answers the cross-guide syntheses the direct path gives up on and cov
 Each download asks first unless `--yes` is passed. Without Ollama, the app runs with search only and says how to add it. Ollama is stopped on exit if `start` started it. With everything already in place, a start uses no network.
 
 **Consequences.** (+) One double-click from a fresh clone to a working app; the safe order (index, then LLM) is built in. (+) Rule 1 still holds for every normal start; downloads happen only at setup and only after consent. (−) The launcher depends on the Ollama executable and its HTTP API (`/api/tags`, `/api/pull` through the `ollama` command), which may change between versions. (−) An Ollama started outside `start` (for example its tray app, with default settings) is used as found; `biblio doctor` still reports a wrong model digest.
+
+---
+
+## ADR-022 — Concept maps by LLM extraction per fragment, checked against the text
+
+**Date:** 2026-10-18 · **State:** Accepted
+
+**Context.** The user asked for a page that, given a topic, draws a mind map of the related concepts in the library (PLAN Phase 8). Like every generated output, the map must show where each part comes from and must not invent content (rule 2). What is available: the default retrieval (the best 8–12 sections for a topic, as `ask` uses), the heading structure of every guide in the index, the internal link graph, and the local LLM, Qwen3-4B (ADR-015). Measured facts that weigh on the choice:
+- The link graph is sparse: 565 of 61,753 chunks have internal links, 2,816 links in total. It can connect guides but cannot be the backbone of a map.
+- Qwen3-4B is reliable on one fragment at a time and unreliable when it has to relate many: answer faithfulness 0.87 for direct answers vs 0.58 with map-reduce over several guides (ADR-017).
+- Generating from one section with a validated JSON reply works: Practicar produces a question in ~3–4 s with one retry and validation (ADR-020); 4 of 4 and 8 of 8 questions came out valid in the live tests.
+
+**Options.**
+1. **Headings only, no LLM.** Nodes are the guides and sections that retrieval returns; the hierarchy comes from the heading paths (guide → section → subsection); links between guides come from the link graph. Relations have no labels beyond "contains" and "links to".
+   - (+) Instant (under a second), no LLM needed, nothing can be invented: every node is a real heading.
+   - (−) It maps the documents, not the concepts: nodes are section titles ("3. El Problema Base: Clasificación Probabilística") rather than ideas ("probabilidad posterior"), and two guides that explain the same concept stay apart.
+2. **LLM extraction per fragment, checked against the text (recommended).** One LLM call per fragment returns the concepts it defines or uses and the relations between them (`{from, to, label}`). Code keeps a concept only if it appears in its fragment's text (ignoring accents and case), and a relation only if both ends appear in the same fragment; then merges concepts across fragments by name and by embedding similarity, and builds the hierarchy itself (most connected concepts on level 1).
+   - (+) A real concept map with labelled relations, each node and relation tied to the fragment it came from; the model never has to see more than one fragment, which is where it is reliable; invented concepts are removed by the check.
+   - (−) ~3 s per fragment, so ~30 s for 10 fragments (first nodes after ~3 s, streamed). The literal-text check can drop synonyms and abstractions the fragment implies but does not name. Needs an evaluation set before adoption.
+3. **One LLM call for the whole map.** All the evidence goes into one prompt and the model returns the complete map (nodes, hierarchy and relations) as JSON.
+   - (+) Simplest to build; one call, ~10–15 s; the model can name abstract concepts that connect several guides.
+   - (−) The model relates many fragments at once, which is where it was measured to fail (ADR-017); relations cannot be checked against a single fragment, and in a long JSON reply a 4B model often breaks the format or the citations. The most likely to invent structure.
+
+**Decision.** Option 2 (chosen by the user). One LLM call per retrieved fragment, with a Spanish prompt asking for the concepts the fragment defines or uses and the labelled relations between them, as JSON. Code keeps a concept only if it appears in its fragment's text (accents and case ignored) and a relation only if both ends appear in the same fragment; an invalid reply is asked once more and the fragment is then skipped (the ADR-020 pattern). Concepts are merged across fragments by normalized name and by embedding similarity (the warm query embedder; threshold in config), keeping every source. The hierarchy is built in code: the concepts most connected to the topic and present in the most fragments on level 1, the rest under the level-1 concept they relate to, other relations as cross-links. Nodes are streamed to the page as each fragment is processed. The map is evaluated on a set of 8–12 topics written by the user, with the key concepts each map must contain, and the share of nodes and relations supported by their sources is graded by the user before the page is adopted (PLAN Phase 8, exit criterion).
+
+**Consequences.** (+) A map of ideas rather than of documents, with labelled relations, in which every node and relation leads to the fragment it came from; the model only ever reads one fragment, where it was measured to be reliable. (+) No new model or dependency. (−) About 3 s per fragment: ~30 s for a 10-fragment map, softened by streaming (first nodes after ~3 s). (−) The literal check drops concepts a fragment implies without naming them, and synonyms the embedding merge misses stay as separate nodes; the evaluation set measures how much this costs. (−) Readability falls past ~40 nodes: a cap per level in config. Revisit with a larger LLM, or if the evaluation shows the check removes too many good concepts.
+
+---
+
+## ADR-023 — Conversation history in a local SQLite file on the server
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** ADR-019 kept the Conversar thread in the browser's `localStorage`: one thread of at most 30 messages, erased by «Nueva conversación». The user asked to keep a history of conversations, and chose what to do with it: list and reopen them, search them, rename and delete them, and export one to Markdown.
+
+**Options.**
+1. A local SQLite file on the server, `data/conversations.db`, like the practice history (ADR-020): survives clearing the browser, is the same from any browser on the machine, has no practical size limit and can be searched with FTS5.
+2. Several threads in `localStorage`: no server change, but lost with the browser's data, tied to one browser and limited to ~5 MB (a few hundred messages with their sources).
+3. One Markdown note per conversation in `drafts/conversations/`: readable in Obsidian, but hard to list, search and reopen with the sources in the page.
+
+**Decision.** Option 1 (chosen by the user). This replaces the storage clause of ADR-019; the rest of ADR-019 stands, and in particular each message is still answered on its own (the history is for reading, not memory for the model). The server records each message when its answer is complete (`/api/search` and `/api/ask` take an optional `conversation_id`; without one a new conversation starts), with everything the page shows: question, mode, folder, strategy, answer, citations and the full text of its sources, or the error. Conversations are titled with their first question and can be renamed; deleting one deletes its messages. Search uses an FTS5 table over questions and answers with the same accent folding as the index (`unicode61 remove_diacritics 2`). Export writes `drafts/conversations/<title>.md` (outside the library, never indexed) with each answer, its citations and its sources, and the page also offers it as a download. The browser keeps only the id of the open conversation. Nothing leaves the machine.
+
+**Consequences.** (+) Questions and answers are kept and can be found again, with their sources. (+) Same pattern as the practice history: a separate file, so `index --full` never touches it. (−) The history grows without limit (about 10–15 KB per answered question with its sources); deleting is manual. (−) A thread kept in `localStorage` before this change is not imported.
+
+---
+
+## ADR-024 — Concept-map history in a local SQLite file on the server, as ADR-023
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** Maps (ADR-022) were kept only in the server's memory (the last 20, to be saved with «Guardar») and lost when the app stopped. The user asked for the same as the conversation history: a list of the maps generated, which they can reopen, and a button to show or hide it.
+
+**Options.** The same three as ADR-023 (local SQLite on the server, the browser's storage, files in `drafts/`). The user chose the first for conversations, for reasons that hold here too: maps carry the full text of their sources, survive the browser's data being cleared, and are the same from any browser on the machine.
+
+**Decision.** `data/maps.db`, apart from the index. Every map is stored when it is complete, with its topic, the map (nodes, edges, layout) and its source fragments, so reopening one shows it as it was without calling the LLM again; an expanded map («Expandir») is stored as a map of its own. The list is newest first and can be searched by topic or by the names of the concepts in the map (FTS5 with the index's accent folding); a map can be deleted. «Guardar» now writes any stored map to `drafts/maps/`, not only those still in memory. The page's «Historial» button shows or hides the list on Mapas as it does on Conversar, each page remembering its own choice in the browser.
+
+**Consequences.** (+) Maps that took ~30 s to build are kept and reopen instantly. (+) The same pattern and code shape as the conversation history. (−) One more file that grows without limit (a map with its sources is ~50–100 KB); deleting is manual. (−) A stored map reflects the library when it was built; it is not refreshed when notes change.

@@ -43,6 +43,11 @@ _VERDICTS = {"correcta": "correct", "parcial": "partial", "incorrecta": "wrong"}
 _OPTION_LETTER_RE = re.compile(r"^\s*[A-Da-d]\s*[).:\-]\s+")  # "B) texto" → "texto"
 
 
+def is_content_heading(title: str) -> bool:
+    """False for navigation and reference sections (table of contents, references…)."""
+    return _plain(title) not in _NON_CONTENT
+
+
 def _plain(text: str) -> str:
     """Lower case, no accents, no numbering or punctuation: `"0. Tabla de Contenidos"` → ..."""
     ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().casefold()
@@ -106,7 +111,7 @@ def candidate_sections(
     out = []
     for _id, path, heading_json, start, end, text in rows:
         heading = tuple(json.loads(heading_json))
-        if _plain(heading[-1]) in _NON_CONTENT:
+        if not is_content_heading(heading[-1]):
             continue
         out.append(Candidate(Section(path, heading, start, end, text), (path, heading_json)))
     return out

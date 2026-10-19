@@ -9,6 +9,7 @@
   <script src="/static/app.js" defer></script>
   <script src="/static/guias.js" defer></script>
   <script src="/static/practicar.js" defer></script>
+  <script src="/static/mapas.js" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -21,6 +22,7 @@
         <a href="#/conversar" data-page="conversar">Conversar</a>
         <a href="#/guias" data-page="guias">Guías</a>
         <a href="#/practicar" data-page="practicar">Practicar</a>
+        <a href="#/mapas" data-page="mapas">Mapas</a>
       </nav>
     </div>
     <div class="topbar-right">
@@ -30,13 +32,44 @@
         <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg></span></label>
       </div>
       <span id="status" class="pill" role="status">Cargando…</span>
+      <button id="reindex" class="btn-icon" type="button" aria-label="Actualizar la biblioteca"
+        title="Actualizar la biblioteca: indexa las notas nuevas, modificadas o borradas">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"></path><path d="M4 3v5h5"></path><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"></path><path d="M20 21v-5h-5"></path></svg>
+      </button>
+      <button id="history-toggle" class="btn" type="button" aria-controls="history" aria-expanded="true"
+        title="Mostrar u ocultar el historial">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
+        <span>Historial</span>
+      </button>
       <button id="new-thread" class="btn" type="button">Nueva conversación</button>
     </div>
   </header>
 
   <!-- Conversar (ADR-019) ------------------------------------------------------------------>
   <main id="page-conversar" class="page conversar" hidden>
+    <aside id="history" class="history-side" aria-label="Historial de conversaciones">
+      <label for="history-search" class="sr-only">Buscar en tus conversaciones</label>
+      <input id="history-search" type="search" maxlength="200" placeholder="Buscar en tus conversaciones…">
+      <ul id="history-list" class="history-list"></ul>
+      <p id="history-empty" class="small muted" hidden></p>
+    </aside>
+
     <section class="chat" aria-label="Conversación">
+      <div id="conversation-bar" class="conversation-bar" hidden>
+        <h2 id="conversation-title"></h2>
+        <form id="conversation-rename" class="row" hidden>
+          <label for="conversation-title-input" class="sr-only">Nuevo título</label>
+          <input id="conversation-title-input" type="text" maxlength="120" required>
+          <button class="btn-primary" type="submit">Guardar</button>
+          <button id="conversation-rename-cancel" class="btn-ghost" type="button">Cancelar</button>
+        </form>
+        <div id="conversation-actions" class="row">
+          <button id="conversation-rename-start" class="btn-ghost" type="button">Renombrar</button>
+          <button id="conversation-export" class="btn-ghost" type="button">Exportar</button>
+          <button id="conversation-delete" class="btn-ghost danger" type="button">Borrar</button>
+        </div>
+      </div>
+      <p id="conversation-status" class="small muted conversation-status" role="status"></p>
       <div id="thread" class="thread">
         <div id="welcome" class="welcome">
           <h1>¿Qué quieres encontrar o entender?</h1>
@@ -188,6 +221,59 @@
         </section>
       </div>
     </section>
+  </main>
+
+  <!-- Mapas (ADR-022) ---------------------------------------------------------------------->
+  <main id="page-mapas" class="page mapas" hidden>
+    <aside id="map-history" class="history-side" aria-label="Historial de mapas">
+      <label for="map-history-search" class="sr-only">Buscar en tus mapas</label>
+      <input id="map-history-search" type="search" maxlength="200" placeholder="Buscar por tema o concepto…">
+      <ul id="map-history-list" class="history-list"></ul>
+      <p id="map-history-empty" class="small muted" hidden></p>
+    </aside>
+    <div class="mapas-content">
+    <div class="map-bar">
+      <form id="map-form" class="map-form" autocomplete="off">
+        <label for="map-topic" class="sr-only">Tema del mapa</label>
+        <input id="map-topic" type="text" maxlength="200" required placeholder="Tema del mapa, p. ej. Naive Bayes">
+        <button id="map-create" class="btn-primary" type="submit">Crear mapa</button>
+      </form>
+      <div class="map-tools">
+        <div class="segmented" role="radiogroup" aria-label="Vista">
+          <label><input type="radio" name="map-view" value="map" checked><span>Mapa</span></label>
+          <label><input type="radio" name="map-view" value="outline"><span>Esquema</span></label>
+        </div>
+        <button id="map-zoom-out" class="btn-icon" type="button" aria-label="Alejar">−</button>
+        <button id="map-zoom-in" class="btn-icon" type="button" aria-label="Acercar">+</button>
+        <button id="map-fit" class="btn" type="button">Centrar</button>
+        <button id="map-save" class="btn" type="button" disabled>Guardar</button>
+        <button id="map-svg" class="btn" type="button" disabled>Descargar SVG</button>
+        <button id="map-delete" class="btn danger-text" type="button" disabled>Borrar</button>
+      </div>
+    </div>
+    <nav id="map-trail" class="map-trail" aria-label="Mapas abiertos" hidden></nav>
+    <p id="map-status" class="muted map-status" role="status"></p>
+    <p id="map-error" class="error" hidden></p>
+
+    <div class="map-layout">
+      <div class="map-main">
+        <div id="map-empty" class="map-empty">
+          <h1>Mapas de conceptos</h1>
+          <p>Escribe un tema y leo las secciones de tus notas que tratan de él: extraigo sus conceptos y
+            cómo se relacionan, y los dibujo alrededor del tema. Cada concepto lleva a los fragmentos donde
+            aparece. Tarda unos 30 segundos; el mapa va creciendo mientras lee.</p>
+        </div>
+        <div id="map-stage" class="map-stage" hidden>
+          <svg id="map-svg-root" class="map-svg" role="group" aria-label="Mapa conceptual"><g id="map-viewport"></g></svg>
+        </div>
+        <div id="map-outline" class="map-outline md" hidden></div>
+      </div>
+      <aside id="map-panel" class="source-panel map-panel" aria-label="Concepto seleccionado">
+        <p id="map-panel-empty" class="muted">Pulsa un concepto para ver sus relaciones y los fragmentos de tus notas donde aparece.</p>
+        <div id="map-panel-view" hidden></div>
+      </aside>
+    </div>
+    </div>
   </main>
 
   <!-- Practicar (ADR-020) ------------------------------------------------------------------>

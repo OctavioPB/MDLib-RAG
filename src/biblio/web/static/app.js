@@ -3,7 +3,6 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const MAX_TURNS = 30;
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -210,7 +209,11 @@ async function streamEvents(path, body, onEvent, signal) {
     if (done) break;
     buffer.text += decoder.decode(value, { stream: true });
     for (const [name, data] of sseEvents(buffer)) {
-      if (name === "error") throw new Error(data.error);
+      if (name === "error") {
+        const error = new Error(data.error);
+        error.data = data; // e.g. the conversation the failed message was stored in
+        throw error;
+      }
       onEvent(name, data);
     }
   }
@@ -225,7 +228,9 @@ const app = {
     { mode: "explain", precision: "precise", k: 8, scope: "", strategy: "direct" },
     store.get("biblio.settings", {}),
   ),
-  thread: store.get("biblio.thread", []),
+  thread: [], // the open conversation's messages, from the server (ADR-023)
+  conversationId: store.get("biblio.conversation", null),
+  title: "",
   busy: false,
   selection: null, // {turn, index}
 };
@@ -234,14 +239,15 @@ function saveSettings() {
   store.set("biblio.settings", app.settings);
 }
 
-function saveThread() {
-  app.thread = app.thread.slice(-MAX_TURNS);
-  store.set("biblio.thread", app.thread);
+/** The open conversation; only its id is kept in the browser, the history is on the server. */
+function setConversation(id) {
+  app.conversationId = id;
+  store.set("biblio.conversation", id);
 }
 
 // --- router --------------------------------------------------------------------------------
 
-const PAGES = ["conversar", "guias", "practicar"];
+const PAGES = ["conversar", "guias", "practicar", "mapas"];
 const pageHooks = {}; // page name → function run each time the page is shown (set by guias.js, …)
 
 function currentPage() {
@@ -257,7 +263,12 @@ function route() {
     else link.removeAttribute("aria-current");
   }
   $("new-thread").hidden = page !== "conversar";
-  if (page === "conversar") $("message").focus();
+  syncHistoryToggle();
+  if (page === "conversar") {
+    const prefill = location.hash.match(/[?&]q=([^&]*)/); // from Mapas' «Explicar»
+    if (prefill) $("message").value = decodeURIComponent(prefill[1]);
+    $("message").focus();
+  }
   if (pageHooks[page]) pageHooks[page]();
 }
 
@@ -277,6 +288,47 @@ async function loadStatus() {
   } catch {
     pill.textContent = "Sin conexión con el servidor";
     pill.classList.add("off");
+  }
+}
+
+/** «Actualizar»: incremental reindex of the library, with its progress in the status pill. */
+async function reindexLibrary() {
+  const pill = $("status");
+  const button = $("reindex");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.classList.add("spinning");
+  pill.classList.remove("off");
+  pill.textContent = "Revisando tu biblioteca…";
+  let device = "";
+  try {
+    await streamEvents("/api/reindex", {}, (name, data) => {
+      if (name === "start") {
+        device = data.device === "cpu" ? " · en CPU" : "";
+        pill.textContent = `Revisando ${data.files.toLocaleString("es")} notas…`;
+      } else if (name === "progress") {
+        const chunks = data.chunks ? ` · ${data.chunks} fragmentos nuevos` : "";
+        pill.textContent = `Actualizando ${data.files.toLocaleString("es")} de ${data.total.toLocaleString("es")}${chunks}${device}`;
+      } else if (name === "done") {
+        const changes = [
+          data.added && `${data.added} ${data.added === 1 ? "nueva" : "nuevas"}`,
+          data.updated && `${data.updated} ${data.updated === 1 ? "modificada" : "modificadas"}`,
+          data.deleted && `${data.deleted} ${data.deleted === 1 ? "eliminada" : "eliminadas"}`,
+        ].filter(Boolean);
+        pill.textContent = changes.length ? `${changes.join(" · ")} · ${data.seconds} s` : "Tu biblioteca ya estaba al día";
+        if (data.failed.length) pill.title = `No se pudieron leer: ${data.failed.join(", ")}`;
+      }
+    });
+    loadFolders();
+    setTimeout(loadStatus, 6000); // leave the summary visible for a moment
+  } catch (error) {
+    pill.textContent = "No se pudo actualizar";
+    pill.classList.add("off");
+    pill.title = error.message;
+    setTimeout(loadStatus, 8000);
+  } finally {
+    button.disabled = false;
+    button.classList.remove("spinning");
   }
 }
 
@@ -530,9 +582,11 @@ async function runFind(turn) {
     k: Number(app.settings.k),
     precision: app.settings.precision,
     scope: turn.scope || null,
+    conversation_id: app.conversationId,
   });
   if (!response.ok) throw new Error(await errorText(response));
   const data = await response.json();
+  setConversation(data.conversation_id);
   turn.hits = data.hits;
   turn.ms = data.milliseconds;
   turn.retriever = data.retriever;
@@ -546,16 +600,26 @@ async function runExplain(turn) {
     }
   }
   turn.answer = "";
-  await streamEvents(
-    "/api/ask",
-    { question: turn.question, scope: turn.scope || null, strategy: turn.strategy },
-    (name, data) => {
+  const body = {
+    question: turn.question,
+    scope: turn.scope || null,
+    strategy: turn.strategy,
+    conversation_id: app.conversationId,
+  };
+  try {
+    await streamEvents("/api/ask", body, (name, data) => {
       if (name === "meta") turn.fragments = data.fragments;
       else if (name === "token") turn.answer += data.text;
-      else if (name === "done") turn.done = data;
+      else if (name === "done") {
+        turn.done = data;
+        setConversation(data.conversation_id);
+      }
       rerender(turn);
-    },
-  );
+    });
+  } catch (error) {
+    if (error.data && error.data.conversation_id) setConversation(error.data.conversation_id);
+    throw error;
+  }
 }
 
 async function send(raw, overrides = {}) {
@@ -593,8 +657,223 @@ async function send(raw, overrides = {}) {
     app.busy = false;
     $("send").disabled = false;
     rerender(turn);
-    saveThread();
+    loadHistory();
   }
+}
+
+// --- conversation history (ADR-023) -------------------------------------------------------
+
+const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+function formatWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}, ${time}`;
+}
+
+/** A stored message as the page's turn object, so it renders like a live one. */
+function turnFromRecord(record) {
+  const turn = {
+    id: `h${record.id}`,
+    question: record.question,
+    mode: record.mode,
+    scope: record.scope,
+    strategy: record.strategy,
+    status: record.status,
+    error: record.error,
+  };
+  if (record.mode === "explain") {
+    turn.answer = record.answer;
+    turn.fragments = record.payload.fragments || [];
+    turn.done = record.payload.done || null;
+  } else {
+    turn.hits = record.payload.hits || [];
+    turn.ms = record.payload.milliseconds || 0;
+    turn.retriever = record.payload.retriever;
+  }
+  return turn;
+}
+
+function startNewConversation() {
+  setConversation(null);
+  app.title = "";
+  app.thread = [];
+  app.selection = null;
+  renderThread();
+  showSource();
+  renderConversationBar();
+  markActiveConversation();
+}
+
+async function openConversation(id) {
+  if (app.busy) return;
+  let data = null;
+  try {
+    const response = await fetch(`/api/conversations/${id}`);
+    if (response.ok) data = await response.json();
+  } catch {
+    /* the server is not answering: keep what is shown */
+  }
+  if (!data) {
+    startNewConversation(); // deleted, or never stored
+    return;
+  }
+  setConversation(data.id);
+  app.title = data.title;
+  app.thread = data.turns.map(turnFromRecord);
+  app.selection = null;
+  renderThread();
+  showSource();
+  renderConversationBar();
+  markActiveConversation();
+  const last = $("thread").lastElementChild;
+  if (last && last.firstElementChild) last.firstElementChild.scrollIntoView({ block: "start" });
+}
+
+async function loadHistory() {
+  const query = $("history-search").value.trim();
+  let conversations = [];
+  try {
+    const url = `/api/conversations${query ? `?q=${encodeURIComponent(query)}` : ""}`;
+    conversations = (await (await fetch(url)).json()).conversations;
+  } catch {
+    /* keep the list empty */
+  }
+  const items = conversations.map((c) => {
+    const li = el("li");
+    const button = el("button", "history-item");
+    button.type = "button";
+    button.dataset.id = String(c.id);
+    button.append(el("strong", null, c.title));
+    const count = `${c.turns} ${c.turns === 1 ? "mensaje" : "mensajes"}`;
+    button.append(el("span", null, `${formatWhen(c.updated)} · ${count}`));
+    if (c.snippet) button.append(el("span", "history-snippet", c.snippet));
+    button.addEventListener("click", () => openConversation(c.id));
+    li.append(button);
+    if (c.id === app.conversationId) app.title = c.title;
+    return li;
+  });
+  $("history-list").replaceChildren(...items);
+  $("history-empty").hidden = items.length > 0;
+  $("history-empty").textContent = query
+    ? "Ninguna conversación contiene esas palabras."
+    : "Tus conversaciones aparecerán aquí.";
+  markActiveConversation();
+  renderConversationBar();
+}
+
+function markActiveConversation() {
+  for (const item of document.querySelectorAll(".history-item")) {
+    if (Number(item.dataset.id) === app.conversationId) item.setAttribute("aria-current", "true");
+    else item.removeAttribute("aria-current");
+  }
+}
+
+function renderConversationBar() {
+  $("conversation-bar").hidden = !app.conversationId;
+  $("conversation-title").textContent = app.title;
+}
+
+function conversationStatus(text) {
+  $("conversation-status").textContent = text;
+}
+
+async function postConversation(path, body) {
+  const response = await postJSON(path, body);
+  if (!response.ok) throw new Error(await errorText(response));
+  return response.json();
+}
+
+/** Pages with a history panel that the «Historial» button shows or hides (ADR-023, ADR-024).
+ *  Each page remembers its own choice. */
+const HISTORY_PANELS = {
+  conversar: { panel: "history", search: "history-search", key: "biblio.historyOpen" },
+  mapas: { panel: "map-history", search: "map-history-search", key: "biblio.mapHistoryOpen" },
+};
+
+function setHistoryOpen(page, open) {
+  const p = HISTORY_PANELS[page];
+  $(p.panel).hidden = !open;
+  store.set(p.key, open);
+}
+
+function syncHistoryToggle() {
+  const p = HISTORY_PANELS[currentPage()];
+  const button = $("history-toggle");
+  button.hidden = !p;
+  if (!p) return;
+  const open = !$(p.panel).hidden;
+  button.setAttribute("aria-controls", p.panel);
+  button.setAttribute("aria-expanded", String(open));
+  button.classList.toggle("active", open);
+}
+
+function bindHistory() {
+  for (const [page, p] of Object.entries(HISTORY_PANELS)) setHistoryOpen(page, store.get(p.key, true));
+  $("history-toggle").addEventListener("click", () => {
+    const page = currentPage();
+    const p = HISTORY_PANELS[page];
+    if (!p) return;
+    const open = $(p.panel).hidden;
+    setHistoryOpen(page, open);
+    syncHistoryToggle();
+    if (open) $(p.search).focus();
+    if (page === "mapas" && typeof fitView === "function") fitView();
+  });
+  let timer = null;
+  $("history-search").addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(loadHistory, 250);
+  });
+  const showRename = (on) => {
+    $("conversation-rename").hidden = !on;
+    $("conversation-title").hidden = on;
+    $("conversation-actions").hidden = on;
+  };
+  $("conversation-rename-start").addEventListener("click", () => {
+    $("conversation-title-input").value = app.title;
+    showRename(true);
+    $("conversation-title-input").focus();
+  });
+  $("conversation-rename-cancel").addEventListener("click", () => showRename(false));
+  $("conversation-rename").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const title = $("conversation-title-input").value.trim();
+    if (!title) return;
+    try {
+      await postConversation("/api/conversations/rename", { id: app.conversationId, title });
+      app.title = title;
+      showRename(false);
+      loadHistory();
+    } catch (error) {
+      conversationStatus(error.message);
+    }
+  });
+  $("conversation-export").addEventListener("click", async () => {
+    try {
+      const data = await postConversation("/api/conversations/export", { id: app.conversationId });
+      const link = el("a");
+      link.href = URL.createObjectURL(new Blob([data.markdown], { type: "text/markdown" }));
+      link.download = data.filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      conversationStatus(`Exportada a ${data.path}`);
+    } catch (error) {
+      conversationStatus(error.message);
+    }
+  });
+  $("conversation-delete").addEventListener("click", async () => {
+    if (!confirm(`¿Borrar «${app.title}»? No se puede deshacer.`)) return;
+    try {
+      await postConversation("/api/conversations/delete", { id: app.conversationId });
+      startNewConversation();
+      conversationStatus("");
+      loadHistory();
+    } catch (error) {
+      conversationStatus(error.message);
+    }
+  });
 }
 
 // --- wiring --------------------------------------------------------------------------------
@@ -656,11 +935,8 @@ function bindComposer() {
     send(text);
   });
   $("new-thread").addEventListener("click", () => {
-    app.thread = [];
-    app.selection = null;
-    saveThread();
-    renderThread();
-    showSource();
+    if (app.busy) return;
+    startNewConversation();
     message.focus();
   });
   $("source-prev").addEventListener("click", () => stepSource(-1));
@@ -668,17 +944,15 @@ function bindComposer() {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  for (const turn of app.thread) {
-    if (turn.status === "pending") {
-      turn.status = "error";
-      turn.error = "Interrumpida al recargar la página.";
-    }
-  }
   bindTheme();
+  $("reindex").addEventListener("click", reindexLibrary);
   bindSettings();
   bindComposer();
+  bindHistory();
   renderThread();
   showSource();
+  if (app.conversationId) openConversation(app.conversationId);
+  loadHistory();
   window.addEventListener("hashchange", route);
   route();
   loadStatus();

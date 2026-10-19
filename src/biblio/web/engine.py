@@ -20,7 +20,10 @@ from pathlib import Path
 from typing import Any, TypeVar
 from urllib.parse import quote
 
+import numpy as np
+
 from biblio.config import Config
+from biblio.conversations import ConversationStore, NewTurn
 from biblio.generate.ask import Tutor
 from biblio.generate.citations import extract_citations
 from biblio.generate.context import Fragment
@@ -35,8 +38,18 @@ from biblio.generate.draft import (
     slugify,
 )
 from biblio.generate.llm import LLMClient, load_llm_client
-from biblio.index.embedder import Embedder
-from biblio.ingest.tokens import TokenCounter, load_llm_token_counter
+from biblio.index.embedder import (
+    DeviceChoice,
+    Embedder,
+    load_index_embedder,
+    resolve_index_device,
+)
+from biblio.index.indexer import IndexLockedError, IndexMismatchError, IndexStats, index_library
+from biblio.index.watch import choose_device
+from biblio.ingest.tokens import TokenCounter, load_llm_token_counter, load_token_counter
+from biblio.maps.build import CachedEmbed, ConceptMap, generate_map
+from biblio.maps.export import map_fragments, to_canvas, to_markdown
+from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
 from biblio.offline import loopback_port_open
 from biblio.practice.quiz import (
     assign_kinds,
@@ -97,45 +110,47 @@ class _LockedRetriever:
         pass  # the shared embedder belongs to the engine
 
 
-def _streamed(
-    work: Callable[[Callable[[str], None]], T], event: Callable[[str], Event]
-) -> Generator[Event, None, T]:
-    """Run `work(on_token)` in a thread and yield each token as an event; return its result.
+def _threaded(work: Callable[[Callable[[Event], None]], T]) -> Generator[Event, None, T]:
+    """Run `work(emit)` in a thread, yield every event it emits, and return its result.
 
-    If the consumer stops (the browser closed the stream), the next token raises inside `work`
-    so the LLM call is abandoned instead of running on unseen.
+    If the consumer stops (the browser closed the stream), the next `emit` raises inside `work`,
+    so the work is abandoned instead of running on unseen.
     """
-    tokens: queue.Queue[tuple[str, str]] = queue.Queue()
+    events: queue.Queue[Event | None] = queue.Queue()  # None marks the end
     outcome: dict[str, Any] = {}
     cancelled = threading.Event()
 
-    def on_token(text: str) -> None:
+    def emit(event: Event) -> None:
         if cancelled.is_set():
             raise _Cancelled
-        tokens.put(("token", text))
+        events.put(event)
 
     def run() -> None:
         try:
-            outcome["value"] = work(on_token)
+            outcome["value"] = work(emit)
         except BaseException as exc:  # handed to the consumer below
             outcome["error"] = exc
         finally:
-            tokens.put(("end", ""))
+            events.put(None)
 
     worker = threading.Thread(target=run, daemon=True)
     worker.start()
     try:
-        while True:
-            kind, text = tokens.get()
-            if kind == "end":
-                break
-            yield event(text)
+        while (event := events.get()) is not None:
+            yield event
     finally:
         cancelled.set()
     worker.join()
     if "error" in outcome:
         raise outcome["error"]
     return outcome["value"]  # type: ignore[no-any-return]
+
+
+def _streamed(
+    work: Callable[[Callable[[str], None]], T], event: Callable[[str], Event]
+) -> Generator[Event, None, T]:
+    """Run `work(on_token)` in a thread and yield each token as an event; return its result."""
+    return (yield from _threaded(lambda emit: work(lambda text: emit(event(text)))))
 
 
 class Engine:
@@ -148,6 +163,9 @@ class Engine:
         plan_resolver: Callable[[Config], RerankPlan] = resolve_rerank_plan,
         llm_factory: Callable[[Config], LLMClient] = lambda c: load_llm_client(c.llm),
         counter_factory: Callable[[Config], TokenCounter] = load_llm_token_counter,
+        index_embedder_factory: Callable[[Config, DeviceChoice], Embedder] = load_index_embedder,
+        index_counter_factory: Callable[[Config], TokenCounter] = load_token_counter,
+        index_device: Callable[[Config], DeviceChoice] = resolve_index_device,
     ) -> None:
         self.config = config
         self.lock = threading.Lock()
@@ -157,12 +175,17 @@ class Engine:
         self._plan_resolver = plan_resolver
         self._llm_factory = llm_factory
         self._counter_factory = counter_factory
+        self._index_embedder_factory = index_embedder_factory
+        self._index_counter_factory = index_counter_factory
+        self._index_device = index_device
         self._reranker: Reranker | None = None
         self._reranker_device: str | None = None
         self._counter: TokenCounter | None = None
         self._generating = threading.Lock()  # one draft or quiz generation at a time
         self._llm_lock = threading.Lock()  # quiz generation and answer grading take turns
         self._practice: PracticeStore | None = None
+        self._map_history: MapStore | None = None
+        self._conversations: ConversationStore | None = None
 
     # --- retrieval --------------------------------------------------------------------------------
 
@@ -520,6 +543,181 @@ class Engine:
             },
         }
 
+    # --- updating the index from the page -----------------------------------------------------
+
+    def reindex(self) -> Generator[Event, None, None]:
+        """Incremental reindex, as `biblio index` (only changed files are re-embedded). Events:
+        ("start", {files, device}), ("progress", …) a few times a second, ("done", {stats}).
+        The GPU is used when free, the CPU while the LLM server holds it (ADR-018 rule)."""
+        library = self.config.paths.library
+        if library is None:
+            raise ValueError("No hay biblioteca configurada (paths.library en config/local.toml).")
+        choice = choose_device(self._index_device(self.config), self.llm_running())
+        if choice is None:
+            raise ValueError(
+                "El índice está en float16 y el modelo de lenguaje ocupa la GPU: detenlo y vuelve "
+                "a intentarlo."
+            )
+
+        def work(emit: Callable[[Event], None]) -> IndexStats:
+            seen = {"files": 0, "chunks": 0, "total": 0}
+            last = [0.0]
+
+            def on_start(total: int) -> None:
+                seen["total"] = total
+                emit(("start", {"files": total, "device": choice.device}))
+
+            def progress(chunks: int) -> None:
+                seen["files"] += 1
+                seen["chunks"] += chunks
+                now = time.monotonic()
+                if now - last[0] >= 0.25 or seen["files"] == seen["total"]:
+                    last[0] = now
+                    emit(("progress", dict(seen)))
+
+            try:
+                return index_library(
+                    self.config,
+                    library,
+                    full=False,
+                    dtype=choice.dtype,
+                    embedder_factory=lambda: self._index_embedder_factory(self.config, choice),
+                    counter_factory=lambda: self._index_counter_factory(self.config),
+                    progress=progress,
+                    on_start=on_start,
+                )
+            except IndexLockedError as exc:
+                busy = "La biblioteca ya se está actualizando; espera a que termine."
+                raise BusyError(busy) from exc
+            except IndexMismatchError as exc:
+                raise ValueError(
+                    "El índice se construyó con otra configuración: hay que reconstruirlo "
+                    "con `uv run biblio index --full`."
+                ) from exc
+
+        stats = yield from _threaded(work)
+        yield (
+            "done",
+            {
+                "added": stats.added,
+                "updated": stats.updated,
+                "deleted": stats.deleted,
+                "unchanged": stats.unchanged,
+                "failed": list(stats.failed),
+                "chunks_written": stats.chunks_written,
+                "documents": stats.total_documents,
+                "seconds": round(stats.seconds, 1),
+                "device": choice.device,
+            },
+        )
+
+    # --- conversation history (ADR-023) -------------------------------------------------------
+
+    @property
+    def conversations(self) -> ConversationStore:
+        if self._conversations is None:
+            self._conversations = ConversationStore(self.config.conversations.db)
+        return self._conversations
+
+    def ask_recorded(
+        self, question: str, *, scope: str | None, strategy: str, conversation_id: int | None
+    ) -> Generator[Event, None, None]:
+        """`ask`, stored in the history when the answer is complete: the "done" event carries the
+        conversation id. An error is stored too and sent as an ("error", …) event with the id."""
+        map_reduce = "on" if strategy == "map-reduce" else "off"  # opt-in only (ADR-017)
+        meta: dict[str, Any] = {}
+        parts: list[str] = []
+        try:
+            for name, data in self.ask(question, scope=scope, map_reduce=map_reduce):
+                if name == "meta":
+                    meta = data
+                elif name == "token":
+                    parts.append(data["text"])
+                elif name == "done":
+                    turn = NewTurn(
+                        question,
+                        "explain",
+                        scope,
+                        strategy,
+                        "done",
+                        answer="".join(parts).strip(),
+                        payload={**meta, "done": data},
+                    )
+                    cid, _ = self.conversations.add_turn(conversation_id, turn)
+                    data = {**data, "conversation_id": cid}
+                yield name, data
+        except Exception as exc:  # stored, then reported to the page with the conversation id
+            turn = NewTurn(question, "explain", scope, strategy, "error", error=str(exc))
+            cid, _ = self.conversations.add_turn(conversation_id, turn)
+            yield "error", {"error": str(exc), "conversation_id": cid}
+
+    # --- concept maps (Mapas page, ADR-022) ---------------------------------------------------
+
+    def _embed_names(self, names: Sequence[str]) -> np.ndarray:
+        with self.lock:  # the query embedder is shared with searches
+            return self._embedder.embed(list(names))
+
+    def concept_map(self, topic: str, scope: str | None = None) -> Generator[Event, None, None]:
+        """Events: ("start", {fragments}), then ("map", …) after each fragment with the map so far,
+        then ("done", …). Raises ValueError before the first event if nothing is found."""
+        self._claim_generation()
+        try:
+            cfg = self.config.maps
+            with self.lock:
+                hits = self._base(scope).search(topic, cfg.fragments * 2)
+            fragments = map_fragments(hits, cfg)
+            if not fragments:
+                raise ValueError("No encontré secciones sobre ese tema en tus notas.")
+            sources = [fragment_json(f, self) for f in fragments]
+            yield "start", {"topic": topic, "fragments": sources}
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            progress = None
+            try:
+                embed = CachedEmbed(self._embed_names)
+                turns = lambda: self._llm_lock  # noqa: E731  (generation and grading take turns)
+                for progress in generate_map(llm, cfg, topic, fragments, embed, turns):
+                    yield (
+                        "map",
+                        {
+                            "processed": progress.processed,
+                            "skipped": progress.skipped,
+                            "map": map_json(progress.map),
+                        },
+                    )
+            finally:
+                llm.close()
+            assert progress is not None
+            map_id = self.map_history.add(topic, map_json(progress.map), sources)  # ADR-024
+            done = {"map_id": map_id, "skipped": progress.skipped, "omitted": progress.map.omitted}
+            yield "done", done
+        finally:
+            self._generating.release()
+
+    @property
+    def map_history(self) -> MapStore:
+        if self._map_history is None:
+            self._map_history = MapStore(self.config.maps.history_db)
+        return self._map_history
+
+    def save_map(self, map_id: int) -> dict[str, str] | None:
+        """Write a stored map to drafts/maps/ as Markdown and Obsidian Canvas."""
+        stored = self.map_history.get(map_id)
+        if stored is None:
+            return None
+        cmap = concept_map_from_page(stored.map)
+        fragments = [fragment_from_page(f) for f in stored.fragments]
+        slug = slugify(cmap.topic)
+        folder = self.config.paths.drafts_dir / "maps"
+        folder.mkdir(parents=True, exist_ok=True)
+        markdown = to_markdown(cmap, fragments, date.today())
+        md_path, canvas_path = folder / f"{slug}.md", folder / f"{slug}.canvas"
+        md_path.write_text(markdown, encoding="utf-8", newline="\n")
+        canvas = json.dumps(to_canvas(cmap, fragments), ensure_ascii=False, indent=2)
+        canvas_path.write_text(canvas + "\n", encoding="utf-8", newline="\n")
+        return {"markdown": str(md_path), "canvas": str(canvas_path), "outline": markdown}
+
     # --- helpers ----------------------------------------------------------------------------------
 
     def open_url(self, doc_path: str) -> str | None:
@@ -554,6 +752,10 @@ class Engine:
         self._embedder.close()
         if self._practice is not None:
             self._practice.close()
+        if self._conversations is not None:
+            self._conversations.close()
+        if self._map_history is not None:
+            self._map_history.close()
 
 
 def excerpt(text: str) -> str:
@@ -614,4 +816,27 @@ def question_json(q: StoredQuestion) -> dict[str, Any]:
         "text": q.content.text,
         "options": list(q.content.options),
         "guide": q.section.guide,
+    }
+
+
+def map_json(cmap: ConceptMap) -> dict[str, Any]:
+    return {
+        "topic": cmap.topic,
+        "nodes": [
+            {
+                "id": n.id,
+                "label": n.label,
+                "level": n.level,
+                "parent": n.parent,
+                "sources": list(n.sources),
+                "x": n.x,
+                "y": n.y,
+            }
+            for n in cmap.nodes
+        ],
+        "edges": [
+            {"source": e.source, "target": e.target, "label": e.label, "kind": e.kind}
+            for e in cmap.edges
+        ],
+        "omitted": cmap.omitted,
     }

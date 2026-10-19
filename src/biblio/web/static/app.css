@@ -121,6 +121,11 @@ button:disabled { opacity: .5; cursor: progress; }
 .pages a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px; color: var(--fg-2); font-weight: 500; text-decoration: none; }
 .pages a[aria-current="page"] { background: var(--accent-soft); color: var(--accent-soft-fg); font-weight: 600; }
 .theme-switch span { min-height: 36px; padding: 0 9px; }
+#reindex { width: 38px; height: 38px; }
+#history-toggle.active { background: var(--accent-soft); color: var(--accent-soft-fg); border-color: var(--accent-soft); }
+#reindex.spinning svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #reindex.spinning svg { animation: none; } }
 .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-soft-fg); font-size: 14px; font-weight: 500; }
 .pill::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .pill.off { background: var(--warn-bg); color: var(--warn-fg); }
@@ -202,6 +207,23 @@ button:disabled { opacity: .5; cursor: progress; }
 .source-text { max-height: 55vh; overflow: auto; padding: 16px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 #source-open { align-self: flex-start; }
 .path { margin: 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* --- conversation history (ADR-023) ------------------------------------------------------ */
+.history-side { flex: 1 1 230px; max-width: 280px; padding: 16px 12px; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.history-side input { min-height: 40px; padding: 0 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); font-size: 14px; }
+.history-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; max-height: calc(100vh - 170px); }
+.history-item { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; }
+.history-item:hover { background: var(--surface); }
+.history-item[aria-current="true"] { background: var(--accent-soft); color: var(--accent-soft-fg); }
+.history-item strong { font-size: 14px; font-weight: 600; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.history-item span { font-size: 12px; color: var(--muted); }
+.history-item .history-snippet { color: var(--fg-2); font-style: italic; }
+.history-side p { margin: 4px 8px; }
+.conversation-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; max-width: 820px; width: 100%; margin: 0 auto; padding: 16px 32px 0; }
+.conversation-bar h2 { margin: 0; font-size: 18px; min-width: 0; overflow-wrap: anywhere; }
+.conversation-bar form input { min-height: 40px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--surface); min-width: 260px; }
+.btn-ghost.danger { color: var(--bad-fg); }
+.conversation-status { max-width: 820px; width: 100%; margin: 4px auto 0; padding: 0 32px; min-height: 1em; }
 
 /* --- guías ------------------------------------------------------------------------------ */
 .small { font-size: 13px; }
@@ -334,6 +356,67 @@ a.btn.disabled { opacity: .5; pointer-events: none; }
 .result-mark { flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; color: var(--accent-fg); background: var(--accent); }
 .result-row.partial .result-mark { background: var(--warn-fg); color: var(--surface); }
 .result-row.wrong .result-mark { background: var(--bad-fg); color: var(--surface); }
+
+/* --- mapas ------------------------------------------------------------------------------ */
+.mapas { display: flex; flex-wrap: wrap; align-items: stretch; }
+.mapas-content { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; }
+.btn.danger-text { color: var(--bad-fg); }
+.map-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+.map-form { flex: 1 1 380px; display: flex; gap: 8px; }
+.map-form input { flex: 1 1 auto; min-width: 0; min-height: 48px; padding: 0 16px; border: 2px solid var(--accent); border-radius: 12px; background: var(--surface); font-size: 17px; }
+.map-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.map-tools .btn-icon { font-size: 20px; }
+.map-trail { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 14px; }
+.link-button { border: 0; background: transparent; padding: 2px 4px; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
+.link-button:hover { text-decoration: underline; }
+.link-button.current, .link-button:disabled { color: var(--fg); font-weight: 600; cursor: default; text-decoration: none; }
+.map-status { margin: 0; font-size: 14px; min-height: 1.4em; }
+.map-layout { flex: 1 1 auto; display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch; }
+.map-main { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; }
+.map-empty { max-width: 720px; padding: 32px 8px; }
+.map-empty h1 { margin: 0 0 8px; font-size: 26px; }
+.map-empty p { margin: 0; color: var(--fg-2); }
+.map-stage { flex: 1 1 auto; min-height: 560px; height: 68vh; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; cursor: grab; touch-action: none; }
+.map-stage:active { cursor: grabbing; }
+.map-svg { width: 100%; height: 100%; display: block; font-family: var(--sans); }
+.map-edge { fill: none; stroke: var(--line-2); stroke-width: 1.6; }
+.map-edge.cross { stroke: var(--accent); stroke-dasharray: 5 5; opacity: .6; }
+.map-edge.active { stroke: var(--accent); stroke-width: 2.4; opacity: 1; }
+.map-edge-label { fill: var(--muted); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+.map-edge-halo { fill: var(--surface); opacity: .9; }
+.map-node { cursor: pointer; }
+.map-node rect { fill: var(--surface); stroke: var(--line-2); stroke-width: 1.4; }
+.map-node text { fill: var(--fg); }
+.map-node.level-0 rect { fill: var(--accent); stroke: var(--accent); }
+.map-node.level-0 text { fill: var(--accent-fg); font-weight: 700; }
+.map-node.level-1 rect { fill: var(--accent-soft); stroke: var(--accent); }
+.map-node.level-1 text { fill: var(--accent-soft-fg); font-weight: 600; }
+.map-node.selected rect { stroke: var(--fg); stroke-width: 3; }
+.map-node:focus { outline: none; }
+.map-node:focus-visible rect { stroke: var(--fg); stroke-width: 3; stroke-dasharray: 4 3; }
+.map-outline { padding: 20px 24px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.map-outline h2 { margin: 0; font-size: 22px; }
+.map-outline ul ul { margin-top: 4px; }
+.map-panel { max-width: 420px; }
+.map-panel h2 { margin: 2px 0 0; font-size: 21px; }
+.map-panel h3 { margin: 6px 0 0; font-size: 15px; }
+#map-panel-view { display: flex; flex-direction: column; gap: 10px; }
+.map-relations { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.map-source { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+.map-source summary { cursor: pointer; }
+.map-source .source-text { margin: 8px 0; max-height: 260px; }
+
+@media (max-width: 720px) {
+  .history-side { max-width: none; border-right: 0; border-bottom: 1px solid var(--line); }
+  .history-list { max-height: 220px; }
+  .conversation-bar, .conversation-status { padding-left: 16px; padding-right: 16px; }
+}
+
+@media (max-width: 720px) {
+  .mapas-content { padding: 12px 16px; }
+  .map-stage { min-height: 420px; height: 60vh; }
+  .map-panel { max-width: none; }
+}
 
 @media (max-width: 720px) {
   .practicar { padding: 16px; }

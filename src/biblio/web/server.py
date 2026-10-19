@@ -13,12 +13,16 @@ import ipaddress
 import json
 from collections.abc import Callable, Generator
 from dataclasses import asdict
+from datetime import date
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
-from biblio.generate.draft import OutlineSection
+from biblio.conversations import NewTurn
+from biblio.conversations import to_markdown as conversation_markdown
+from biblio.generate.draft import OutlineSection, slugify
 from biblio.practice.quiz import SCOPE_KINDS
 from biblio.practice.store import KINDS, RESULTS
 from biblio.web.drafts import list_drafts, read_draft
@@ -32,6 +36,7 @@ _STATIC_FILES = {
     "/static/guias.js": ("guias.js", "text/javascript; charset=utf-8"),
     "/static/practicar.js": ("practicar.js", "text/javascript; charset=utf-8"),
     "/static/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
+    "/static/mapas.js": ("mapas.js", "text/javascript; charset=utf-8"),
 }
 _MAX_BODY = 64 * 1024
 _MAX_QUERY = 2000
@@ -174,6 +179,8 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if self.path == "/api/status":
                 self._send_json(engine.status())
                 return
+            if self._conversations_get() or self._maps_get():
+                return
             if self.path == "/api/folders":
                 folders = [{"path": p, "documents": n} for p, n in engine.folders()]
                 self._send_json({"folders": folders})
@@ -227,6 +234,13 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 "/api/practice/grade": self._practice_grade,
                 "/api/practice/review": self._practice_review,
                 "/api/practice/flag": self._practice_flag,
+                "/api/maps": self._map,
+                "/api/maps/save": self._map_save,
+                "/api/maps/delete": self._map_delete,
+                "/api/reindex": lambda _payload: self._stream(engine.reindex, needs_llm=False),
+                "/api/conversations/rename": self._conversation_rename,
+                "/api/conversations/delete": self._conversation_delete,
+                "/api/conversations/export": self._conversation_export,
             }
             route = routes.get(self.path)
             if route is None:
@@ -248,14 +262,18 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             ok, scope = self._scope_field(payload)
             if precision is None or not ok:
                 return
+            conversation = self._conversation_field(payload)
+            if conversation is False:
+                return
             result = engine.search(query, k, precise=precision == "precise", scope=scope)
-            self._send_json(
-                {
-                    "retriever": result.retriever,
-                    "milliseconds": round(result.milliseconds),
-                    "hits": [hit_json(h, engine) for h in result.hits],
-                }
-            )
+            data: dict[str, Any] = {
+                "retriever": result.retriever,
+                "milliseconds": round(result.milliseconds),
+                "hits": [hit_json(h, engine) for h in result.hits],
+            }
+            turn = NewTurn(query, "find", scope, "direct", "done", payload=data)  # ADR-023
+            data["conversation_id"], _ = engine.conversations.add_turn(conversation, turn)
+            self._send_json(data)
 
         def _ask(self, payload: dict[str, Any]) -> None:
             question = self._text_field(payload, "question")
@@ -263,10 +281,78 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 return
             strategy = self._choice_field(payload, "strategy", ("direct", "map-reduce"))
             ok, scope = self._scope_field(payload)
-            if strategy is None or not ok:
+            conversation = self._conversation_field(payload)
+            if strategy is None or not ok or conversation is False:
                 return
-            map_reduce = "on" if strategy == "map-reduce" else "off"  # opt-in only (ADR-017)
-            self._stream(lambda: engine.ask(question, scope=scope, map_reduce=map_reduce))
+            self._stream(
+                lambda: engine.ask_recorded(
+                    question, scope=scope, strategy=strategy, conversation_id=conversation
+                )
+            )
+
+        def _conversation_field(self, payload: dict[str, Any]) -> int | bool | None:
+            """The conversation of a message: an id, None to start one, False after a 400."""
+            value = payload.get("conversation_id")
+            if value is None:
+                return None
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+            self._send_json(
+                {"error": "'conversation_id' must be a positive integer"}, HTTPStatus.BAD_REQUEST
+            )
+            return False
+
+        # --- conversation history (ADR-023) -------------------------------------------------------
+
+        def _conversations_get(self) -> bool:
+            """GET /api/conversations[?q=…] and /api/conversations/<id>; False if not ours."""
+            parts = urlsplit(self.path)
+            if parts.path == "/api/conversations":
+                query = parse_qs(parts.query).get("q", [""])[0][:_MAX_QUERY]
+                found = engine.conversations.conversations(
+                    engine.config.conversations.list_limit, query or None
+                )
+                self._send_json({"conversations": [asdict(c) for c in found]})
+                return True
+            if not parts.path.startswith("/api/conversations/"):
+                return False
+            raw = parts.path.removeprefix("/api/conversations/")
+            got = engine.conversations.get(int(raw)) if raw.isdigit() else None
+            if got is None:
+                self._not_found()
+                return True
+            summary, turns = got
+            self._send_json({**asdict(summary), "turns": [asdict(t) for t in turns]})
+            return True
+
+        def _conversation_rename(self, payload: dict[str, Any]) -> None:
+            cid = self._id_field(payload, "id")
+            title = self._text_field(payload, "title", _MAX_TITLE)
+            if cid is not None and title is not None:
+                ok = engine.conversations.rename(cid, title)
+                self._send_json({"ok": True}) if ok else self._not_found()
+
+        def _conversation_delete(self, payload: dict[str, Any]) -> None:
+            cid = self._id_field(payload, "id")
+            if cid is not None:
+                ok = engine.conversations.delete(cid)
+                self._send_json({"ok": True}) if ok else self._not_found()
+
+        def _conversation_export(self, payload: dict[str, Any]) -> None:
+            cid = self._id_field(payload, "id")
+            if cid is None:
+                return
+            got = engine.conversations.get(cid)
+            if got is None:
+                self._not_found()
+                return
+            summary, turns = got
+            markdown = conversation_markdown(summary, turns, date.today())
+            folder = engine.config.paths.drafts_dir / "conversations"
+            folder.mkdir(parents=True, exist_ok=True)
+            path = folder / f"{slugify(summary.title)}-{summary.id}.md"
+            path.write_text(markdown, encoding="utf-8", newline="\n")
+            self._send_json({"path": str(path), "filename": path.name, "markdown": markdown})
 
         def _draft_outline(self, payload: dict[str, Any]) -> None:
             topic = self._text_field(payload, "topic", _MAX_TITLE)
@@ -285,6 +371,46 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 )
                 return
             self._stream(lambda: engine.write_draft(topic, sections))
+
+        # --- concept maps (ADR-022) -------------------------------------------------------------
+
+        def _map(self, payload: dict[str, Any]) -> None:
+            topic = self._text_field(payload, "topic", _MAX_TITLE)
+            ok, scope = self._scope_field(payload)
+            if topic is not None and ok:
+                self._stream(lambda: engine.concept_map(topic, scope))
+
+        def _map_save(self, payload: dict[str, Any]) -> None:
+            map_id = self._id_field(payload, "id")
+            if map_id is not None:
+                saved = engine.save_map(map_id)
+                self._send_json(saved) if saved is not None else self._not_found()
+
+        def _map_delete(self, payload: dict[str, Any]) -> None:
+            map_id = self._id_field(payload, "id")
+            if map_id is not None:
+                ok = engine.map_history.delete(map_id)
+                self._send_json({"ok": True}) if ok else self._not_found()
+
+        def _maps_get(self) -> bool:
+            """GET /api/maps/history[?q=…] and /api/maps/history/<id> (ADR-024); False if not."""
+            parts = urlsplit(self.path)
+            if parts.path == "/api/maps/history":
+                query = parse_qs(parts.query).get("q", [""])[0][:_MAX_QUERY]
+                found = engine.map_history.maps(engine.config.maps.history_limit, query or None)
+                self._send_json({"maps": [asdict(m) for m in found]})
+                return True
+            if not parts.path.startswith("/api/maps/history/"):
+                return False
+            raw = parts.path.removeprefix("/api/maps/history/")
+            stored = engine.map_history.get(int(raw)) if raw.isdigit() else None
+            if stored is None:
+                self._not_found()
+                return True
+            self._send_json(
+                {**asdict(stored.summary), "map": stored.map, "fragments": stored.fragments}
+            )
+            return True
 
         # --- practice (ADR-020) -----------------------------------------------------------------
 
@@ -410,10 +536,12 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             ok = engine.practice.flag(qid, note.strip())
             self._send_json({"ok": True}) if ok else self._not_found()
 
-        def _stream(self, start: Callable[[], Generator[Event, None, None]]) -> None:
+        def _stream(
+            self, start: Callable[[], Generator[Event, None, None]], needs_llm: bool = True
+        ) -> None:
             """Server-sent events from an engine generator. The first event is taken before the
             headers go out, so "no LLM" (503) and "busy" (409) are plain JSON errors."""
-            if not engine.llm_running():
+            if needs_llm and not engine.llm_running():
                 self._send_json(
                     {"error": "No LLM server running. Start it with scripts/serve-llm.ps1."},
                     HTTPStatus.SERVICE_UNAVAILABLE,

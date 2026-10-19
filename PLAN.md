@@ -121,6 +121,7 @@ Use the `memory-budget` and `rag-prompting` skills.
 - [x] Web UI v2, page **Conversar** (ADR-019): one thread, "Explicar" / "Solo ubicar", sources panel, settings, folder scope.
 - [x] Web UI v2, page **Guías** (ADR-019): the `draft` flow in the browser.
 - [x] Web UI v2, page **Practicar** (ADR-020): quizzes from library sections, local history.
+- [x] Conversation history (ADR-023): stored in `data/conversations.db`; list, reopen, search, rename, delete, export.
 - [x] One-step launcher (ADR-021): `Biblioteca.cmd` / `scripts/start.sh` → `biblio start`.
 - [x] File watcher for automatic reindexing.
       `biblio watch`: stdlib polling of (mtime, size) every 30 s, 10 s settle; GPU if free, else CPU (ADR-018).
@@ -160,23 +161,23 @@ Design to confirm in ADR-022:
 
 Tasks:
 
-- [ ] ADR-022: how maps are built (headings only, no LLM · LLM extraction per fragment checked against
+- [x] ADR-022 (Accepted: LLM extraction per fragment, checked against the text): how maps are built (headings only, no LLM · LLM extraction per fragment checked against
       the text · one LLM call for the whole map), the checking rules and the export formats. The user
       chooses.
 - [ ] Evaluation set written by the user: 8–12 topics, each with the key concepts a good map must
       contain (`eval/maps.jsonl`), and a review sheet like `ask-eval` to grade whether each node and
       relation is supported by its source.
-- [ ] `biblio.maps`: Spanish extraction prompt, JSON validation against the fragment text, merging
+- [x] `biblio.maps`: Spanish extraction prompt, JSON validation against the fragment text, merging
       (names and embeddings), hierarchy, typed `ConceptMap` (nodes, edges, sources).
-- [ ] `biblio map "tema"`: prints the map as an outline (for debugging and for the evaluation runner).
-- [ ] API: `/api/maps` streamed (nodes appear as each fragment is processed), `/api/maps/expand`,
+- [x] `biblio map "tema"`: prints the map as an outline (for debugging and for the evaluation runner).
+- [x] API: `/api/maps` streamed (nodes appear as each fragment is processed), `/api/maps/expand`,
       `/api/maps/save`. One generation at a time, like drafts and quizzes.
-- [ ] Page **Mapas**: radial SVG layout, pan and zoom, keyboard navigation between nodes, sources
+- [x] Page **Mapas**: radial SVG layout, pan and zoom, keyboard navigation between nodes, sources
       panel, expand, export, the text outline; checked with headless Edge screenshots.
 - [ ] Measure on the set: concept coverage, share of nodes and relations supported by their sources
       (user-graded), time to the first node and to the full map. Targets agreed with the user before
       the page is adopted.
-- [ ] Docs: README, CLAUDE.md, the log below.
+- [x] Docs: README, CLAUDE.md, the log below.
 
 **Exit criterion:** on the evaluation set, the user-graded share of supported nodes and relations
 meets the agreed target, and a map from 10 fragments completes within the agreed time (estimate:
@@ -235,3 +236,10 @@ Few cross-guide links, because the link graph is sparse.
 | 2026-10-17 | 7 | Web UI v2, page Practicar (ADR-020): `biblio.practice` (store in `data/practice.db`: quizzes, questions, attempts; section choice: failed first, then new, then oldest, flagged sections excluded, navigation/reference sections and sections outside `[practice]` token bounds skipped; generation per section with validated JSON and one retry; open-answer grading by the model with user review and agreement tracking), `/api/practice/*` (answers graded and recorded on the server, never sent before answering), `practicar.js`. Questions stream in while the first is answered (only the header updates, so typing is not interrupted); «Terminar» aborts generation. Live (Qwen3-4B): 4 questions of the 4 kinds in 9.7 s, model grade in 0.9 s; 8 multiple-choice from a topic in 29 s. Found live: explanations named options by position, wrong after shuffling; now the right answer's letter is chosen at random in the prompt and explanations use letters (0 of 8 numeric references after the fix). Driven end to end in headless Edge through the DevTools protocol with no page errors. Test history removed from `data/practice.db`. 13 new tests (338). |
 | 2026-10-17 | 7 | Web UI: light / system / dark theme switch in the top bar, saved in localStorage; `theme.js` (not deferred) applies it before the first paint, so the page never flashes the other theme. Checked in headless Edge with the OS in dark and light: each choice wins over the OS, survives a reload, and "system" follows the OS again. |
 | 2026-10-17 | 8 | Phase 8 (concept maps, page `Mapas`) planned at the user's request: design, tasks, exit criterion and risks. Not started: it needs ADR-022 and an evaluation set written by the user first. |
+| 2026-10-18 | 8 | ADR-022 accepted (user's choice): concept maps by LLM extraction per fragment, checked against the fragment text, merged and laid out in code. Next: the evaluation set of topics and key concepts (written by the user). |
+| 2026-10-18 | 8 | Concept maps built (ADR-022): `biblio.maps` (Spanish extraction prompt; concepts kept only if written in their fragment, relations only between kept concepts; merge by name and by query-embedding similarity with a cache; hierarchy in code: level 1 by fragments, relations and closeness to the topic, children need a stated relation or two shared fragments, weak one-word concepts dropped; radial layout computed in Python and shared by page and Canvas), `biblio map "tema"`, `/api/maps` streamed and `/api/maps/save` (Markdown + Obsidian Canvas in `drafts/maps/`), page Mapas (SVG, pan/zoom, keyboard focus on nodes, outline view, panel with relations and source fragments, Expandir/Explicar/Practicar, SVG download). Live: «Naive Bayes» 14 concepts from 10 fragments, first nodes 4.9 s, full map 34 s; «validación cruzada» 13 concepts, 32.6 s. Found live: children attached by one shared fragment were unrelated (now need a relation or two shared fragments); relation direction was ambiguous in the outline (now full sentences); the map was fitted only to its first nodes (now re-fitted until the user moves it). Pending: the user's evaluation set and the measurements against it. 8 new tests (346). |
+| 2026-10-19 | 7 | ADR-023 (user's choice): Conversar history on the server, `data/conversations.db` (conversations, messages with their full sources as page JSON, FTS5 over questions and answers with accent folding, AND search with snippets). `/api/search` and `/api/ask` take `conversation_id` and store each message when complete (errors too, with the id in the error event); `/api/conversations` list/search/detail, rename, delete, export to `drafts/conversations/`. Page: history panel with search, reopen, rename/export/delete bar; only the open conversation id stays in localStorage. 6 new tests (352). |
+| 2026-10-19 | 7 | Web UI: «Actualizar» button next to the notes count runs the incremental reindex from the page (`/api/reindex`, streamed progress; GPU if free, else CPU, as the watcher; 409 while another index run holds the lock; LLM not required). Engine: `_threaded` generalizes the threaded-event helper. Live: unchanged library checked in 1.0 s. 3 new tests (355). |
+| 2026-10-19 | 7 | Web UI: «Historial» button in the top bar (Conversar only) shows or hides the conversations panel; remembered in localStorage, `aria-expanded` kept in step, focus moves to the history search when opened. Checked in headless Edge. |
+| 2026-10-19 | 8 | ADR-024: map history in `data/maps.db` (map as sent to the page plus its source fragments; FTS5 over topic and concept names). Every map is stored when complete (`map_id` in the done event); `/api/maps/history[?q=]`, `/api/maps/history/<id>`, `/api/maps/delete`; «Guardar» now works on any stored map (domain objects rebuilt from the stored JSON). Page: history panel on Mapas, reopen without the LLM, «Borrar»; the «Historial» button now serves Conversar and Mapas, each remembering its own state. Checked in headless Edge. 1 new test (356). |
+| 2026-10-19 | 8 | Fix reported by the user (map of «quimica» off-topic): retrieval was right (10 fragments from `Cosas/Quimica`), but the topic rule merged every concept containing the topic word into the centre, so 21 branches («química orgánica», «bioquímica»…) vanished and their relations were attributed to the topic («quimica estudia carbono»). Now only the topic itself (give or take an article or plural) is the centre (regression test). Also: level 1 ranked by fragments more than by relations (a method's 5-step list no longer outranks the branches), `level1_max` 7→9, children need a relation stated in a fragment (shared fragments alone nested sibling branches under each other), prompt asks for relations to the topic and for reading direction. Live: «quimica» now 9 branches around the topic, children by stated relations, 40 s. |

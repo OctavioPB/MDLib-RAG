@@ -168,7 +168,13 @@ typed at the start of a message:
 | `/explicar <pregunta>` | tutor answer |
 | `/en <carpeta> <texto>` | limit to one folder, e.g. `/en Data Science/Syllabus regularización` |
 
-Settings and the thread are kept in your browser only; **Nueva conversación** clears the thread.
+**Your conversations are kept** (ADR-023). Every question and its answer, with its sources, is saved
+in `data/conversations.db` on this machine. The list on the left shows them newest first, titled with
+their first question; click one to reopen it and keep asking in it. The search box finds conversations
+by any words in their questions or answers (accents and case ignored). **Renombrar**, **Exportar**
+(a Markdown note with the answers, citations and sources, saved to `drafts/conversations/` and
+downloaded) and **Borrar** act on the open one; **Nueva conversación** starts another. **Historial**
+in the top bar shows or hides the list. The settings stay in the browser.
 
 **Guías** is the `draft` flow in the browser:
 
@@ -182,6 +188,27 @@ Guides are the same files `biblio draft` uses (`drafts/<tema>.outline.md` and `d
 the list on the left shows drafts made from the CLI too, and either can continue the other. One draft
 or quiz is generated at a time; the other pages keep working meanwhile. `#/guias/<tema>` links straight
 to one guide.
+
+**Mapas** draws a concept map of a topic from your notes (ADR-022):
+
+- Write a topic and press **Crear mapa**. The ten most relevant sections are read one by one; the map
+  grows as each is read (~3 s each, ~30 s in all).
+- Each concept comes from a fragment where it is written, and each relation was stated in a fragment;
+  anything the model names that is not in the text is dropped. The topic is in the centre, the most
+  connected concepts around it, and their sub-concepts further out.
+- Click a concept to see its relations and the fragments where it appears. **Expandir** makes a map of
+  that concept (the trail above lets you go back), **Explicar** asks about it in Conversar, and
+  **Practicar** makes a quiz on it.
+- **Esquema** shows the same map as an indented list with each relation written as a sentence.
+- **Every map is kept** (ADR-024) in `data/maps.db`: the list on the left shows them newest first,
+  can be searched by topic or by the concepts in them, and reopens a map instantly, without the LLM.
+  **Borrar** deletes the open map; **Historial** in the top bar shows or hides the list.
+- **Guardar** writes it to `drafts/maps/` as Markdown and as an Obsidian Canvas file (`.canvas`):
+  copy that file into your vault to open it in Obsidian, with each concept linked to its notes.
+  **Descargar SVG** saves the drawing. `uv run biblio map "tema"` prints the outline in the terminal.
+
+The model can still state a wrong relation between two real concepts; the map's quality is to be
+measured on an evaluation set before it is considered finished (PLAN Phase 8).
 
 **Practicar** makes quizzes from your own notes (ADR-020):
 
@@ -198,6 +225,11 @@ to one guide.
 
 The history stays on this machine in `data/practice.db`, apart from the index, so rebuilding the
 index never deletes it. The answer to a question is never sent to the page before you answer it.
+
+The button next to the notes count (top right) **updates the library**: an incremental reindex,
+like `biblio index`, with its progress in the counter; only new, changed or deleted notes are
+processed (about a second when nothing changed). It embeds on the GPU when free and on the CPU while
+the LLM server runs, and refuses politely if another index run is in progress.
 
 The buttons at the top right switch between a light theme, a dark one, or following your system
 (the default); the choice is remembered in the browser.

@@ -77,6 +77,10 @@ sibling_outline_lines = 25   # headings shown per sibling guide
 host = "127.0.0.1"           # loopback only; anything else is refused (ADR-016)
 port = 8765
 
+[conversations]
+db = "data/conversations.db" # Conversar history (ADR-023); apart from the index so `index --full` never deletes it
+list_limit = 200             # conversations listed in the side panel, newest first
+
 [practice]
 db = "data/practice.db"      # quiz history (ADR-020); apart from the index so `index --full` never deletes it
 max_questions = 20
@@ -86,6 +90,18 @@ question_max_tokens = 600    # LLM output budget for one generated question
 grade_max_tokens = 300       # LLM output budget for grading one open answer
 grader_min_agreement = 0.8   # model grades agreeing with yours less than this...
 grader_min_samples = 20      # ...after this many reviewed grades: the page warns they are unreliable
+
+[maps]
+fragments = 10               # retrieved sections read for one map (~3 s each with the LLM, ADR-022)
+max_fragment_chars = 6000    # longer sections (big tables) are cut to this before extraction
+concepts_per_fragment = 8    # asked of the model; more are cut
+extract_max_tokens = 700     # LLM output budget for one fragment's concepts and relations
+merge_similarity = 0.88      # cosine above which two concept names are merged as near-synonyms
+level1_max = 9               # concepts around the topic
+children_max = 5             # concepts under each of them
+max_nodes = 40               # past this a map stops being readable
+history_db = "data/maps.db" # generated maps (ADR-024); apart from the index
+history_limit = 200          # maps listed in the side panel, newest first
 
 [launcher]
 ollama_path = ""             # Ollama executable for `biblio start`; "" = find it on PATH or in its default folder

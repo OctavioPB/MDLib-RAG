@@ -14,6 +14,7 @@ import pytest
 
 from biblio.config import Config
 from biblio.generate.llm import Message
+from biblio.index.embedder import DeviceChoice
 from biblio.index.indexer import index_library
 from biblio.retrieve.rerank import RerankPlan
 from biblio.retrieve.store import open_index
@@ -28,6 +29,10 @@ GUIDES = {
     "alg/svd.md": "# SVD\n\n## Definición\n\n"
     + "La descomposición en valores singulares factoriza cualquier matriz real. " * 3,
 }
+
+
+# every file the page loads from /static/ (each must load nothing from outside)
+ASSETS = ("app.js", "app.css", "theme.js", "guias.js", "practicar.js", "mapas.js")
 
 
 class _Reranker:
@@ -82,6 +87,9 @@ def engine(config: Config, tmp_path: Path) -> Iterator[Engine]:
         plan_resolver=lambda _c: plan["value"],
         llm_factory=lambda _c: _LLM(),
         counter_factory=lambda _c: WordCounter(),
+        index_embedder_factory=lambda _c, _d: FakeEmbedder(),
+        index_counter_factory=lambda _c: WordCounter(),
+        index_device=lambda _c: DeviceChoice("cpu", "float32"),
     )
     engine.plan = plan  # type: ignore[attr-defined]  # lets tests flip the GPU plan
     yield engine
@@ -126,21 +134,15 @@ def test_page_and_assets_are_served_with_a_strict_policy(server: tuple[str, int]
     assert "script-src 'self'" in headers["content-security-policy"]
     assert headers["x-content-type-options"] == "nosniff"
     assert "access-control-allow-origin" not in headers
-    for path in (
-        "/static/app.js",
-        "/static/app.css",
-        "/static/guias.js",
-        "/static/practicar.js",
-        "/static/theme.js",
-    ):
-        assert request(server, "GET", path)[0] == 200
+    for name in ASSETS:
+        assert request(server, "GET", f"/static/{name}")[0] == 200
     assert request(server, "GET", "/static/../server.py")[0] == 404
 
 
 def test_static_assets_reference_no_external_url() -> None:
     """ADR-002: the UI must work with the network off, so nothing may load from outside."""
     static = resources.files("biblio.web") / "static"
-    for name in ("index.html", "app.js", "app.css", "guias.js", "practicar.js", "theme.js"):
+    for name in ("index.html", *ASSETS):
         text = (static / name).read_text(encoding="utf-8")
         assert not re.search(r"https?://|//cdn|@import", text), name
 
@@ -415,3 +417,113 @@ def test_closing_a_stream_stops_the_generation() -> None:
     closed.set()
     assert finished.wait(5)
     assert seen == ["a"]  # the next token raised inside the worker instead of being generated
+
+
+# --- conversation history (ADR-023) -------------------------------------------------------------
+
+
+def test_messages_are_stored_and_listed(
+    server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "llm_running", lambda: True)
+    _, _, raw = request(server, "POST", "/api/ask", {"question": "¿Qué hace Bayes?"})
+    done = _events(raw)[-1][1]
+    cid = done["conversation_id"]
+    _, _, body = request(
+        server, "POST", "/api/search", {"query": "valores singulares", "conversation_id": cid}
+    )
+    assert json.loads(body)["conversation_id"] == cid
+    _, _, body = request(server, "GET", "/api/conversations")
+    (listed,) = json.loads(body)["conversations"]
+    assert (listed["id"], listed["title"], listed["turns"]) == (cid, "¿Qué hace Bayes?", 2)
+    _, _, body = request(server, "GET", f"/api/conversations/{cid}")
+    detail = json.loads(body)
+    first, second = detail["turns"]
+    assert first["answer"] == "El teorema invierte probabilidades [1]."
+    assert first["payload"]["fragments"][0]["text"] and first["payload"]["done"]["grounded"]
+    assert second["mode"] == "find" and second["payload"]["hits"][0]["text"]  # shown as it was
+    _, _, body = request(server, "GET", "/api/conversations?q=singulares")
+    assert [c["id"] for c in json.loads(body)["conversations"]] == [cid]
+    assert request(server, "GET", "/api/conversations/999")[0] == 404
+    assert request(server, "POST", "/api/search", {"query": "x", "conversation_id": "1"})[0] == 400
+
+
+def test_a_failed_answer_is_stored_with_its_conversation(
+    server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _Broken:
+        def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+            raise RuntimeError("el modelo se cayó")
+            yield ""
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(engine, "llm_running", lambda: True)
+    monkeypatch.setattr(engine, "_llm_factory", lambda _c: _Broken())
+    _, _, raw = request(server, "POST", "/api/ask", {"question": "¿Y esto?"})
+    name, data = _events(raw)[-1]
+    assert name == "error" and "se cayó" in data["error"]
+    stored = engine.conversations.get(data["conversation_id"])
+    assert stored is not None and stored[1][0].status == "error"
+
+
+def test_rename_export_and_delete_a_conversation(
+    server: tuple[str, int], engine: Engine, tmp_path: Path
+) -> None:
+    _, _, body = request(server, "POST", "/api/search", {"query": "teorema de bayes"})
+    cid = json.loads(body)["conversation_id"]
+    assert (
+        request(server, "POST", "/api/conversations/rename", {"id": cid, "title": "Repaso"})[0]
+        == 200
+    )
+    status, _, body = request(server, "POST", "/api/conversations/export", {"id": cid})
+    exported = json.loads(body)
+    assert status == 200 and exported["markdown"].startswith("# Repaso\n")
+    assert Path(exported["path"]).parent == engine.config.paths.drafts_dir / "conversations"
+    assert request(server, "POST", "/api/conversations/delete", {"id": cid})[0] == 200
+    assert request(server, "POST", "/api/conversations/delete", {"id": cid})[0] == 404
+    assert request(server, "POST", "/api/conversations/rename", {"id": cid, "title": " "})[0] == 400
+
+
+# --- «Actualizar»: reindexing from the page -----------------------------------------------------
+
+
+def test_reindex_from_the_page(server: tuple[str, int], engine: Engine) -> None:
+    library = engine.config.paths.library
+    assert library is not None
+    (library / "est" / "nueva.md").write_text(
+        "# Nueva\n\n## Idea\n\n" + "Una nota nueva sobre el teorema central del límite. " * 3,
+        encoding="utf-8",
+    )
+    status, _, raw = request(server, "POST", "/api/reindex", {})
+    events = _events(raw)
+    names = [n for n, _ in events]
+    assert status == 200 and names[0] == "start" and names[-1] == "done"
+    assert events[0][1] == {"files": 3, "device": "cpu"}
+    done = events[-1][1]
+    assert (done["added"], done["unchanged"], done["documents"]) == (1, 2, 3)
+    assert json.loads(request(server, "GET", "/api/status")[2])["documents"] == 3
+    query = {"query": "teorema central del límite", "precision": "fast"}  # the fake reranker
+    _, _, body = request(server, "POST", "/api/search", query)  # always prefers «bayes»
+    assert json.loads(body)["hits"][0]["doc_path"] == "est/nueva.md"  # searchable at once
+
+
+def test_reindex_refuses_while_another_index_runs(server: tuple[str, int], engine: Engine) -> None:
+    import os
+
+    lock = engine.config.paths.index_db.with_name(engine.config.paths.index_db.name + ".lock")
+    lock.write_text(str(os.getpid()), encoding="utf-8")  # a live process holds the index
+    try:
+        status, _, body = request(server, "POST", "/api/reindex", {})
+        assert status == 409 and "actualizando" in json.loads(body)["error"]
+    finally:
+        lock.unlink()
+
+
+def test_reindex_does_not_need_the_llm(
+    server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "llm_running", lambda: False)
+    status, _, raw = request(server, "POST", "/api/reindex", {})
+    assert status == 200 and _events(raw)[-1][1]["unchanged"] == 2
