@@ -52,6 +52,8 @@ from biblio.maps.build import CachedEmbed, ConceptMap, generate_map, topic_in_te
 from biblio.maps.export import map_fragments, numbered_fragments, to_canvas, to_markdown
 from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
 from biblio.offline import loopback_port_open
+from biblio.practice.dictionary import Entry, build_dictionary, to_anki
+from biblio.practice.dictionary import to_markdown as dictionary_markdown
 from biblio.practice.feynman import (
     Idea,
     check_claims,
@@ -65,6 +67,7 @@ from biblio.practice.quiz import (
     choose_sections,
     generate_question,
     grade_answer,
+    is_content_heading,
 )
 from biblio.practice.srs import FSRS, SectionSchedule, due_today, schedule
 from biblio.practice.store import (
@@ -74,6 +77,7 @@ from biblio.practice.store import (
     Section,
     StoredQuestion,
 )
+from biblio.reader import note_tree
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
@@ -265,7 +269,13 @@ class Engine:
         return loopback_port_open(self.config.llm.base_url, self.config.llm.probe_timeout_s)
 
     def ask(
-        self, question: str, *, scope: str | None = None, map_reduce: str = "off"
+        self,
+        question: str,
+        *,
+        scope: str | None = None,
+        map_reduce: str = "off",
+        passage: Hit | None = None,
+        level: str | None = None,
     ) -> Generator[Event, None, None]:
         """UI events: ("meta", …) once, ("token", …) while generating, ("done", …) at the end."""
         with self.lock:
@@ -274,9 +284,15 @@ class Engine:
                 self._counter = self._counter_factory(self.config)
             llm = self._llm_factory(self.config)
             try:
-                tutor = Tutor(self.config, self._base(scope), llm, self._counter, map_reduce)
+                tutor = Tutor(self.config, self._base(scope), llm, self._counter, map_reduce, level)
                 t0 = time.perf_counter()
-                prepared = tutor.prepare(question)
+                prepared = (  # a passage of a note is fragment [1] (ADR-031)
+                    tutor.prepare_passage(
+                        question, passage, passage.text, self._section_of(passage)
+                    )
+                    if passage is not None
+                    else tutor.prepare(question)
+                )
                 yield (
                     "meta",
                     {
@@ -1004,7 +1020,14 @@ class Engine:
         return self._conversations
 
     def ask_recorded(
-        self, question: str, *, scope: str | None, strategy: str, conversation_id: int | None
+        self,
+        question: str,
+        *,
+        scope: str | None,
+        strategy: str,
+        conversation_id: int | None,
+        passage: Hit | None = None,
+        level: str | None = None,
     ) -> Generator[Event, None, None]:
         """`ask`, stored in the history when the answer is complete: the "done" event carries the
         conversation id. An error is stored too and sent as an ("error", …) event with the id."""
@@ -1013,7 +1036,11 @@ class Engine:
         parts: list[str] = []
         abstained = False
         try:
-            for name, data in self.ask(question, scope=scope, map_reduce=map_reduce):
+            level = level or self.config.tutor.default_level  # ADR-032
+            asked = self.ask(
+                question, scope=scope, map_reduce=map_reduce, passage=passage, level=level
+            )
+            for name, data in asked:
                 if name == "meta":
                     meta = data
                 elif name == "token":
@@ -1026,7 +1053,7 @@ class Engine:
                         strategy,
                         "done",
                         answer="".join(parts).strip(),
-                        payload={**meta, "done": data},
+                        payload={**meta, "done": data, "level": level},
                     )
                     cid, _ = self.conversations.add_turn(conversation_id, turn)
                     data = {**data, "conversation_id": cid}
@@ -1179,6 +1206,288 @@ class Engine:
         return {"markdown": str(md_path), "canvas": str(canvas_path), "outline": markdown}
 
     # --- helpers ----------------------------------------------------------------------------------
+
+    # --- the built-in reader (ADR-031) ------------------------------------------------------------
+
+    def _note_index(self) -> tuple[set[str], dict[str, str]]:
+        """Indexed note paths, and file name (lower case) → path for `[[wikilinks]]`."""
+        with self.lock:
+            paths = [
+                str(p) for (p,) in self._conn.execute("SELECT path FROM documents ORDER BY path")
+            ]
+        by_name: dict[str, str] = {}
+        for p in sorted(paths, key=lambda p: (p.count("/"), p)):  # the shallowest wins a clash
+            by_name.setdefault(p.rsplit("/", 1)[-1].lower(), p)
+        return set(paths), by_name
+
+    # --- «Diccionario» (ADR-034) ------------------------------------------------------------
+
+    def _guide_fragments(self, doc_path: str) -> tuple[list[Fragment], int]:
+        """A guide's content sections in order, numbered from 1 (navigation sections skipped),
+        at most `guide_max_fragments`; and how many content sections it has in all."""
+        cfg = self.config.dictionary
+        with self.lock:
+            rows = self._conn.execute(
+                "SELECT c.heading_path, c.text, c.start_line, c.end_line FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id WHERE d.path = ? ORDER BY c.start_line",
+                (doc_path,),
+            ).fetchall()
+        fragments: list[Fragment] = []
+        total = 0
+        for heading_json, text, start, end in rows:
+            heading = tuple(json.loads(heading_json))
+            if len(heading) < 2 or not is_content_heading(heading[-1]):
+                continue
+            total += 1
+            if len(fragments) == cfg.guide_max_fragments:
+                continue
+            fragments.append(
+                Fragment(
+                    len(fragments) + 1,
+                    doc_path,
+                    heading,
+                    text[: cfg.max_fragment_chars],
+                    start,
+                    end,
+                )
+            )
+        return fragments, total
+
+    def build_dictionary(self, kind: str, value: str) -> Generator[Event, None, None]:
+        """Events: ("start", {fragments}), ("entries", …) after each fragment with the entries so
+        far, then ("done", {id}). Raises ValueError before any event when nothing is found."""
+        self._claim_generation()
+        try:
+            cfg = self.config.dictionary
+            if kind == "guide":
+                titles = dict(self.practice_guides())
+                if value not in titles:
+                    raise ValueError("Esa guía no está en tu biblioteca indexada.")
+                fragments, available = self._guide_fragments(value)
+                title = titles[value]
+                focus = f"Guía: {title}. Incluye las entradas importantes del fragmento."
+            else:
+                with self.lock:
+                    hits = self._base().search(value, cfg.fragments * 2)
+                fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+                available = len(fragments)
+                title = value
+                focus = (
+                    f"Tema del diccionario: {value}. "
+                    "Incluye solo entradas relacionadas con el tema."
+                )
+            if not fragments:
+                raise ValueError("No encontré secciones con contenido para ese diccionario.")
+            yield (
+                "start",
+                {
+                    "title": title,
+                    "fragments": [fragment_json(f, self) for f in fragments],
+                    "available": available,  # a guide longer than the cap is read in part
+                },
+            )
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            entries: tuple[Entry, ...] = ()
+            skipped = 0
+            try:
+                turns = lambda: self._llm_lock  # noqa: E731  (generation and grading take turns)
+                for progress in build_dictionary(llm, cfg, focus, fragments, turns):
+                    entries, skipped = progress.entries, progress.skipped
+                    yield (
+                        "entries",
+                        {
+                            "processed": progress.processed,
+                            "skipped": progress.skipped,
+                            "entries": [_entry_json(e) for e in entries],
+                        },
+                    )
+            finally:
+                llm.close()
+            dictionary_id = self.practice.add_dictionary(
+                kind,
+                value,
+                title,
+                [_entry_json(e) for e in entries],
+                [_fragment_record(f) for f in fragments],
+            )
+            yield "done", {"id": dictionary_id, "skipped": skipped, "count": len(entries)}
+        finally:
+            self._generating.release()
+
+    def dictionary_view(self, dictionary_id: int) -> dict[str, Any] | None:
+        stored = self.practice.dictionary(dictionary_id)
+        if stored is None:
+            return None
+        fragments = [_fragment_from_record(r) for r in stored["fragments"]]
+        return {**stored, "fragments": [fragment_json(f, self) for f in fragments]}
+
+    def dictionary_review(
+        self, dictionary_id: int, index: int, result: str, quiz_id: int | None
+    ) -> dict[str, Any] | None:
+        """One flashcard answered: recorded as a self-graded question on the entry's section, so
+        it counts for the review schedule (ADR-025) and mastery (ADR-026)."""
+        stored = self.practice.dictionary(dictionary_id)
+        if stored is None or not 0 <= index < len(stored["entries"]):
+            return None
+        entry = stored["entries"][index]
+        by_number = {r["number"]: r for r in stored["fragments"]}
+        record = by_number.get(entry["sources"][0]) if entry["sources"] else None
+        if record is None:
+            return None
+        section = Section(
+            record["doc_path"],
+            tuple(record["heading_path"]),
+            record["start_line"],
+            record["end_line"],
+            record["text"],
+        )
+        if entry["kind"] == "concept":
+            question = f"¿Qué es «{entry['term']}»?"
+        elif entry["kind"] == "function":
+            question = f"¿Qué hace `{entry['detail']}`?"
+        else:
+            question = f"¿Qué calcula «{entry['term']}»: ${entry['detail']}$?"
+        store = self.practice
+        if quiz_id is None or store.quiz_scope(quiz_id) != ("card", str(dictionary_id)):
+            quiz_id = store.new_quiz("card", str(dictionary_id), len(stored["entries"]))
+        content = QuestionContent(
+            question,
+            entry["detail"] if entry["kind"] == "concept" else "",
+            reference=entry["text"],
+        )
+        qid = store.add_question(quiz_id, "open_self", section, content)
+        store.record_attempt(qid, "", result, "self")
+        store.mark_card(dictionary_id, index, result)  # the «sabida / a medias» mark per term
+        return {"quiz_id": quiz_id}
+
+    def dictionary_export(self, dictionary_id: int, fmt: str) -> tuple[str, str, str] | None:
+        """(file name, content type, text) of a Markdown or Anki export."""
+        stored = self.practice.dictionary(dictionary_id)
+        if stored is None:
+            return None
+        entries = [
+            Entry(e["kind"], e["term"], e["text"], e["detail"], tuple(e["sources"]))
+            for e in stored["entries"]
+        ]
+        fragments = [_fragment_from_record(r) for r in stored["fragments"]]
+        slug = slugify(stored["title"]) or f"diccionario-{dictionary_id}"
+        if fmt == "anki":
+            text = to_anki(stored["title"], entries, fragments)
+            return f"{slug}.anki.txt", "text/plain; charset=utf-8", text
+        today = date.today().isoformat()
+        text = dictionary_markdown(stored["title"], entries, fragments, today)
+        return f"{slug}.md", "text/markdown; charset=utf-8", text
+
+    def note_list(self) -> list[dict[str, Any]]:
+        """Every indexed note for the «Biblioteca» page (ADR-033): path, title, read mark."""
+        with self.lock:
+            rows = self._conn.execute("SELECT path, title FROM documents ORDER BY path").fetchall()
+        reads = self.practice.reads()
+        return [{"path": p, "title": t, "read": p in reads} for p, t in rows]
+
+    def note_view(self, doc_path: str) -> dict[str, Any] | None:
+        """An indexed note as a tree of blocks for the reader; None if it is not indexed."""
+        library = self.config.paths.library
+        paths, by_name = self._note_index()
+        if library is None or doc_path not in paths:
+            return None
+        file = library / doc_path
+        if not file.is_file():
+            return None
+
+        def resolve(target: str) -> str | None:
+            if target in paths:
+                return target
+            return by_name.get(target.rsplit("/", 1)[-1].lower())
+
+        text = file.read_bytes().decode("utf-8-sig", errors="replace")
+        tree = note_tree(text, doc_path, resolve)
+        return {
+            "path": doc_path,
+            **tree,
+            "open_url": self.open_url(doc_path),
+            "read": doc_path in self.practice.reads(),
+        }
+
+    def passage(self, doc_path: str, first: int, last: int, text: str) -> Hit | None:
+        """The selected text as a hit, under the heading path of the chunk where it starts."""
+        with self.lock:
+            row = self._conn.execute(
+                "SELECT c.id, c.heading_path FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id WHERE d.path = ? AND c.start_line <= ? "
+                "ORDER BY c.start_line DESC LIMIT 1",
+                (doc_path, max(first, 1)),
+            ).fetchone()
+            if row is None:  # before the first chunk (a title alone): the first chunk
+                row = self._conn.execute(
+                    "SELECT c.id, c.heading_path FROM chunks c "
+                    "JOIN documents d ON d.id = c.document_id WHERE d.path = ? "
+                    "ORDER BY c.start_line LIMIT 1",
+                    (doc_path,),
+                ).fetchone()
+        if row is None:
+            return None
+        heading = tuple(json.loads(row[1]))
+        return Hit(row[0], doc_path, heading, text, first, max(last, first), 0, 0.0, "passage")
+
+    def _section_of(self, passage: Hit) -> Hit | None:
+        """The indexed chunk the passage was found in, as context for explaining it (ADR-031);
+        called with `lock` held."""
+        row = self._conn.execute(
+            "SELECT d.path, c.heading_path, c.text, c.start_line, c.end_line "
+            "FROM chunks c JOIN documents d ON d.id = c.document_id WHERE c.id = ?",
+            (passage.chunk_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        path, heading, text, start, end = row
+        heading_path = tuple(json.loads(heading))
+        return Hit(passage.chunk_id, path, heading_path, text, start, end, 0, 0.0, "section")
+
+    def passage_quiz(self, passage: Hit, kinds: Sequence[str]) -> Generator[Event, None, None]:
+        """«Pregúntame sobre esto»: questions written from the passage only, kept as practice of
+        its section (ADR-031). Events as `start_quiz`."""
+        self._claim_generation()
+        try:
+            rng = random.Random()
+            section = Section(
+                passage.doc_path,
+                passage.heading_path,
+                passage.start_line,
+                passage.end_line,
+                passage.text,
+            )
+            if _section_key(section) in self.practice.flagged_sections():
+                raise ValueError(
+                    "Marcaste una pregunta de esta sección como mal hecha: "
+                    "no genero más sobre ella."
+                )
+            plan = assign_kinds(kinds, self.config.reader.passage_questions, rng)
+            store = self.practice
+            quiz_id = store.new_quiz("passage", passage.doc_path, len(plan))
+            yield "quiz", {"quiz_id": quiz_id, "planned": len(plan), "reused": False}
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            generated = 0
+            try:
+                for index, kind in enumerate(plan):
+                    with self._llm_lock:
+                        content = generate_question(llm, self.config, section, kind, rng)
+                    if content is None:
+                        yield "skipped", {"index": index, "citation": section.citation}
+                        continue
+                    stored = store.question(store.add_question(quiz_id, kind, section, content))
+                    assert stored is not None
+                    generated += 1
+                    yield "question", {"index": index, **question_json(stored)}
+            finally:
+                llm.close()
+            yield "done", {"generated": generated, "skipped": len(plan) - generated}
+        finally:
+            self._generating.release()
 
     def open_url(self, doc_path: str) -> str | None:
         """`obsidian://` link to the note: a local URI scheme, no network involved."""
@@ -1340,3 +1649,13 @@ def _fragment_record(f: Fragment) -> dict[str, Any]:
 def _fragment_from_record(r: dict[str, Any]) -> Fragment:
     heading = tuple(r["heading_path"])
     return Fragment(r["number"], r["doc_path"], heading, r["text"], r["start_line"], r["end_line"])
+
+
+def _entry_json(e: Entry) -> dict[str, Any]:
+    return {
+        "kind": e.kind,
+        "term": e.term,
+        "text": e.text,
+        "detail": e.detail,
+        "sources": list(e.sources),
+    }

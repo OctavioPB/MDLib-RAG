@@ -14,7 +14,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
 
-from biblio.config import Config
+from biblio.config import TUTOR_LEVELS, Config
 from biblio.generate.citations import Validation, is_abstention, validate
 from biblio.generate.context import Context, Fragment, assemble
 from biblio.generate.llm import LLMClient, Message
@@ -66,6 +66,7 @@ class Tutor:
         llm: LLMClient,
         counter: TokenCounter,
         map_reduce: str | None = None,  # overrides llm.map_reduce: "auto" | "on" | "off"
+        level: str | None = None,  # beginner | intermediate | advanced (ADR-032)
     ) -> None:
         self._config = config
         self._retriever = retriever
@@ -73,12 +74,21 @@ class Tutor:
         self._counter = counter
         self._mode = map_reduce or config.llm.map_reduce
         self.abstention = load_prompt("abstention")
-        self._system = load_prompt("tutor_system").format(abstention=self.abstention)
+        self.level = level or config.tutor.default_level
+        if self.level not in TUTOR_LEVELS:
+            raise ValueError(f"unknown tutor level {self.level!r}")
+        level_block = load_prompt(f"tutor_level_{self.level}")
+        self._answer_tokens = config.tutor.max_tokens(self.level)
+        self._system = load_prompt("tutor_system").format(
+            abstention=self.abstention, level=level_block
+        )
         self._user = load_prompt("tutor_user")
         self._empty = load_prompt("map_empty")
         self._map_system = load_prompt("map_system").format(empty=self._empty)
         self._map_user = load_prompt("map_user")
-        self._reduce_system = load_prompt("reduce_system").format(abstention=self.abstention)
+        self._reduce_system = load_prompt("reduce_system").format(
+            abstention=self.abstention, level=level_block
+        )
         self._reduce_user = load_prompt("reduce_user")
 
     # --- preparation ----------------------------------------------------------------------------
@@ -93,12 +103,38 @@ class Tutor:
             return direct
         return self._map_reduce_plan(question, hits)
 
-    def _direct(self, question: str, hits: Sequence[Hit]) -> PreparedAsk:
+    def prepare_passage(
+        self, question: str, passage: Hit, query: str, around: Hit | None = None
+    ) -> PreparedAsk:
+        """A question about a passage of a note (ADR-031): the passage is fragment [1], the section
+        it sits in (`around`) [2], then what retrieval finds for `query`; hits overlapping either
+        are left out."""
+        pinned = [passage] if around is None else [passage, around]
+
+        def overlaps(h: Hit) -> bool:
+            return any(
+                h.doc_path == p.doc_path
+                and h.start_line <= p.end_line
+                and p.start_line <= h.end_line
+                for p in pinned
+            )
+
+        hits = [
+            h
+            for h in self._retriever.search(query, self._config.retrieval.final_k)
+            if not overlaps(h)
+        ]
+        # pinned first, never merged with each other (the passage is inside its section)
+        return self._direct(question, [*pinned, *hits], merge=False)
+
+    def _direct(self, question: str, hits: Sequence[Hit], merge: bool = True) -> PreparedAsk:
         llm = self._config.llm
         fixed = self._counter.count(self._system) + self._counter.count(
             self._user.format(evidence="", question=question)
         )
-        context = assemble(hits, self._counter, llm.context_budget_tokens, llm.max_fragments, fixed)
+        context = assemble(
+            hits, self._counter, llm.context_budget_tokens, llm.max_fragments, fixed, merge
+        )
         evidence = context.render() or "(ningún fragmento)"
         messages = (
             Message("system", self._system),
@@ -151,7 +187,7 @@ class Tutor:
             yield self.abstention
             return
         if prepared.strategy == DIRECT:
-            yield from self._llm.stream(prepared.messages, self._config.llm.max_answer_tokens)
+            yield from self._llm.stream(prepared.messages, self._answer_tokens)
             return
         for group in prepared.groups:
             guide = f"{group[0].heading_path[0]} ({group[0].doc_path})"
@@ -170,7 +206,7 @@ class Tutor:
             Message("system", self._reduce_system),
             Message("user", self._reduce_user.format(notes=notes, question=prepared.question)),
         )
-        yield from self._llm.stream(messages, self._config.llm.max_answer_tokens)
+        yield from self._llm.stream(messages, self._answer_tokens)
 
     def finish(self, prepared: PreparedAsk, text: str) -> Answer:
         validation = validate(text, len(prepared.context.fragments), self.abstention)

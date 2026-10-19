@@ -1,0 +1,2 @@
+KaTeX 0.16.11 (https://katex.org), MIT license (see LICENSE), vendored for the built-in reader (ADR-031).
+Files: dist/katex.min.js, dist/katex.min.css with only the .woff2 font sources kept, dist/fonts/*.woff2.

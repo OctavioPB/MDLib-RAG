@@ -249,11 +249,14 @@ function renderReview() {
       const item = el("details", "map-source");
       item.append(el("summary", null, `[${f.number}] ${f.citation}`));
       item.append(el("div", "source-text", f.text));
+      const links = el("div", "row");
+      links.append(readLink(f.doc_path, f.lines[0]));
       if (f.open_url) {
-        const open = el("a", "btn-soft", "Abrir en Obsidian");
+        const open = el("a", "btn", "Abrir en Obsidian");
         open.href = f.open_url;
-        item.append(open);
+        links.append(open);
       }
+      item.append(links);
       nodes.push(item);
     }
   }

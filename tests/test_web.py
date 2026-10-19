@@ -40,6 +40,10 @@ ASSETS = (
     "practicar.js",
     "feynman.js",
     "plan.js",
+    "reader.js",
+    "library.js",
+    "dictionary.js",
+    "devices.js",
     "mapas.js",
 )
 
@@ -536,3 +540,20 @@ def test_reindex_does_not_need_the_llm(
     monkeypatch.setattr(engine, "llm_running", lambda: False)
     status, _, raw = request(server, "POST", "/api/reindex", {})
     assert status == 200 and _events(raw)[-1][1]["unchanged"] == 2
+
+
+def test_page_scripts_do_not_redefine_each_others_globals() -> None:
+    # classic scripts share one global scope: a later file's `function x` silently replaces an
+    # earlier one (reader.js once replaced app.js's inlineNodes, mapas.js guias.js's renderOutline)
+    import collections
+
+    static = Path(__file__).parents[1] / "src" / "biblio" / "web" / "static"
+    owners: dict[str, list[str]] = collections.defaultdict(list)
+    for name in ASSETS:
+        if not name.endswith(".js"):
+            continue
+        text = (static / name).read_text(encoding="utf-8")
+        for found in re.findall(r"^(?:async )?function (\w+)|^(?:const|let) (\w+)", text, re.M):
+            owners[found[0] or found[1]].append(name)
+    clashes = {k: v for k, v in owners.items() if len(v) > 1}
+    assert clashes == {}

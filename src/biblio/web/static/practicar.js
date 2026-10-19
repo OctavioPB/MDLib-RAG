@@ -37,6 +37,7 @@ const SCREENS = {
   form: "practice-form-screen",
   "feynman-intro": "practice-feynman-intro",
   progress: "practice-progress-screen",
+  dictionary: "practice-dictionary", // dictionary.js (ADR-034)
 };
 
 function showScreen(name) {
@@ -560,11 +561,14 @@ function feedbackNode(q, state) {
   const source = el("details", "source-details");
   source.append(el("summary", null, "Ver la sección de tus notas"));
   source.append(el("div", "source-text", f.source.text));
+  const links = el("div", "row");
+  links.append(readLink(f.source.doc_path, f.source.lines[0]));
   if (f.source.open_url) {
-    const open = el("a", "btn-soft", "Abrir en Obsidian");
+    const open = el("a", "btn", "Abrir en Obsidian");
     open.href = f.source.open_url;
-    source.append(open);
+    links.append(open);
   }
+  source.append(links);
   box.append(source);
 
   const actions = el("div", "row-between");

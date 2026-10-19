@@ -225,7 +225,7 @@ const app = {
   folders: [], // [{path, documents}]
   llmRunning: false,
   settings: Object.assign(
-    { mode: "explain", precision: "precise", k: 8, scope: "", strategy: "direct" },
+    { mode: "explain", precision: "precise", k: 8, scope: "", strategy: "direct", level: "intermediate" },
     store.get("biblio.settings", {}),
   ),
   thread: [], // the open conversation's messages, from the server (ADR-023)
@@ -234,6 +234,20 @@ const app = {
   busy: false,
   selection: null, // {turn, index}
 };
+
+// answer levels (ADR-032); chosen per message, the last one restored with a conversation
+const LEVEL_LABELS = { beginner: "Principiante", intermediate: "Intermedio", advanced: "Avanzado" };
+
+function setLevel(level) {
+  if (!LEVEL_LABELS[level]) return;
+  app.settings.level = level;
+  for (const radio of document.querySelectorAll('input[name="level"]')) radio.checked = radio.value === level;
+  saveSettings();
+}
+
+function syncLevelChoice() {
+  $("level-choice").hidden = app.settings.mode !== "explain";
+}
 
 function saveSettings() {
   store.set("biblio.settings", app.settings);
@@ -247,7 +261,7 @@ function setConversation(id) {
 
 // --- router --------------------------------------------------------------------------------
 
-const PAGES = ["conversar", "guias", "practicar", "mapas"];
+const PAGES = ["conversar", "guias", "practicar", "mapas", "biblioteca", "leer"]; // leer: from Biblioteca
 const pageHooks = {}; // page name → function run each time the page is shown (set by guias.js, …)
 
 function currentPage() {
@@ -258,8 +272,9 @@ function currentPage() {
 function route() {
   const page = currentPage();
   for (const name of PAGES) $(`page-${name}`).hidden = name !== page;
+  const menuPage = page === "leer" ? "biblioteca" : page; // the reader belongs to Biblioteca (ADR-033)
   for (const link of document.querySelectorAll(".pages a")) {
-    if (link.dataset.page === page) link.setAttribute("aria-current", "page");
+    if (link.dataset.page === menuPage) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
   }
   $("new-thread").hidden = page !== "conversar";
@@ -416,7 +431,9 @@ function citeButton(turn, number, known) {
 
 function answerNode(turn) {
   const known = new Set((turn.fragments || []).map((f) => f.number));
-  return markdownNode(turn.answer || "", (n) => citeButton(turn, Number(n), known), "md answer");
+  const node = markdownNode(turn.answer || "", (n) => citeButton(turn, Number(n), known), "md answer");
+  // formulas in the answer, once it is complete (reader.js, KaTeX vendored: ADR-031)
+  return turn.done && typeof renderMathIn === "function" ? renderMathIn(node) : node;
 }
 
 // «Apuntado como tema pendiente · Deshacer» under an answer or a map (ADR-029)
@@ -470,6 +487,9 @@ function resultsNode(turn) {
     main.append(el("span", null, `${hit.guide} · líneas ${hit.lines[0]}–${hit.lines[1]}`));
     main.addEventListener("click", () => selectSource(turn, index));
     li.append(main);
+    const read = readLink(hit.doc_path, hit.lines[0], null);
+    read.setAttribute("aria-label", `Leer ${hit.guide} aquí`);
+    li.append(read);
     if (hit.open_url) {
       const open = el("a", null, "Abrir");
       open.href = hit.open_url;
@@ -511,7 +531,8 @@ function turnNode(turn) {
   const reply = el("article", "reply");
   const meta = el("div", "reply-meta");
   const explain = turn.mode === "explain";
-  meta.append(el("span", `tag ${explain ? "explain" : ""}`, explain ? "Explicación" : "Ubicación"));
+  const levelLabel = explain && turn.level ? ` · ${LEVEL_LABELS[turn.level] || turn.level}` : "";
+  meta.append(el("span", `tag ${explain ? "explain" : ""}`, explain ? `Explicación${levelLabel}` : "Ubicación"));
   reply.append(meta);
 
   if (turn.status === "error") {
@@ -586,6 +607,7 @@ function showSource() {
   $("source-text").scrollTop = 0;
   $("source-open").hidden = !item.open_url;
   if (item.open_url) $("source-open").href = item.open_url;
+  $("source-read").href = readerHref(item.doc_path, item.lines[0]); // ADR-031
   $("source-path").textContent = item.doc_path;
   $("source-prev").disabled = items.length < 2;
   $("source-next").disabled = items.length < 2;
@@ -629,6 +651,7 @@ async function runExplain(turn) {
     scope: turn.scope || null,
     strategy: turn.strategy,
     conversation_id: app.conversationId,
+    level: turn.level,
   };
   try {
     await streamEvents("/api/ask", body, (name, data) => {
@@ -661,6 +684,7 @@ async function send(raw, overrides = {}) {
     mode: overrides.mode || parsed.mode || app.settings.mode,
     scope: overrides.scope !== undefined ? overrides.scope : parsed.scope ?? app.settings.scope,
     strategy: app.settings.strategy,
+    level: app.settings.level,
     status: "pending",
   };
   app.thread.push(turn);
@@ -708,6 +732,7 @@ function turnFromRecord(record) {
     error: record.error,
   };
   if (record.mode === "explain") {
+    turn.level = record.payload.level || null;
     turn.answer = record.answer;
     turn.fragments = record.payload.fragments || [];
     turn.done = record.payload.done || null;
@@ -746,6 +771,8 @@ async function openConversation(id) {
   setConversation(data.id);
   app.title = data.title;
   app.thread = data.turns.map(turnFromRecord);
+  const lastLevel = [...app.thread].reverse().find((t) => t.level);
+  if (lastLevel) setLevel(lastLevel.level); // continue at the level the conversation was at
   app.selection = null;
   renderThread();
   showSource();
@@ -933,8 +960,14 @@ function bindSettings() {
     radio.addEventListener("change", () => {
       app.settings.mode = radio.value;
       saveSettings();
+      syncLevelChoice();
     });
   }
+  for (const radio of document.querySelectorAll('input[name="level"]')) {
+    radio.addEventListener("change", () => setLevel(radio.value));
+  }
+  setLevel(app.settings.level);
+  syncLevelChoice();
   $("settings-toggle").addEventListener("click", () => {
     const open = $("settings").hidden;
     $("settings").hidden = !open;

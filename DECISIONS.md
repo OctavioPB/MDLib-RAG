@@ -20,7 +20,7 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 013 | Memory budget < 8 GB; the GPU serves whichever workload is active, the LLM has priority | Superseded by ADR-014 |
 | 014 | As ADR-013, but `search` skips the reranker (plain hybrid) when the GPU is not free | Accepted |
 | 015 | Qwen3-4B-Instruct-2507 (Q4_K_M, KV q8_0, 8k context) on Ollama, behind `LLMClient` | Accepted |
-| 016 | Local web UI for `search` and `ask`: stdlib HTTP server + own HTML/JS, loopback only | Accepted |
+| 016 | Local web UI for `search` and `ask`: stdlib HTTP server + own HTML/JS, loopback only | Accepted; loopback-only relaxed by ADR-035 when LAN mode is on |
 | 017 | Map-reduce is a manual opt-in for `ask`, off by default | Accepted |
 | 018 | Automatic reindexing by polling file metadata (stdlib), GPU if free else CPU | Accepted |
 | 019 | Web UI v2: Conversar, Guías and Practicar pages on the stdlib server | Accepted |
@@ -35,6 +35,11 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 028 | Study plan per folder: an order proposed by the LLM, states from reading marks and practice | Accepted |
 | 029 | Gap detector: abstentions and thin maps become pending topics, offered in Guías | Partly superseded by ADR-030 (merging, thin map) |
 | 030 | Gap detector: thin maps include an absent topic; merging confirmed by the LLM | Accepted · Supersedes part of ADR-029 |
+| 031 | Built-in reader: notes rendered from parser tokens, KaTeX vendored, passage actions in a side panel | Accepted; «Access» superseded by ADR-033 |
+| 032 | Tutor levels (principiante, intermedio, avanzado) as prompt blocks chosen per message | Accepted |
+| 033 | A «Biblioteca» page in the menu to browse and open notes in the reader | Accepted · Supersedes part of ADR-031 |
+| 034 | Dictionary of a topic or guide: concepts, functions and formulas checked against the notes; flashcards | Accepted |
+| 035 | LAN mode: the web UI on the home network for paired phones and tablets, off by default | Accepted · Supersedes part of ADR-016 |
 
 ---
 
@@ -261,7 +266,7 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 
 ## ADR-016 — Local web UI for `search` and `ask`: stdlib HTTP server + own HTML/JS, loopback only
 
-**Date:** 2026-10-17 · **State:** Accepted
+**Date:** 2026-10-17 · **State:** Accepted; «loopback only» relaxed by ADR-035 while LAN mode is on
 
 **Context.** Phase 7 lists a local web interface as optional; the user asked for one view to search and one to ask. It must keep the project's guarantees: no network at runtime (ADR-002: no CDN, web fonts or external scripts), never reachable from the LAN, and the GPU rules of ADR-014/015 (the reranker and the LLM never share the GPU). A server also keeps models loaded between queries, which the CLI cannot.
 
@@ -536,3 +541,76 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 - **Merging.** Embeddings only shortlist: topics with cosine ≥ `gaps.candidate_similarity` (0.55) to the new one, up to `gaps.max_candidates`, most similar first. With candidates, the LLM is asked whether the new question is on the same subject as one of them, answering with its number or 0; a number outside the list counts as 0. Without candidates, or when the model's reply is unusable, the topic is new. `gaps.merge_similarity` is removed.
 
 **Consequences.** (+) The clearest gaps (a topic the notes never mention) are caught by maps too. (+) Merging follows meaning, not surface similarity. (−) One more short LLM call when there are candidates (~1 s, after the answer). (−) A topic mentioned only in passing in one fragment does not count as absent.
+
+## ADR-031 — Built-in reader: notes rendered from parser tokens, KaTeX vendored, passage actions in a side panel
+
+**Date:** 2026-10-19 · **State:** Accepted; its «Access» superseded by ADR-033
+
+**Context.** PLAN 9.9. The user wants to open a note inside the app, select a passage and ask «explícame esto» or «pregúntame sobre esto». The notes are mostly text, tables and code; 64 hold display formulas (`$$`) and many more inline ones. The web UI loads nothing from outside and inserts library text only as text (ADR-016). The user chose KaTeX inside the app, the explanation and the questions in a panel beside the note, and a «Leer» button wherever a note appears.
+
+**Decision.**
+- **Rendering from the indexer's parser.** The server parses the note with the same `markdown-it-py` setup as ingestion (CommonMark, tables, `dollarmath`; frontmatter skipped) and sends a tree of typed blocks and inline nodes, each block with its source lines. The page builds the DOM from it with `textContent`, never HTML. Raw HTML in a note is shown as code. `[[wikilinks]]` and links to `.md` files are resolved to indexed notes and open in the reader; other links open in a new tab; images are shown as their alt text (5 notes have any). Only indexed notes can be opened.
+- **KaTeX 0.16.11 vendored** in `static/vendor/katex/` (MIT, license kept): the minified script, its stylesheet rewritten to load only the `.woff2` fonts, and those fonts, served by the app. Audited: no network API in the code (its `fetch()` is the parser's token method), and the only URLs are the SVG and MathML namespace names, which are never requested. It builds the DOM through the DOM API, so the CSP needs no change. A formula KaTeX cannot parse is shown as its LaTeX source.
+- **Passage → section.** The page sends the selected text and its first and last source lines. The server finds the indexed chunk holding those lines, whose heading path is the section key of the practice history (ADR-020) and the citation.
+- **«Explícame esto».** A tutor answer (rule 2) in the side panel. The passage is fragment [1] (cited as its section), followed by what retrieval finds for the passage text elsewhere in the library, within the usual context budget. The question and the answer are stored in the Conversar history, where the conversation can continue.
+- **«Pregúntame sobre esto».** `reader.passage_questions` (3) questions written from the passage only, of the kinds checked in Practicar among multiple choice, true/false and open self-graded (an answer graded by the model needs the Practicar screen). They are ordinary practice questions on the passage's section, so they count for reviews (ADR-025) and mastery (ADR-026), and are answered in the panel through the existing practice API.
+- **Access.** A page `#/leer?path=…&line=…`, not in the top menu, opened by «Leer» next to «Abrir en Obsidian» (Conversar sources, Mapas fragments, the study plan, Practicar and Explícamelo tú sources), scrolled to the cited line. It also offers «Abrir en Obsidian» and «Marcar como leída» (ADR-028).
+
+**Consequences.** (+) Read, ask and practise without leaving the app, with formulas rendered and every answer cited. (+) Same parser as the index, so lines and sections match the citations exactly. (+) No change to the CSP or the network guarantee. (−) About 600 KB of vendored files to update by hand. (−) Obsidian-only syntax (callouts, embeds, Mermaid, Dataview) is shown plainly. (−) A selection across two sections is keyed to the section where it starts.
+
+## ADR-032 — Tutor levels (principiante, intermedio, avanzado) as prompt blocks chosen per message
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** The user wants Conversar to answer at three levels: a beginner level (the simplest words, as to a child, with simple examples), an intermediate one (the guides' own terms, going deeper, advanced concepts explained simply) and an advanced one (relating the topic to others, advanced terms, answering as a master's-degree teacher), switchable at will within a conversation. Two of these pull against rule 2 (only the notes, every claim cited): an example is knowledge the notes may not hold, and «relating to other topics» invites the model to bring its own.
+
+**Decision.**
+- **One tutor prompt, one level block.** The system prompt keeps the grounding rules and gets the chosen level's block (`prompts/tutor_level_<level>.txt`), which sets register, structure and length. The map-reduce final answer gets the same block. The level only changes how the evidence is explained, never what evidence is used: retrieval, fragments and the abstention rule are the same for all three.
+- **The two exceptions, bounded.** Principiante may add one everyday comparison, introduced as a comparison («Es como…»), uncited and adding no technical fact. Avanzado relates the topic to others only through relations written in the fragments (often from several guides) and cited; when an expert would expect something the notes do not cover, it says so in one sentence instead of supplying it.
+- **Output budget per level** in config (`[tutor]`): 700 / 1024 / 1536 tokens. With the 6000-token evidence budget this stays within the 8k context of ADR-015.
+- **Chosen per message.** A selector in the composer (Principiante · Intermedio · Avanzado), default Intermedio (the closest to the previous prompt), remembered in the browser. Each turn stores its level in the history; opening a conversation restores the level of its last turn, and changing it applies from the next message. The reader's «Explícame esto» (ADR-031) uses the same setting.
+- **Measured before adoption.** The answer set (`eval/questionsv3.jsonl`) is run with the old prompt and with each level, comparing grounded answers, abstention and citations automatically, and leaving review sheets for the user to grade faithfulness.
+
+**Consequences.** (+) The same notes serve a first contact and a deep review. (+) Grounding and abstention unchanged. (−) Principiante's comparison is the one uncited sentence an answer may hold, clearly marked. (−) A 4B model follows register instructions imperfectly; the measurement shows how often citations suffer.
+
+## ADR-033 — A «Biblioteca» page in the menu to browse and open notes in the reader
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-031, «Access» (the reader not in the menu)
+
+**Context.** ADR-031 opened the reader only from a «Leer» button next to a note shown elsewhere. Asked how to open the reader, the user found no way in without first searching or practising, and chose the alternative ADR-031 had left out: a page in the menu.
+
+**Decision.** A «Biblioteca» entry in the top menu opens a page listing every indexed note, by folder (a collapsible tree with note counts) and with a box that filters by title or path as you type, accent- and case-insensitively. Each note shows whether it is marked as read (ADR-028) and opens in the reader. The notes read most recently in the reader are listed first, kept in the browser (a convenience, like the theme). The list comes from one request (`GET /api/notes`: path, title, read mark), filtered in the page; no LLM, no retrieval. While the reader is open, «Biblioteca» is the highlighted menu entry. The «Leer» buttons of ADR-031 stay.
+
+**Consequences.** (+) Any note can be opened in two clicks. (+) One small request (~2,700 notes); nothing new stored on the server. (−) One more page in the menu (five).
+
+## ADR-034 — Dictionary of a topic or guide: concepts, functions and formulas checked against the notes; flashcards
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** The user wants a «Diccionario» in Practicar: take a topic, extract its main concepts with a short description, and for code or mathematics its functions and formulas. It is also the base of PLAN 9.5 (flashcards). The user chose a topic or a guide as the source, short definitions backed by a checked quote, functions and formulas as their own sections, and a history, flashcard review counting for the review schedule, and Markdown and Anki exports.
+
+**Decision.**
+- **Source.** A topic: the `dictionary.fragments` content sections retrieval finds for it, as maps do (ADR-022). Or a guide: its content sections in order, up to `dictionary.guide_max_fragments`.
+- **Extraction per fragment**, streamed as it goes. The model returns three lists. Concepts: a term, a definition of one or two sentences in its own words, and a literal quote from the fragment that supports it. Functions: a name, the signature as written in the code, and what it does. Formulas: the formula as written, a name, and what it computes.
+- **Checked against the text** (accent, case and spacing folded, as ADR-022/027). A concept needs its term and its quote in the fragment. A function needs its signature in the fragment, containing its name. A formula needs its LaTeX in the fragment, spaces ignored. Anything else is dropped. Entries repeated across fragments are merged (the same folded term, function name or formula) and keep every source; at most `dictionary.max_entries`.
+- **Kept.** Every dictionary is stored in `data/practice.db` with its entries and the fragments they cite, listed and searchable in the page, reopened without the LLM; each entry links to its section in the reader (ADR-031).
+- **Flashcards.** «Repasar como fichas» shows the term, the signature or the formula; turned over, the definition and its quote; the user says «La sabía», «A medias» or «No la sabía». Each answer is recorded as a self-graded open question on the entry's section (its definition as the reference), so it moves that section's FSRS schedule (ADR-025) and mastery (ADR-026), and a later review without the LLM can ask it again.
+- **Exports.** Markdown (one section per list, each entry with its citation) and Anki (tab-separated front/back with Anki's header lines; formulas as `\(…\)`, which Anki renders), downloaded from the page.
+
+**Consequences.** (+) A cited glossary of any topic or guide in about 30 s, kept and reviewable. (+) Cards feed the same review schedule as quizzes. (−) One LLM call per fragment (~3–4 s each; a long guide takes over a minute, with progress shown). (−) Literal checks drop entries the model paraphrased; a definition is still the model's wording, its quote is the check. (−) The schedule is per section, not per card: two cards of one section share it.
+
+## ADR-035 — LAN mode: the web UI on the home network for paired phones and tablets, off by default
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-016's «loopback only», while LAN mode is on
+
+**Context.** The user wants to use the app from a phone or tablet on their home network, with the computing and the library staying on this desktop PC, which only joins private networks only they can use. ADR-016 binds the server to loopback and refuses other hosts precisely because the app has no accounts: anyone who could reach it could read every note and conversation, run the model and delete data.
+
+**Decision.**
+- **Off by default.** `biblio start --lan` / `biblio serve --lan`, or `web.lan = true` in `config/local.toml`. Without it nothing changes: loopback only, as ADR-016.
+- **Listening.** On every interface, but a client whose address is not loopback or private (RFC 1918, IPv6 unique-local, link-local) is refused before anything else. The Host header must be a loopback name or the address the client actually connected to, with the port; any other is refused, as before (DNS rebinding).
+- **Pairing.** A device gets in only with a pairing link opened from the PC: the PC page (loopback) shows a QR code and the link `http://<PC address>:<port>/pair?code=…`; the code is random (128 bits), valid for `web.pairing_minutes` and usable once. Redeeming it gives the device a random token in an `HttpOnly`, `SameSite=Strict` cookie lasting `web.device_days`; the server keeps only the token's SHA-256, with the device's name and dates, in `data/lan_devices.json`. Every request from a non-loopback client needs a valid token, static files included, except `/pair`. The PC page lists the paired devices and can remove any; removing one ends its access at once. Pairing and the device list are served to loopback clients only. The startup message prints the address and a QR code in the terminal too.
+- **Cross-site requests.** A `POST` with an `Origin` that is not the address it was sent to is refused.
+- **What changes and what does not.** The app still opens no connection to anything outside the machine (rule 1: the LLM and the models stay on loopback and on disk); it now answers devices on the home network. What crosses the network is what the page shows (notes, answers, cards), over plain HTTP: acceptable on the user's private network, not on a shared one, which the README says. «Abrir en Obsidian» is hidden on other devices (it points to the PC's vault).
+- **QR codes** with `segno` (pure Python, BSD; checked: no network code), as SVG for the page and as text for the terminal.
+
+**Consequences.** (+) The whole app on a phone or tablet at home, with nothing moved off the PC. (+) Unpaired devices on the same network get nothing. (−) Traffic on the network is unencrypted. (−) Windows asks once to allow Python on private networks. (−) The PC's address can change (DHCP); a paired device then needs the new address, not a new pairing.

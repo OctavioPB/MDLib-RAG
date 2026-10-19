@@ -79,9 +79,11 @@ def assemble(
     budget_tokens: int,
     max_fragments: int,
     fixed_tokens: int,
+    merge: bool = True,
 ) -> Context:
-    """Fill `budget_tokens` (the prompt itself costs `fixed_tokens`) with whole fragments."""
-    candidates = merge_contiguous(hits)
+    """Fill `budget_tokens` (the prompt itself costs `fixed_tokens`) with whole fragments.
+    `merge=False` keeps the hits as given (a pinned passage and its section, ADR-031)."""
+    candidates = merge_contiguous(hits) if merge else list(hits)
     fragments: list[Fragment] = []
     used = fixed_tokens
     over_budget = 0

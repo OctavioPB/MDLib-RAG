@@ -17,6 +17,7 @@ dependencies = [
     "psutil>=6",
     "mdit-py-plugins>=0.4",
     "tokenizers>=0.19",
+    "segno==1.6.6",
 ]
 
 [project.scripts]

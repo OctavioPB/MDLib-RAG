@@ -291,8 +291,9 @@ function planRow(view, item, index) {
   li.append(main);
 
   const actions = el("div", "plan-actions");
+  actions.append(readLink(item.doc_path, null, "btn"));
   if (item.open_url) {
-    const open = el("a", "btn", "Abrir");
+    const open = el("a", "btn", "Obsidian");
     open.href = item.open_url;
     open.title = "Abrir en Obsidian";
     actions.append(open);

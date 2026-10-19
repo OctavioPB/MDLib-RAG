@@ -67,6 +67,12 @@ map_reduce_max_fragments = 12            # ...or fragments dropped by the budget
 max_answer_tokens = 1024
 probe_timeout_s = 0.5                    # loopback check for a running server (ADR-012)
 
+[tutor]                      # answer levels in Conversar (ADR-032)
+default_level = "intermediate"   # beginner | intermediate | advanced
+beginner_max_tokens = 700        # answer budget per level; evidence budget stays llm.context_budget_tokens
+intermediate_max_tokens = 1024
+advanced_max_tokens = 1536       # 6000 evidence + 1536 answer < 8k context (ADR-015)
+
 [draft]
 min_sections = 4
 max_sections = 10
@@ -76,6 +82,10 @@ sibling_outline_lines = 25   # headings shown per sibling guide
 [web]
 host = "127.0.0.1"           # loopback only; anything else is refused (ADR-016)
 port = 8765
+lan = false                  # LAN mode (ADR-035): paired phones and tablets on the home network
+pairing_minutes = 10         # a pairing link works once, for this long
+device_days = 180            # a paired device stays in for this long (or until removed)
+devices = "data/lan_devices.json"
 
 [conversations]
 db = "data/conversations.db" # Conversar history (ADR-023); apart from the index so `index --full` never deletes it
@@ -130,6 +140,21 @@ candidate_similarity = 0.55  # known topics this close (cosine) are shown to the
 max_candidates = 5           # …at most this many, which decides whether it is the same subject
 same_max_tokens = 30
 map_min_concepts = 6         # a map with fewer concepts than this is thin
+
+[reader]                     # built-in reader (ADR-031)
+passage_min_chars = 20       # a selection shorter than this is not a passage
+passage_max_chars = 3000
+passage_questions = 3        # «Pregúntame sobre esto»
+
+[dictionary]                 # «Diccionario» in Practicar (ADR-034); kept in [practice].db
+fragments = 10               # topic: sections retrieval finds for it
+guide_max_fragments = 60     # guide: its content sections, in order, at most (~3.5 s each)
+max_fragment_chars = 2400
+entries_per_fragment = 6     # per list (concepts, functions, formulas) and fragment
+extract_max_tokens = 1200
+max_entries = 80             # per list (concepts, functions, formulas) and dictionary
+definition_max_chars = 400
+history_limit = 50
 
 [maps]
 fragments = 10               # retrieved sections read for one map (~3 s each with the LLM, ADR-022)

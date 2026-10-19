@@ -19,7 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from biblio.config import Config, ConfigError, load_config
+from biblio.config import TUTOR_LEVELS, Config, ConfigError, load_config
 from biblio.offline import allow_model_downloads, apply_offline_env
 
 if TYPE_CHECKING:
@@ -669,6 +669,10 @@ def ask(
     map_reduce: Annotated[
         str | None, typer.Option("--map-reduce", help="auto, on or off (default from config).")
     ] = None,
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="beginner, intermediate or advanced (default from config)."),
+    ] = None,
 ) -> None:
     """Answer QUESTION from your library, citing its sources. Needs the LLM server (ADR-015)."""
     import time
@@ -688,7 +692,10 @@ def ask(
     counter = load_token_counter_safe(config, console)
     retriever = _open_retriever(config, mode or config.retrieval.default_mode)
     llm = load_llm_client(config.llm)
-    tutor = Tutor(config, retriever, llm, counter, map_reduce)
+    if level is not None and level not in TUTOR_LEVELS:
+        console.print(f"[red]--level must be one of {', '.join(TUTOR_LEVELS)}[/red]")
+        raise typer.Exit(2)
+    tutor = Tutor(config, retriever, llm, counter, map_reduce, level)
     try:
         t0 = time.perf_counter()
         prepared = tutor.prepare(question)
@@ -856,6 +863,10 @@ def ask_eval_run(
     map_reduce: Annotated[
         str | None, typer.Option("--map-reduce", help="auto, on or off (default from config).")
     ] = None,
+    level: Annotated[
+        str | None,
+        typer.Option("--level", help="beginner, intermediate or advanced (default from config)."),
+    ] = None,
 ) -> None:
     """Answer every question and write a review sheet for you to grade."""
     from biblio.eval.questions import QuestionsError, load_questions
@@ -883,7 +894,10 @@ def ask_eval_run(
     counter = load_token_counter_safe(config, console)
     retriever = _open_retriever(config, config.retrieval.default_mode)
     llm = load_llm_client(config.llm)
-    tutor = Tutor(config, retriever, llm, counter, map_reduce)
+    if level is not None and level not in TUTOR_LEVELS:
+        console.print(f"[red]--level must be one of {', '.join(TUTOR_LEVELS)}[/red]")
+        raise typer.Exit(2)
+    tutor = Tutor(config, retriever, llm, counter, map_reduce, level)
 
     def progress(q: object, answer: object, seconds: float) -> None:
         from biblio.eval.questions import Question
@@ -911,6 +925,7 @@ def ask_eval_run(
         "model": config.llm.model,
         "map_reduce": map_reduce or config.llm.map_reduce,
         "retriever": retriever.name,
+        "level": tutor.level,
     }
     review_dir = config.eval.results_dir.parent / "review"
     _, sheet = save_run(review_dir, tag, meta, records)
@@ -1116,16 +1131,57 @@ def concept_map(
 def serve(
     ctx: typer.Context,
     port: Annotated[int | None, typer.Option("--port", help="Default: web.port in config.")] = None,
+    lan: Annotated[
+        bool | None,
+        typer.Option("--lan/--no-lan", help="Also serve paired devices on the home network."),
+    ] = None,
 ) -> None:
-    """Open the local web UI (loopback only, ADR-016, ADR-019). Ctrl+C stops it."""
+    """Open the local web UI (loopback only, ADR-016, ADR-019; --lan: ADR-035). Ctrl+C stops it."""
     config = _config(ctx)
-    server, engine = _open_web(config, port or config.web.port)
+    server, engine = _open_web(config, port or config.web.port, _lan_wanted(config, lan))
     host, bound = config.web.host, server.server_address[1]
     console.print(f"[bold]Biblioteca[/bold] → http://{host}:{bound}  [dim](Ctrl+C to stop)[/dim]")
+    _print_lan(server)
     _serve_until_stopped(server, engine)
 
 
-def _open_web(config: Config, port: int) -> tuple[ThreadingHTTPServer, Engine]:
+def _lan_wanted(config: Config, flag: bool | None) -> bool:
+    return config.web.lan if flag is None else flag
+
+
+def _print_lan(server: ThreadingHTTPServer) -> None:
+    """LAN mode (ADR-035): where to point a phone, and a first pairing code to scan."""
+    from biblio.web.lan import PAIR_PATH, qr_text
+
+    lan = getattr(server, "biblio_lan", None)
+    ip = getattr(server, "biblio_lan_ip", "")
+    if lan is None:
+        return
+    port = server.server_address[1]
+    if not ip:
+        console.print(
+            "[yellow]LAN mode is on but this PC has no address on a private network.[/yellow]"
+        )
+        return
+    code, expires = lan.new_code()
+    link = f"http://{ip}:{port}{PAIR_PATH}?code={code}"
+    console.print(
+        f"[bold]Red local[/bold] → http://{ip}:{port}  "
+        f"[dim](scan within {lan_minutes(expires)} min to pair a phone or tablet; "
+        "more codes: «Conectar un dispositivo» in the app)[/dim]"
+    )
+    console.print(Text(qr_text(link)))
+    console.print(f"[dim]{link}[/dim]")
+
+
+def lan_minutes(expires: object) -> int:
+    from datetime import datetime
+
+    assert isinstance(expires, datetime)
+    return max(1, round((expires - datetime.now().astimezone()).total_seconds() / 60))
+
+
+def _open_web(config: Config, port: int, lan: bool = False) -> tuple[ThreadingHTTPServer, Engine]:
     from biblio.index.embedder import load_query_embedder
     from biblio.retrieve.store import (
         IndexNotFoundError,
@@ -1141,7 +1197,16 @@ def _open_web(config: Config, port: int) -> tuple[ThreadingHTTPServer, Engine]:
         check_query_embedder(conn, config)
         console.print("Loading the query embedder…")
         engine = Engine(config, conn, load_query_embedder(config))
-        server = make_server(engine, config.web.host, port)
+        access, lan_ip = None, ""
+        if lan:  # ADR-035
+            from biblio.web.lan import LanAccess, lan_address
+
+            web = config.web
+            access = LanAccess(web.devices, web.pairing_minutes, web.device_days)
+            lan_ip = lan_address() or ""
+        server = make_server(engine, config.web.host, port, access, lan_ip)
+        server.biblio_lan = access  # type: ignore[attr-defined]
+        server.biblio_lan_ip = lan_ip  # type: ignore[attr-defined]
     except (IndexNotFoundError, QueryEmbedderMismatchError, LoopbackOnlyError, OSError) as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
@@ -1326,6 +1391,10 @@ def start(
     no_browser: Annotated[
         bool, typer.Option("--no-browser", help="Do not open the web UI in the browser.")
     ] = False,
+    lan: Annotated[
+        bool | None,
+        typer.Option("--lan/--no-lan", help="Also serve paired devices on the home network."),
+    ] = None,
 ) -> None:
     """Prepare everything and open the app: models, library, index, LLM server, web UI and
     automatic reindexing (ADR-021). Downloads only what is missing, after asking."""
@@ -1351,7 +1420,7 @@ def start(
     _start_index(config, root, yes)  # before the LLM: the GPU is free now (ADR-012)
     llm = None if no_llm else _start_llm(config, yes)
     try:
-        server, engine = _open_web(config, port)
+        server, engine = _open_web(config, port, _lan_wanted(config, lan))
         if config.launcher.watch:
             watcher = _make_watcher(config, root, resolve_index_device(config))
 
@@ -1365,6 +1434,7 @@ def start(
         console.print(
             f"\n[bold]Biblioteca[/bold] → {url}  [dim](keep this window open; Ctrl+C to stop)[/dim]"
         )
+        _print_lan(server)
         if config.launcher.open_browser and not no_browser:
             webbrowser.open(url)
         _serve_until_stopped(server, engine)

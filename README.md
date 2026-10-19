@@ -158,6 +158,15 @@ uv run biblio serve        # then open http://127.0.0.1:8765
   opens the note in Obsidian.
 - Each message is answered on its own: follow-up questions do not remember earlier turns (ADR-019).
 
+**Nivel** (ADR-032): next to «Explicar» in Conversar, choose how the tutor explains:
+**Principiante** (the simplest words, ending with one everyday comparison, marked «Es como…», the
+only uncited sentence it may add), **Intermedio** (the default: your guides' own terms, going
+deeper) or **Avanzado** (technical terms and formulas, the topic related to others only through
+what your notes say, as a master's-degree teacher). It applies from the next message, each answer
+shows its level, and reopening a conversation restores the level of its last message. All three
+use the same notes, citations and «No encuentro esto en tu biblioteca» rule; formulas in answers
+are drawn with KaTeX. `uv run biblio ask "…" --level advanced` does the same in the terminal.
+
 **Ajustes** holds the advanced settings: precision (reranker on or off), number of results, the folder
 to search in, and the answer strategy ("Por guía" is the experimental map-reduce). The same can be
 typed at the start of a message:
@@ -212,6 +221,24 @@ whether it is the same subject. The answer or map says «Apuntado como tema pend
 **Deshacer**. In Guías each topic offers **Escribir guía** (the topic filled in; the topic then
 shows «En borrador»), **Resuelto** and **Descartar**.
 
+**Biblioteca** (ADR-033), in the top menu, lists every note of your library by folder, with the
+number of notes in each, and a box that finds a note by title or folder as you type (accents and
+capitals do not matter). The notes you read last are listed first; notes marked as read show
+«✓ leída». Any of them opens in the reader.
+
+**Leer** (ADR-031) opens a note inside the app, at the cited line, from the **Leer** button next to
+every source (Conversar, Mapas, Practicar, Explícamelo tú and the study plan). Formulas are drawn
+with KaTeX, which ships with the app, so nothing is downloaded; `[[links]]` open the linked note
+in the reader. Select a paragraph and choose:
+
+- **Explícame esto**: an explanation in a side panel, citing the passage [1], the section it is
+  in [2] and whatever else your notes say about it. It is kept in the Conversar history, where
+  **Seguir en Conversar** continues it.
+- **Pregúntame sobre esto**: three questions written from that passage only (multiple choice, true
+  or false, open), answered in the panel; they count as practice of that section for your reviews.
+
+The reader also offers **Abrir en Obsidian** and **Marcar como leída** (for the study plan).
+
 **Mapas** draws a concept map of a topic from your notes (ADR-022):
 
 - Write a topic and press **Crear mapa**. The ten most relevant sections are read one by one; the map
@@ -261,6 +288,15 @@ and a strip with your progress (**Ver todo** for the details).
   day, the ones you are closest to forgetting first; the number also shows next to **Practicar** in
   the top bar. Each review writes a new question on the section; with the LLM off it asks the last
   stored one again.
+- **Diccionario** (ADR-034): write a topic, or choose a guide, and get its main concepts with a
+  short definition and the literal quote of your note that backs it, plus, where there is code or
+  mathematics, its functions (name, signature as written, what it does) and formulas (drawn with
+  KaTeX, what they compute). Every entry is checked against the text and links to its section in
+  the reader. A topic takes ~40 s; a whole guide ~3.5 s per section (up to 60). A dictionary reads
+  like a glossary: pick it at the top, browse its index by list and letter or filter it, and the
+  selected entry shows on the right. **Repasar como fichas** shows each card (the ones you missed
+  first), you turn it over and say whether you knew it, which counts for your reviews and marks the
+  term in the index; **Exportar** downloads Markdown or Anki (in Anki: File › Import).
 - **Tu progreso** shows your score per guide and the sections you missed; **Repasar mis fallos**
   makes a quiz from those. Sections you missed are asked first, then new ones.
 - **Explícamelo tú** (ADR-027, experimental): write a concept and explain it in your own words, as
@@ -287,6 +323,26 @@ The buttons at the top right switch between a light theme, a dark one, or follow
 The server listens only on `127.0.0.1`, rejects requests addressed to any other host name, and loads
 nothing from the internet (ADR-016). The query embedder stays loaded, so a search takes about half a
 second.
+
+## Phone and tablet on your home network
+
+LAN mode (ADR-035) lets a phone or tablet on your home network use the app, with everything still
+running on this PC. It is off by default; turn it on with `biblio start --lan` (or `serve --lan`), or
+for good with this in `config/local.toml`:
+
+```toml
+[web]
+lan = true
+```
+
+When it starts, the terminal shows the PC's address and a QR code. In the app on the PC, the phone
+icon at the top, **Conectar un dispositivo**, shows a fresh QR code (one use, 10 minutes) and the
+paired devices, each with **Quitar**. Scan the code with the phone on the same Wi-Fi: the app opens
+and the device stays paired (180 days); next time the address is enough. Devices that were not
+paired, and any address outside private networks, get nothing, not even the page. «Abrir en
+Obsidian» is hidden on other devices. The first time, Windows asks to allow Python on the network:
+allow **private networks** only. The connection is not encrypted, so use it on your own network,
+not on a shared one.
 
 ## GPU and memory
 

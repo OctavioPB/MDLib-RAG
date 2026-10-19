@@ -312,7 +312,7 @@ function cites(node) {
   return node.sources.map((s) => `[${s}]`).join("");
 }
 
-function renderOutline() {
+function renderMapOutline() {
   const entry = current();
   const box = $("map-outline");
   if (!entry || !entry.map) {
@@ -420,11 +420,14 @@ function renderPanel() {
     const item = el("details", "map-source");
     item.append(el("summary", null, `[${number}] ${f.sections.at(-1) || f.guide} · ${f.guide}`));
     item.append(el("div", "source-text", f.text));
+    const links = el("div", "row");
+    links.append(readLink(f.doc_path, f.lines[0]));
     if (f.open_url) {
-      const open = el("a", "btn-soft", "Abrir en Obsidian");
+      const open = el("a", "btn", "Abrir en Obsidian");
       open.href = f.open_url;
-      item.append(open);
+      links.append(open);
     }
+    item.append(links);
     parts.push(item);
   }
   view.replaceChildren(...parts);
@@ -472,7 +475,7 @@ function renderAll() {
   renderTrail();
   renderGap();
   drawMap();
-  renderOutline();
+  renderMapOutline();
   renderPanel();
 }
 

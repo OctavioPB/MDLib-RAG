@@ -1,0 +1,11 @@
+{focus}
+
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Escribe hasta {max_entries} entradas por lista.
+
+Formato:
+{{"conceptos": [{{"termino": "...", "definicion": "...", "cita": "..."}}], "funciones": [{{"nombre": "...", "firma": "...", "descripcion": "..."}}], "formulas": [{{"formula": "...", "nombre": "...", "descripcion": "..."}}]}}

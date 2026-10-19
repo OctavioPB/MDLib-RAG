@@ -14,20 +14,27 @@ import json
 from collections.abc import Callable, Generator
 from dataclasses import asdict
 from datetime import date
+from html import escape
 from http import HTTPStatus
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from biblio.config import TUTOR_LEVELS
 from biblio.conversations import NewTurn
 from biblio.conversations import to_markdown as conversation_markdown
 from biblio.generate.draft import OutlineSection, slugify
 from biblio.practice.quiz import SCOPE_KINDS
 from biblio.practice.store import KINDS, RESULTS
+from biblio.retrieve.types import Hit
 from biblio.study.gaps import STATUSES as GAP_STATUSES
 from biblio.web.drafts import list_drafts, read_draft
 from biblio.web.engine import BusyError, Engine, Event, hit_json, outline_json
+from biblio.web.lan import COOKIE as LAN_COOKIE
+from biblio.web.lan import PAIR_PATH as LAN_PAIR_PATH
+from biblio.web.lan import LanAccess, decide, device_name, is_loopback, qr_svg
 
 _STATIC = resources.files("biblio.web") / "static"
 _STATIC_FILES = {
@@ -40,8 +47,21 @@ _STATIC_FILES = {
     "/static/mapas.js": ("mapas.js", "text/javascript; charset=utf-8"),
     "/static/feynman.js": ("feynman.js", "text/javascript; charset=utf-8"),
     "/static/plan.js": ("plan.js", "text/javascript; charset=utf-8"),
+    "/static/reader.js": ("reader.js", "text/javascript; charset=utf-8"),
+    "/static/library.js": ("library.js", "text/javascript; charset=utf-8"),
+    "/static/dictionary.js": ("dictionary.js", "text/javascript; charset=utf-8"),
+    "/static/devices.js": ("devices.js", "text/javascript; charset=utf-8"),
 }
 _MAX_BODY = 64 * 1024
+_PAIR_HINT = (
+    "Para usar la Biblioteca desde este dispositivo, ábrela en el PC, pulsa «Conectar un "
+    "dispositivo» y escanea el código QR."
+)
+_VENDOR_TYPES = {  # KaTeX, vendored (ADR-031)
+    "js": "text/javascript; charset=utf-8",
+    "css": "text/css; charset=utf-8",
+    "woff2": "font/woff2",
+}
 _MAX_QUERY = 2000
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -95,7 +115,9 @@ def require_loopback_host(host: str) -> None:
     )
 
 
-def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPRequestHandler]:
+def make_handler(
+    engine: Engine, allowed_hosts: set[str], lan: LanAccess | None = None, lan_ip: str = ""
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "biblio"
         sys_version = ""
@@ -106,10 +128,144 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
         # --- plumbing ---------------------------------------------------------------------------
 
         def _host_allowed(self) -> bool:
+            if lan is not None:
+                return self._lan_allowed()
             if self.headers.get("Host", "") in allowed_hosts:
                 return True
             self._send_json({"error": "forbidden host"}, HTTPStatus.FORBIDDEN)
             return False
+
+        # --- LAN mode (ADR-035) ---------------------------------------------------------------
+
+        def _port(self) -> int:
+            address = self.server.server_address
+            return int(address[1]) if isinstance(address, tuple) else 0
+
+        def _client_is_local(self) -> bool:
+            return is_loopback(str(self.client_address[0]))
+
+        def _device_token(self) -> str | None:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except CookieError:
+                return None
+            morsel = cookie.get(LAN_COOKIE)
+            return morsel.value if morsel else None
+
+        def _lan_allowed(self) -> bool:
+            assert lan is not None
+            host = self.headers.get("Host", "")
+            local_ip = str(self.connection.getsockname()[0])
+            path = self.path
+            token_ok = lan.check(self._device_token())
+            access = decide(
+                str(self.client_address[0]),
+                host,
+                local_ip,
+                self._port(),
+                path,
+                token_ok,
+            )
+            if not access.allowed:
+                if path.startswith("/api/") or access.reason == "forbidden host":
+                    self._send_json({"error": access.reason}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._send_page(HTTPStatus.FORBIDDEN, access.reason, _PAIR_HINT)
+                return False
+            origin = self.headers.get("Origin")
+            if self.command == "POST" and origin is not None and origin != f"http://{host}":
+                self._send_json({"error": "cross-site request"}, HTTPStatus.FORBIDDEN)
+                return False
+            return True
+
+        def _send_page(self, status: HTTPStatus, title: str, text: str) -> None:
+            """A minimal page for a device that is not let in (no script, no style but inline)."""
+            body = (
+                '<!doctype html><html lang="es"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                f"<title>Biblioteca</title></head><body><h1>{escape(title)}</h1>"
+                f"<p>{escape(text)}</p></body></html>"
+            ).encode()
+            self._headers(status, "text/html; charset=utf-8", len(body))
+            self.wfile.write(body)
+
+        def _pair(self) -> None:
+            """GET /pair?code=…: a one-time pairing link opened on the phone or tablet."""
+            if lan is None:
+                self._not_found()
+                return
+            if self._client_is_local():
+                self._redirect("/")  # this PC needs no pairing
+                return
+            code = parse_qs(urlsplit(self.path).query).get("code", [""])[0]
+            token = (
+                lan.redeem(code, device_name(self.headers.get("User-Agent", ""))) if code else None
+            )
+            if token is None:
+                self._send_page(HTTPStatus.FORBIDDEN, "El enlace caducó o ya se usó", _PAIR_HINT)
+                return
+            days = engine.config.web.device_days
+            cookie = (
+                f"{LAN_COOKIE}={token}; Max-Age={days * 86400}; Path=/; HttpOnly; SameSite=Strict"
+            )
+            self._redirect("/", cookie)
+
+        def _redirect(self, location: str, cookie: str | None = None) -> None:
+            self.send_response(HTTPStatus.SEE_OTHER)
+            self.send_header("Location", location)
+            if cookie:
+                self.send_header("Set-Cookie", cookie)
+            for name, value in _SECURITY_HEADERS.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _lan_get(self) -> bool:
+            """GET /api/lan and /api/lan/qr.svg (this PC only); False if neither."""
+            parts = urlsplit(self.path)
+            if parts.path not in ("/api/lan", "/api/lan/qr.svg"):
+                return False
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return True
+            if parts.path == "/api/lan":
+                devices = [asdict(d) for d in lan.devices()] if lan else []
+                port = self._port()
+                url = f"http://{lan_ip}:{port}" if lan and lan_ip else None
+                self._send_json({"enabled": lan is not None, "url": url, "devices": devices})
+                return True
+            link = parse_qs(parts.query).get("link", [""])[0]
+            if lan is None or not link.startswith(f"http://{lan_ip}:"):
+                self._not_found()
+                return True
+            body = qr_svg(link).encode("utf-8")
+            self._headers(HTTPStatus.OK, "image/svg+xml", len(body))
+            self.wfile.write(body)
+            return True
+
+        def _lan_pair(self, payload: dict[str, Any]) -> None:
+            if lan is None or not lan_ip:
+                self._send_json(
+                    {"error": "El modo red local está apagado: arranca con --lan."},
+                    HTTPStatus.CONFLICT,
+                )
+                return
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return
+            code, expires = lan.new_code()
+            port = self._port()
+            link = f"http://{lan_ip}:{port}{LAN_PAIR_PATH}?code={code}"
+            self._send_json({"link": link, "expires": expires.isoformat(timespec="seconds")})
+
+        def _lan_revoke(self, payload: dict[str, Any]) -> None:
+            device = payload.get("id")
+            if lan is None or not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return
+            ok = isinstance(device, str) and lan.revoke(device)
+            self._send_json({"ok": True}) if ok else self._not_found()
 
         def _headers(self, status: HTTPStatus, content_type: str, length: int | None) -> None:
             self.send_response(status)
@@ -181,9 +337,17 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             if not self._host_allowed():
                 return
             if self.path == "/api/status":
-                self._send_json(engine.status())
+                lan_state = {"enabled": lan is not None, "local": self._client_is_local()}
+                self._send_json({**engine.status(), "lan": lan_state})
+                return
+            if self.path.split("?", 1)[0] == LAN_PAIR_PATH:
+                self._pair()
+                return
+            if self._lan_get():
                 return
             if self._conversations_get() or self._maps_get() or self._plans_get():
+                return
+            if self._notes_get() or self._vendor_get() or self._dictionary_get():
                 return
             if self.path == "/api/gaps":
                 self._send_json({"gaps": engine.gaps.gaps()})
@@ -254,6 +418,13 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
                 "/api/plans/delete": self._plan_delete,
                 "/api/gaps/undo": self._gap_undo,
                 "/api/gaps/status": self._gap_status,
+                "/api/notes/explain": self._note_explain,
+                "/api/notes/quiz": self._note_quiz,
+                "/api/dictionary": self._dictionary_build,
+                "/api/dictionary/delete": self._dictionary_delete,
+                "/api/dictionary/review": self._dictionary_review,
+                "/api/lan/pair": self._lan_pair,
+                "/api/lan/revoke": self._lan_revoke,
                 "/api/maps": self._map,
                 "/api/maps/save": self._map_save,
                 "/api/maps/delete": self._map_delete,
@@ -303,13 +474,32 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             strategy = self._choice_field(payload, "strategy", ("direct", "map-reduce"))
             ok, scope = self._scope_field(payload)
             conversation = self._conversation_field(payload)
-            if strategy is None or not ok or conversation is False:
+            level = self._level_field(payload)
+            if strategy is None or not ok or conversation is False or level is False:
                 return
+            chosen = level if isinstance(level, str) and level else None
             self._stream(
                 lambda: engine.ask_recorded(
-                    question, scope=scope, strategy=strategy, conversation_id=conversation
+                    question,
+                    scope=scope,
+                    strategy=strategy,
+                    conversation_id=conversation,
+                    level=chosen,
                 )
             )
+
+        def _level_field(self, payload: dict[str, Any]) -> str | bool:
+            """The answer level (ADR-032): "" when absent (the default), False after a 400."""
+            value = payload.get("level")
+            if value is None:
+                return ""
+            if value in TUTOR_LEVELS:
+                return str(value)
+            self._send_json(
+                {"error": f"'level' must be one of {', '.join(TUTOR_LEVELS)}"},
+                HTTPStatus.BAD_REQUEST,
+            )
+            return False
 
         def _conversation_field(self, payload: dict[str, Any]) -> int | bool | None:
             """The conversation of a message: an id, None to start one, False after a 400."""
@@ -753,6 +943,188 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
             ok = engine.gaps.set_status(gap, str(status), draft)
             self._send_json({"ok": True}) if ok else self._not_found()
 
+        # --- the built-in reader (ADR-031) --------------------------------------------------------
+
+        def _notes_get(self) -> bool:
+            """GET /api/notes (ADR-033) and /api/notes/view?path=…; False if not ours."""
+            parts = urlsplit(self.path)
+            if parts.path == "/api/notes":
+                self._send_json({"notes": engine.note_list()})
+                return True
+            if parts.path != "/api/notes/view":
+                return False
+            path = parse_qs(parts.query).get("path", [""])[0]
+            view = engine.note_view(path) if path else None
+            self._send_json(view) if view is not None else self._not_found()
+            return True
+
+        def _vendor_get(self) -> bool:
+            """GET /static/vendor/katex/… : only files that exist in that folder, no other path."""
+            prefix = "/static/vendor/katex/"
+            if not self.path.startswith(prefix):
+                return False
+            name = self.path.removeprefix(prefix)
+            kind = _VENDOR_TYPES.get(name.rsplit(".", 1)[-1]) if "." in name else None
+            parts = name.split("/")
+            ok = (
+                kind is not None
+                and len(parts) <= 2
+                and all(p and p not in (".", "..") and "\\" not in p for p in parts)
+                and (parts[0] == "fonts" or len(parts) == 1)
+            )
+            file = _STATIC / "vendor" / "katex" / name if ok else None
+            if file is None or not file.is_file():
+                self._not_found()
+                return True
+            body = file.read_bytes()
+            self._headers(HTTPStatus.OK, str(kind), len(body))
+            self.wfile.write(body)
+            return True
+
+        def _passage_field(self, payload: dict[str, Any]) -> Hit | None:
+            path, lines, text = payload.get("path"), payload.get("lines"), payload.get("text")
+            cfg = engine.config.reader
+            valid = (
+                isinstance(path, str)
+                and isinstance(text, str)
+                and cfg.passage_min_chars <= len(text.strip()) <= cfg.passage_max_chars
+                and isinstance(lines, list)
+                and len(lines) == 2
+                and all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in lines)
+            )
+            if not valid:
+                self._send_json(
+                    {
+                        "error": f"Selecciona un pasaje de {cfg.passage_min_chars} a "
+                        f"{cfg.passage_max_chars} caracteres."
+                    },
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return None
+            assert isinstance(path, str) and isinstance(text, str) and isinstance(lines, list)
+            hit = engine.passage(path, min(lines), max(lines), text.strip())
+            if hit is None:
+                self._not_found()
+            return hit
+
+        def _note_explain(self, payload: dict[str, Any]) -> None:
+            passage = self._passage_field(payload)
+            conversation = self._conversation_field(payload)
+            level = self._level_field(payload) if passage is not None else ""
+            if passage is None or conversation is False or level is False:
+                return
+            chosen = level if isinstance(level, str) and level else None
+            shown = " ".join(passage.text.split())
+            shown = shown if len(shown) <= 300 else shown[:299] + "…"
+            question = f"Explícame este pasaje de «{passage.citation}»: «{shown}»"
+            self._stream(
+                lambda: engine.ask_recorded(
+                    question,
+                    scope=None,
+                    strategy="direct",
+                    conversation_id=conversation,
+                    passage=passage,
+                    level=chosen,
+                )
+            )
+
+        def _note_quiz(self, payload: dict[str, Any]) -> None:
+            passage = self._passage_field(payload)
+            kinds = payload.get("kinds")
+            if passage is None:
+                return
+            allowed = ("mc", "tf", "open_self")
+            if not (isinstance(kinds, list) and kinds and all(k in allowed for k in kinds)):
+                self._send_json(
+                    {"error": f"kinds must be some of {', '.join(allowed)}"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            self._stream(lambda: engine.passage_quiz(passage, kinds))
+
+        # --- «Diccionario» (ADR-034) ------------------------------------------------------------
+
+        def _dictionary_get(self) -> bool:
+            """GET /api/dictionary/history[?q=], /api/dictionary/<id>, …/<id>/export?format=."""
+            parts = urlsplit(self.path)
+            if parts.path == "/api/dictionary/history":
+                query = parse_qs(parts.query).get("q", [""])[0][:_MAX_QUERY]
+                limit = engine.config.dictionary.history_limit
+                self._send_json(
+                    {"dictionaries": engine.practice.dictionaries(limit, query or None)}
+                )
+                return True
+            if not parts.path.startswith("/api/dictionary/"):
+                return False
+            raw = parts.path.removeprefix("/api/dictionary/")
+            if raw.endswith("/export") and raw.removesuffix("/export").isdigit():
+                fmt = parse_qs(parts.query).get("format", ["md"])[0]
+                if fmt not in ("md", "anki"):
+                    self._send_json({"error": "format must be md or anki"}, HTTPStatus.BAD_REQUEST)
+                    return True
+                exported = engine.dictionary_export(int(raw.removesuffix("/export")), fmt)
+                if exported is None:
+                    self._not_found()
+                    return True
+                name, kind, text = exported
+                body = text.encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                for header, value in _SECURITY_HEADERS.items():
+                    self.send_header(header, value)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                ascii_name = name.encode("ascii", "ignore").decode() or "diccionario.txt"
+                self.send_header("Content-Disposition", f'attachment; filename="{ascii_name}"')
+                self.end_headers()
+                self.wfile.write(body)
+                return True
+            view = engine.dictionary_view(int(raw)) if raw.isdigit() else None
+            self._send_json(view) if view is not None else self._not_found()
+            return True
+
+        def _dictionary_build(self, payload: dict[str, Any]) -> None:
+            kind, value = payload.get("kind"), payload.get("value")
+            if kind not in ("topic", "guide") or not isinstance(value, str) or not value.strip():
+                self._send_json(
+                    {"error": "expected kind topic or guide and a value"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            if len(value) > _MAX_QUERY:
+                self._send_json({"error": "value too long"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._stream(lambda: engine.build_dictionary(str(kind), value.strip()))
+
+        def _dictionary_delete(self, payload: dict[str, Any]) -> None:
+            did = self._id_field(payload, "id")
+            if did is not None:
+                ok = engine.practice.delete_dictionary(did)
+                self._send_json({"ok": True}) if ok else self._not_found()
+
+        def _dictionary_review(self, payload: dict[str, Any]) -> None:
+            did = self._id_field(payload, "id")
+            index, result, quiz = (
+                payload.get("index"),
+                payload.get("result"),
+                payload.get("quiz_id"),
+            )
+            if did is None:
+                return
+            valid = (
+                isinstance(index, int)
+                and not isinstance(index, bool)
+                and result in RESULTS
+                and (quiz is None or (isinstance(quiz, int) and not isinstance(quiz, bool)))
+            )
+            if not valid:
+                self._send_json(
+                    {"error": "expected index, result and an optional quiz_id"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            assert isinstance(index, int)
+            done = engine.dictionary_review(did, index, str(result), quiz)
+            self._send_json(done) if done is not None else self._not_found()
+
         def _stream(
             self, start: Callable[[], Generator[Event, None, None]], needs_llm: bool = True
         ) -> None:
@@ -795,13 +1167,23 @@ def make_handler(engine: Engine, allowed_hosts: set[str]) -> type[BaseHTTPReques
     return Handler
 
 
-def make_server(engine: Engine, host: str, port: int) -> ThreadingHTTPServer:
+def make_server(
+    engine: Engine,
+    host: str,
+    port: int,
+    lan: LanAccess | None = None,
+    lan_ip: str = "",
+    lan_bind: str = "0.0.0.0",
+) -> ThreadingHTTPServer:
+    """Loopback only (ADR-016); with `lan`, every interface for this PC and paired devices on
+    the home network (ADR-035)."""
     require_loopback_host(host)
-    server = ThreadingHTTPServer((host, port), make_handler(engine, set()))
+    bind = lan_bind if lan is not None else host  # tests bind LAN mode to loopback
+    server = ThreadingHTTPServer((bind, port), make_handler(engine, set(), lan, lan_ip))
     server.daemon_threads = True
     bound = server.server_address[1]
     hosts = {f"{host}:{bound}"}
     if host in ("127.0.0.1", "localhost"):
         hosts |= {f"127.0.0.1:{bound}", f"localhost:{bound}"}
-    server.RequestHandlerClass = make_handler(engine, hosts)
+    server.RequestHandlerClass = make_handler(engine, hosts, lan, lan_ip)
     return server

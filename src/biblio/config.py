@@ -111,6 +111,10 @@ class DraftConfig:
 class WebConfig:
     host: str
     port: int
+    lan: bool
+    pairing_minutes: int
+    device_days: int
+    devices: Path
 
 
 @dataclass(frozen=True)
@@ -176,6 +180,39 @@ class GapsConfig:
 
 
 @dataclass(frozen=True)
+class ReaderConfig:
+    passage_min_chars: int
+    passage_max_chars: int
+    passage_questions: int
+
+
+TUTOR_LEVELS = ("beginner", "intermediate", "advanced")
+
+
+@dataclass(frozen=True)
+class TutorConfig:
+    default_level: str
+    beginner_max_tokens: int
+    intermediate_max_tokens: int
+    advanced_max_tokens: int
+
+    def max_tokens(self, level: str) -> int:
+        return int(getattr(self, f"{level}_max_tokens"))
+
+
+@dataclass(frozen=True)
+class DictionaryConfig:
+    fragments: int
+    guide_max_fragments: int
+    max_fragment_chars: int
+    entries_per_fragment: int
+    extract_max_tokens: int
+    max_entries: int
+    definition_max_chars: int
+    history_limit: int
+
+
+@dataclass(frozen=True)
 class MapsConfig:
     fragments: int
     max_fragment_chars: int
@@ -229,6 +266,9 @@ class Config:
     feynman: FeynmanConfig
     plan: PlanConfig
     gaps: GapsConfig
+    reader: ReaderConfig
+    tutor: TutorConfig
+    dictionary: DictionaryConfig
     maps: MapsConfig
     launcher: LauncherConfig
     watch: WatchConfig
@@ -250,6 +290,9 @@ _SECTIONS: dict[str, type[Any]] = {
     "feynman": FeynmanConfig,
     "plan": PlanConfig,
     "gaps": GapsConfig,
+    "reader": ReaderConfig,
+    "tutor": TutorConfig,
+    "dictionary": DictionaryConfig,
     "maps": MapsConfig,
     "launcher": LauncherConfig,
     "watch": WatchConfig,
@@ -384,6 +427,8 @@ def _validate(config: Config) -> None:
     pl = config.plan
     if pl.max_guides < 2 or not 0 < pl.mastered_coverage <= 1:
         raise ConfigError("plan: expected max_guides >= 2 and 0 < mastered_coverage <= 1")
+    if config.tutor.default_level not in TUTOR_LEVELS:
+        raise ConfigError(f"tutor.default_level must be one of {', '.join(TUTOR_LEVELS)}")
     gp = config.gaps
     if not 0 < gp.candidate_similarity <= 1 or gp.topic_max_words < 2 or gp.max_candidates < 1:
         raise ConfigError(

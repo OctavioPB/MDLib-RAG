@@ -180,6 +180,22 @@ class PracticeStore:
                     created TEXT NOT NULL,
                     items   TEXT NOT NULL    -- JSON: [{doc_path, reason, module, placed}]
                 );
+                CREATE TABLE IF NOT EXISTS dictionaries (  -- «Diccionario» (ADR-034)
+                    id        INTEGER PRIMARY KEY,
+                    created   TEXT NOT NULL,
+                    kind      TEXT NOT NULL,          -- topic | guide
+                    source    TEXT NOT NULL,          -- the topic, or the guide's path
+                    title     TEXT NOT NULL,
+                    entries   TEXT NOT NULL,          -- JSON
+                    fragments TEXT NOT NULL           -- JSON: the notes the entries cite
+                );
+                CREATE TABLE IF NOT EXISTS dictionary_cards (  -- last flashcard result per entry
+                    dictionary_id INTEGER NOT NULL REFERENCES dictionaries(id) ON DELETE CASCADE,
+                    entry         INTEGER NOT NULL,     -- index in the dictionary's entries
+                    result        TEXT NOT NULL,        -- correct | partial | wrong
+                    answered      TEXT NOT NULL,
+                    PRIMARY KEY (dictionary_id, entry)
+                );
                 CREATE TABLE IF NOT EXISTS guide_reads (  -- «Marcar como leída»
                     doc_path TEXT PRIMARY KEY,
                     marked   TEXT NOT NULL
@@ -200,6 +216,13 @@ class PracticeStore:
         return self._conn, self._lock
 
     # --- writing ------------------------------------------------------------------------------
+
+    def quiz_scope(self, quiz_id: int) -> tuple[str, str] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT scope_kind, scope FROM quizzes WHERE id = ?", (quiz_id,)
+            ).fetchone()
+        return (row[0], row[1]) if row else None
 
     def new_quiz(self, scope_kind: str, scope: str, requested: int) -> int:
         with self._lock, self._conn:
@@ -458,6 +481,105 @@ class PracticeStore:
     def delete_plan(self, folder: str) -> bool:
         with self._lock, self._conn:
             cur = self._conn.execute("DELETE FROM study_plans WHERE folder = ?", (folder,))
+        return cur.rowcount > 0
+
+    # --- dictionaries (ADR-034) ----------------------------------------------------------------
+
+    def add_dictionary(
+        self,
+        kind: str,
+        source: str,
+        title: str,
+        entries: list[dict[str, Any]],
+        fragments: list[dict[str, Any]],
+    ) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO dictionaries (created, kind, source, title, entries, fragments) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (_now(), kind, source, title, _dumps(entries), _dumps(fragments)),
+            )
+            return int(cur.lastrowid or 0)
+
+    def dictionary(self, dictionary_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, created, kind, source, title, entries, fragments FROM dictionaries "
+                "WHERE id = ?",
+                (dictionary_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        did, created, kind, source, title, entries, fragments = row
+        with self._lock:
+            marks = dict(
+                self._conn.execute(
+                    "SELECT entry, result FROM dictionary_cards WHERE dictionary_id = ?", (did,)
+                ).fetchall()
+            )
+        return {
+            "id": did,
+            "created": created,
+            "kind": kind,
+            "source": source,
+            "title": title,
+            "entries": json.loads(entries),
+            "fragments": json.loads(fragments),
+            "marks": {str(k): v for k, v in marks.items()},  # entry index → last card result
+        }
+
+    def dictionaries(self, limit: int, query: str | None = None) -> list[dict[str, Any]]:
+        """Saved dictionaries, newest first; `query` matches the title or any entry's term."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created, kind, source, title, entries FROM dictionaries "
+                "ORDER BY id DESC"
+            ).fetchall()
+        needle = query.casefold().strip() if query else ""
+        out = []
+        for did, created, kind, source, title, entries in rows:
+            items = json.loads(entries)
+            if (
+                needle
+                and needle not in title.casefold()
+                and not any(needle in str(e.get("term", "")).casefold() for e in items)
+            ):
+                continue
+            counts = {
+                k: sum(1 for e in items if e.get("kind") == k)
+                for k in ("concept", "function", "formula")
+            }
+            out.append(
+                {
+                    "id": did,
+                    "created": created,
+                    "kind": kind,
+                    "source": source,
+                    "title": title,
+                    "counts": counts,
+                }
+            )
+            if len(out) == limit:
+                break
+        return out
+
+    def mark_card(self, dictionary_id: int, entry: int, result: str) -> None:
+        if result not in RESULTS:
+            raise ValueError(f"unknown result {result!r}")
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO dictionary_cards VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (dictionary_id, entry) "
+                "DO UPDATE SET result = excluded.result, answered = excluded.answered",
+                (dictionary_id, entry, result, _now()),
+            )
+
+    def delete_dictionary(self, dictionary_id: int) -> bool:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "DELETE FROM dictionary_cards WHERE dictionary_id = ?", (dictionary_id,)
+            )
+            cur = self._conn.execute("DELETE FROM dictionaries WHERE id = ?", (dictionary_id,))
         return cur.rowcount > 0
 
     def set_read(self, doc_path: str, read: bool) -> None:

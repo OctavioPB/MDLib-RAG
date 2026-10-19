@@ -4,4 +4,4 @@ Fragmentos:
 
 Pregunta: {question}
 
-Responde en un párrafo breve o una lista corta, citando cada afirmación con [n].
+Responde según el nivel del estudiante, citando cada afirmación con [n].

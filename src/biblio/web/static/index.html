@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Biblioteca</title>
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
   <script src="/static/theme.js"></script>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
@@ -11,6 +12,11 @@
   <script src="/static/practicar.js" defer></script>
   <script src="/static/feynman.js" defer></script>
   <script src="/static/plan.js" defer></script>
+  <script src="/static/vendor/katex/katex.min.js" defer></script>
+  <script src="/static/reader.js" defer></script>
+  <script src="/static/library.js" defer></script>
+  <script src="/static/dictionary.js" defer></script>
+  <script src="/static/devices.js" defer></script>
   <script src="/static/mapas.js" defer></script>
 </head>
 <body>
@@ -25,6 +31,7 @@
         <a href="#/guias" data-page="guias">Guías</a>
         <a href="#/practicar" data-page="practicar">Practicar<span id="today-badge" class="nav-badge" hidden></span></a>
         <a href="#/mapas" data-page="mapas">Mapas</a>
+        <a href="#/biblioteca" data-page="biblioteca">Biblioteca</a>
       </nav>
     </div>
     <div class="topbar-right">
@@ -34,6 +41,10 @@
         <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg></span></label>
       </div>
       <span id="status" class="pill" role="status">Cargando…</span>
+      <button id="lan-connect" class="btn-icon" type="button" aria-label="Conectar un dispositivo"
+        title="Conectar un teléfono o una tableta de tu red" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"></rect><path d="M11 18h2"></path></svg>
+      </button>
       <button id="reindex" class="btn-icon" type="button" aria-label="Actualizar la biblioteca"
         title="Actualizar la biblioteca: indexa las notas nuevas, modificadas o borradas">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"></path><path d="M4 3v5h5"></path><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"></path><path d="M20 21v-5h-5"></path></svg>
@@ -90,6 +101,11 @@
               <label><input type="radio" name="mode" value="explain" checked><span>Explicar</span></label>
               <label><input type="radio" name="mode" value="find"><span>Solo ubicar</span></label>
             </div>
+            <div id="level-choice" class="segmented level-choice" role="radiogroup" aria-label="Nivel de la explicación">
+              <label title="Lo más sencillo, con un ejemplo cotidiano"><input type="radio" name="level" value="beginner"><span>Principiante</span></label>
+              <label title="Los términos de tus guías, para profundizar"><input type="radio" name="level" value="intermediate" checked><span>Intermedio</span></label>
+              <label title="Terminología técnica y relaciones entre temas, como en una maestría"><input type="radio" name="level" value="advanced"><span>Avanzado</span></label>
+            </div>
             <div class="composer-actions">
               <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings">Ajustes</button>
               <button id="send" class="btn-send" type="submit" aria-label="Enviar">
@@ -140,7 +156,10 @@
         <h2 id="source-section"></h2>
         <p id="source-guide" class="muted"></p>
         <div id="source-text" class="source-text"></div>
-        <a id="source-open" class="btn-soft" href="#">Abrir en Obsidian</a>
+        <div class="row">
+          <a id="source-read" class="btn-soft" href="#">Leer aquí</a>
+          <a id="source-open" class="btn" href="#">Abrir en Obsidian</a>
+        </div>
         <p id="source-path" class="path"></p>
       </div>
     </aside>
@@ -282,6 +301,51 @@
   </main>
 
   <!-- Mapas (ADR-022) ---------------------------------------------------------------------->
+  <main id="page-biblioteca" class="page biblioteca" hidden>
+    <div class="library-wrap">
+      <header class="library-head">
+        <h1>Biblioteca</h1>
+        <p id="library-count" class="muted"></p>
+        <label for="library-filter" class="sr-only">Buscar una nota</label>
+        <input id="library-filter" class="library-filter" type="search" maxlength="200" autocomplete="off"
+          placeholder="Busca una nota por título o carpeta…">
+      </header>
+      <section id="library-recent" class="library-recent" aria-labelledby="library-recent-title" hidden>
+        <h2 id="library-recent-title" class="eyebrow">Leídas hace poco</h2>
+        <ul id="library-recent-list" class="library-list"></ul>
+      </section>
+      <div id="library-tree" class="library-tree" aria-label="Notas por carpeta"></div>
+      <p id="library-empty" class="muted" hidden>Ninguna nota coincide con tu búsqueda.</p>
+    </div>
+  </main>
+
+  <main id="page-leer" class="page leer" hidden>
+    <article class="reader-main" aria-labelledby="reader-title">
+      <header class="reader-head">
+        <button id="reader-back" class="back-link" type="button">← Volver</button>
+        <p id="reader-path" class="path"></p>
+        <h1 id="reader-title"></h1>
+        <div id="reader-actions" class="row" hidden>
+          <a id="reader-open" class="btn" href="#">Abrir en Obsidian</a>
+          <button id="reader-read" class="btn" type="button" aria-pressed="false">Marcar como leída</button>
+          <span class="small muted">Selecciona un párrafo para que te lo explique o te pregunte sobre él.</span>
+        </div>
+      </header>
+      <div id="reader-body" class="reader-body md"></div>
+    </article>
+    <aside id="reader-panel" class="reader-panel" aria-label="Sobre tu selección" hidden>
+      <div class="row-between">
+        <h2 class="eyebrow">Sobre tu selección</h2>
+        <button id="reader-panel-close" class="btn-ghost" type="button" aria-label="Cerrar el panel">Cerrar</button>
+      </div>
+      <div id="reader-panel-list" class="reader-panel-list"></div>
+    </aside>
+    <div id="reader-toolbar" class="reader-toolbar" role="toolbar" aria-label="Acciones sobre la selección" hidden>
+      <button id="reader-explain" class="btn-primary" type="button">Explícame esto</button>
+      <button id="reader-quiz" class="btn" type="button">Pregúntame sobre esto</button>
+    </div>
+  </main>
+
   <main id="page-mapas" class="page mapas" hidden>
     <aside id="map-history" class="history-side" aria-label="Historial de mapas">
       <label for="map-history-search" class="sr-only">Buscar en tus mapas</label>
@@ -376,6 +440,12 @@
             <span class="hub-tile-text">Explica un concepto con tus palabras y lo comparo con tus notas.</span>
             <span class="hub-tile-go">Elegir concepto →</span>
           </button>
+          <button id="tile-dictionary" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"></path><path d="M8 7h7M8 11h5"></path></svg>
+            <strong>Diccionario</strong>
+            <span class="hub-tile-text">Los conceptos, funciones y fórmulas de un tema o una guía, para repasarlos como fichas.</span>
+            <span class="hub-tile-go">Crear o abrir →</span>
+          </button>
           <button id="tile-review" class="hub-tile" type="button" disabled>
             <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 3-6.2"></path><path d="M4 4v5h5"></path></svg>
             <strong>Repasar mis fallos</strong>
@@ -456,6 +526,63 @@
       </section>
     </div>
 
+    <div id="practice-dictionary" class="dict-screen" hidden>
+      <div class="dict-bar">
+        <button class="back-link" type="button" data-back>← Practicar</button>
+        <label class="dict-pick"><span>Diccionario</span>
+          <select id="dict-select"><option value="">Elige un diccionario…</option></select></label>
+        <button id="dict-new-toggle" class="btn" type="button" aria-expanded="false" aria-controls="dict-new">+ Nuevo</button>
+        <div id="dict-actions" class="dict-bar-actions" hidden>
+          <button id="dict-cards-start" class="btn-primary" type="button">Repasar como fichas</button>
+          <details class="dict-more">
+            <summary class="btn">Exportar</summary>
+            <div class="dict-menu">
+              <a id="dict-md" href="#" download>Markdown (para Obsidian)</a>
+              <a id="dict-anki" href="#" download title="En Anki: Archivo › Importar">Anki</a>
+              <button id="dict-delete" class="danger-text" type="button">Borrar diccionario</button>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <section id="dict-new" class="practice-card dict-new" aria-labelledby="dict-new-title" hidden>
+        <h1 id="dict-new-title">Nuevo diccionario</h1>
+        <p class="muted">Los conceptos principales de un tema o de una guía, con una definición breve y la cita
+          de tus notas que la respalda. Si hay código o fórmulas, también sus funciones y fórmulas.</p>
+        <form id="dict-form" class="dict-form" autocomplete="off">
+          <div class="segmented" role="radiogroup" aria-label="De dónde sale">
+            <label><input type="radio" name="dict-kind" value="topic" checked><span>Un tema</span></label>
+            <label><input type="radio" name="dict-kind" value="guide"><span>Una guía</span></label>
+          </div>
+          <div class="feynman-form">
+            <input id="dict-value" type="text" maxlength="300" placeholder="p. ej. regresión logística"
+              aria-label="Tema o guía">
+            <button id="dict-create" class="btn-primary" type="submit">Crear diccionario</button>
+          </div>
+        </form>
+      </section>
+      <p id="dict-status" class="muted" role="status" hidden></p>
+      <p id="dict-error" class="error" hidden></p>
+      <p id="dict-empty" class="muted" hidden>Elige uno de tus diccionarios arriba, o crea uno nuevo.</p>
+
+      <div id="dict-body" class="dict-body" hidden>
+        <section class="dict-index" aria-labelledby="dict-heading">
+          <h2 id="dict-heading" class="dict-heading"></h2>
+          <div id="dict-tabs" class="dict-tabs" role="tablist" aria-label="Listas">
+            <button type="button" role="tab" data-kind="concept">Conceptos</button>
+            <button type="button" role="tab" data-kind="function">Funciones</button>
+            <button type="button" role="tab" data-kind="formula">Fórmulas</button>
+          </div>
+          <label for="dict-filter" class="sr-only">Filtrar términos</label>
+          <input id="dict-filter" class="dict-filter" type="search" placeholder="Filtrar términos…" autocomplete="off">
+          <nav id="dict-letters" class="dict-letters" aria-label="Ir a una letra"></nav>
+          <ul id="dict-terms" class="dict-terms"></ul>
+        </section>
+        <article id="dict-detail" class="dict-detail" aria-live="polite"></article>
+      </div>
+      <div id="dict-cards" class="dict-cards" hidden></div>
+    </div>
+
     <div id="practice-progress-screen" class="practice-sub" hidden>
       <button class="back-link" type="button" data-back>← Practicar</button>
       <aside id="practice-progress" class="practice-card progress-card" aria-label="Tu progreso"></aside>
@@ -465,5 +592,25 @@
     <div id="practice-results" class="practice-quiz" hidden></div>
     <div id="practice-feynman" class="practice-quiz" hidden></div>
   </main>
+  <dialog id="lan-dialog" class="lan-dialog" aria-labelledby="lan-title">
+    <div class="row-between">
+      <h2 id="lan-title">Conectar un teléfono o una tableta</h2>
+      <button id="lan-close" class="btn-ghost" type="button">Cerrar</button>
+    </div>
+    <ol class="lan-steps">
+      <li>Conéctalo a la misma red Wi-Fi que este PC.</li>
+      <li>Escanea el código con su cámara y abre el enlace.</li>
+      <li>Se abre la Biblioteca y queda emparejado: la próxima vez basta con la dirección.</li>
+    </ol>
+    <img id="lan-qr" class="lan-qr" alt="Código QR para emparejar un dispositivo" width="220" height="220">
+    <p id="lan-expiry" class="small muted"></p>
+    <p class="small">Dirección: <span id="lan-address" class="mono"></span></p>
+    <details class="small"><summary>Enlace de emparejamiento</summary><p id="lan-link" class="mono lan-link"></p></details>
+    <p id="lan-error" class="error" hidden></p>
+    <button id="lan-new" class="btn" type="button">Generar otro código</button>
+    <h3>Dispositivos emparejados</h3>
+    <ul id="lan-devices" class="lan-devices"></ul>
+    <p class="small muted">La conexión no va cifrada: úsalo solo en tu red de casa. Los datos y el modelo siguen en este PC.</p>
+  </dialog>
 </body>
 </html>
