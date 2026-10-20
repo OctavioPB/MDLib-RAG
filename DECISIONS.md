@@ -45,6 +45,7 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 038 | Conversations that keep their topic, and answers that relate guides | Accepted · Supersedes part of ADR-019, ADR-023 |
 | 039 | Changing the library's location from the app or the terminal, reusing the index when it is the same library | Accepted · Supersedes part of ADR-021 |
 | 040 | «Reset»: start the app over without its memory, never touching the library | Accepted |
+| 041 | OPB visual style with vendored fonts (Fraunces, Plus Jakarta Sans) | Accepted |
 
 ---
 
@@ -714,3 +715,18 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 - **Where.** «Reset» on the Biblioteca page, on this PC only (not for paired devices), with a dialog that lists what will be erased, with counts, and asks «¿Estás seguro?». `biblio reset` in the terminal does the same when the app is not running.
 
 **Consequences.** (+) A clean start in one step, with the library and its index intact. (+) A mistaken reset can be undone by copying the backup back. (−) Backups take disk space until deleted (the page says where they are).
+
+## ADR-041 — OPB visual style with vendored fonts
+
+**Date:** 2026-10-20 · **State:** Accepted
+
+**Context.** The user asked for the app to follow their OPB brand guide (navy and gold, Fraunces for headings, Plus Jakarta Sans for text, gold eyebrows, a navy top bar with the monogram) and approved a design canvas, with a small, simple hero on Practicar instead of the large one proposed. The guide links the fonts from Google Fonts, which ADR-016 forbids: the page loads nothing from outside.
+
+**Decision.**
+- **Fonts vendored**, as KaTeX is (ADR-031): `static/vendor/fonts/` holds the latin subset of Fraunces 300/400 (normal and italic) and Plus Jakarta Sans 400/500/600/700 as `.woff2`, from `@fontsource` 5.3.0, under the SIL Open Font License 1.1 (licence files alongside, `VERSION.txt` says where they came from). The server serves only top-level `.woff2` files from that folder.
+- **Colour tokens** in `app.css` are the brand's: navy `#003366` as the accent, gold `#C8982A` for calls to action and accents, a navy dark theme. Small gold text on light backgrounds uses `--gold-ink` (`#8A6512`), because the brand gold on white is below AA contrast for text.
+- **A brand layer** at the end of `app.css` restyles existing classes (top bar, headings, eyebrows, hubs, cards, the «Relación propuesta» callout); the markup changes only in the brand (logo SVG, «OPB · Biblioteca») and italic keywords in some headings. No behaviour changes.
+- Practicar and Guías keep a small hero band (one line of title, one of text, one button).
+
+**Consequences.** (+) The app looks like the rest of the user's work, with no network at runtime. (+) A different style later means swapping tokens and the brand layer. (−) ~160 KB of fonts in the repo, to be updated by hand like KaTeX.
+

@@ -1,0 +1,4 @@
+Fraunces and Plus Jakarta Sans, from @fontsource/fraunces 5.3.0 and @fontsource/plus-jakarta-sans 5.3.0
+(npm), SIL Open Font License 1.1 (see the LICENSE files), vendored for the OPB visual style.
+Only the latin subset and the weights the style uses: Fraunces 300/400 normal and italic,
+Plus Jakarta Sans 400/500/600/700. Nothing is loaded from outside (ADR-016).

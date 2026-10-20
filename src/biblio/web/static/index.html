@@ -23,9 +23,11 @@
 <body>
   <header class="topbar">
     <div class="topbar-left">
-      <a class="brand" href="#/conversar">
-        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"></path><path d="M4 21V5"></path><path d="M9 7h6"></path></svg>
-        <span>Biblioteca</span>
+      <a class="brand" href="#/conversar" aria-label="Biblioteca, inicio">
+        <svg width="30" height="30" viewBox="0 0 72 72" fill="none" aria-hidden="true"><rect width="72" height="72" rx="16" fill="#002855"/><circle cx="15" cy="36" r="6" stroke="#336699" stroke-width="2"/><circle cx="15" cy="36" r="2.5" fill="#336699"/><line x1="22" y1="36" x2="29" y2="36" stroke="#C8982A" stroke-width="1.5" stroke-dasharray="2.5 2"/><circle cx="36" cy="36" r="9" fill="#C8982A"/><text x="36" y="40.5" font-family="Fraunces,Georgia,serif" font-size="10" font-weight="300" fill="#fff" text-anchor="middle">P</text><line x1="45" y1="36" x2="52" y2="36" stroke="#C8982A" stroke-width="1.5" stroke-dasharray="2.5 2"/><rect x="53" y="29" width="14" height="14" rx="2.5" stroke="#fff" stroke-width="1.8"/><rect x="56.5" y="32.5" width="7" height="7" rx="1" fill="#fff"/></svg>
+        <span class="brand-mono">O<em>PB</em></span>
+        <span class="brand-sep" aria-hidden="true"></span>
+        <span class="brand-name">Biblioteca</span>
       </a>
       <nav class="pages" aria-label="Secciones">
         <a href="#/conversar" data-page="conversar">Conversar</a>
@@ -42,7 +44,10 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
         <span>Historial</span>
       </button>
-      <button id="new-thread" class="btn" type="button">Nueva conversación</button>
+      <button id="new-thread" class="btn" type="button" title="Nueva conversación">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+        <span>Nueva conversación</span>
+      </button>
       <!-- always last: the gear is in the right corner on every page -->
       <button id="settings-open" class="btn-icon" type="button" aria-label="Ajustes" title="Ajustes"
         aria-haspopup="dialog" aria-controls="settings-dialog">
@@ -89,7 +94,7 @@
       <p id="conversation-status" class="small muted conversation-status" role="status"></p>
       <div id="thread" class="thread">
         <div id="welcome" class="welcome">
-          <h1>¿Qué quieres encontrar o entender?</h1>
+          <h1>¿Qué quieres encontrar o <em>entender</em>?</h1>
           <p>Escribe una pregunta para que te la explique con tus notas, o un tema para ver dónde está.
             Cada respuesta cita sus fuentes; pulsa un número para leer el fragmento original.</p>
         </div>
@@ -111,7 +116,7 @@
               <label title="Terminología técnica y relaciones entre temas, como en una maestría"><input type="radio" name="level" value="advanced"><span>Avanzado</span></label>
             </div>
             <div class="composer-actions">
-              <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings">Ajustes</button>
+              <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings">Opciones de respuesta</button>
               <button id="send" class="btn-send" type="submit" aria-label="Enviar">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>
               </button>
@@ -242,7 +247,7 @@
 
     <section class="guide-main">
       <form id="guide-topic-form" class="guide-topic" autocomplete="off">
-        <h1>Nueva guía</h1>
+        <h1>Nueva <em>guía</em></h1>
         <label for="guide-topic">¿Sobre qué tema?</label>
         <div class="row">
           <input id="guide-topic" type="text" maxlength="200" required
@@ -351,92 +356,130 @@
   </main>
 
   <main id="page-mapas" class="page mapas" hidden>
-    <aside id="map-history" class="history-side" aria-label="Historial de mapas">
-      <label for="map-history-search" class="sr-only">Buscar en tus mapas</label>
-      <input id="map-history-search" type="search" maxlength="200" placeholder="Buscar por tema, concepto o paso…">
-      <ul id="map-history-list" class="history-list"></ul>
-      <p id="map-history-empty" class="small muted" hidden></p>
-    </aside>
-    <div class="mapas-content">
-    <div class="map-bar">
-      <form id="map-form" class="map-form" autocomplete="off">
-        <div class="map-form-row">
-          <label for="map-topic" class="sr-only">Tema</label>
-          <input id="map-topic" type="text" maxlength="200" required placeholder="Tema, p. ej. Naive Bayes">
-          <button id="map-create" class="btn-primary" type="submit">Crear</button>
-        </div>
-        <div class="map-form-row">
-          <div class="segmented map-kinds" role="radiogroup" aria-label="Tipo de diagrama">
-            <label><input type="radio" name="map-kind" value="concepts" checked><span>Conceptos</span></label>
-            <label><input type="radio" name="map-kind" value="novak"><span>Mapa conceptual</span></label>
-            <label><input type="radio" name="map-kind" value="flow"><span>Flujo</span></label>
-            <label><input type="radio" name="map-kind" value="sequence"><span>Secuencia</span></label>
-            <label><input type="radio" name="map-kind" value="fishbone"><span>Causa-efecto</span></label>
-          </div>
-          <button id="map-suggest" class="btn" type="button"
-            title="El modelo propone el tipo de diagrama según el tema y tus notas">Sugerir tipo</button>
-        </div>
-        <p id="map-suggestion" class="small map-suggestion" role="status" hidden></p>
-      </form>
-      <div class="map-tools">
-        <div class="segmented" role="radiogroup" aria-label="Vista">
-          <label><input type="radio" name="map-view" value="map" checked><span>Mapa</span></label>
-          <label><input type="radio" name="map-view" value="outline"><span>Esquema</span></label>
-        </div>
-        <button id="map-zoom-out" class="btn-icon" type="button" aria-label="Alejar">−</button>
-        <button id="map-zoom-in" class="btn-icon" type="button" aria-label="Acercar">+</button>
-        <button id="map-fit" class="btn" type="button">Centrar</button>
-        <button id="map-mastery" class="btn" type="button" aria-pressed="false" disabled
-          title="Colorear cada concepto según cuánto lo recuerdas hoy">Dominio</button>
-        <button id="map-panel-toggle" class="btn" type="button" aria-controls="map-panel" aria-expanded="true"
-          title="Mostrar u ocultar el panel del concepto seleccionado">Concepto</button>
-        <button id="map-reset" class="btn" type="button" disabled
-          title="Deshacer los movimientos de nodos y volver a la disposición automática">Reorganizar</button>
-        <button id="map-save" class="btn" type="button" disabled>Guardar</button>
-        <button id="map-svg" class="btn" type="button" disabled>Descargar SVG</button>
-        <button id="map-mermaid" class="btn" type="button" disabled
-          title="Copiar el diagrama como Mermaid, para pegarlo en una nota de Obsidian">Copiar Mermaid</button>
-        <button id="map-delete" class="btn danger-text" type="button" disabled>Borrar</button>
+    <div class="map-canvas">
+      <div id="map-stage" class="map-stage" hidden>
+        <svg id="map-svg-root" class="map-svg" role="group" aria-label="Mapa conceptual"><g id="map-viewport"></g></svg>
+        <ul id="map-legend" class="map-legend" aria-label="Leyenda de dominio" hidden>
+          <li><span class="swatch mastered"></span>Dominado</li>
+          <li><span class="swatch partial"></span>A medias</li>
+          <li><span class="swatch weak"></span>Por repasar</li>
+          <li><span class="swatch new"></span>Sin practicar</li>
+        </ul>
       </div>
-    </div>
-    <nav id="map-trail" class="map-trail" aria-label="Mapas abiertos" hidden></nav>
-    <p id="map-status" class="muted map-status" role="status"></p>
-    <div id="map-gap" class="map-gap" hidden></div>
-    <div id="map-diagram-bar" class="map-diagram-bar" hidden></div>
-    <p id="map-error" class="error" hidden></p>
+      <div id="map-outline" class="map-outline md" hidden></div>
 
-    <div class="map-layout">
-      <div class="map-main">
-        <div id="map-empty" class="map-empty">
-          <h1>Mapas y diagramas</h1>
-          <p>Escribe un tema, elige el tipo de diagrama y leo las secciones de tus notas que tratan de él.
-            Cada pieza lleva a la cita de tus notas de donde sale; lo que tus notas no dicen no se dibuja.
-            Tarda entre 20 y 40 segundos; el diagrama va creciendo mientras leo.</p>
-          <ul class="map-kind-help">
-            <li><strong>Conceptos</strong>: las ideas del tema alrededor de él, con sus relaciones.</li>
-            <li><strong>Mapa conceptual</strong>: de lo general a lo particular, cada flecha con su frase de enlace.</li>
-            <li><strong>Flujo</strong>: los pasos y decisiones de un proceso o algoritmo.</li>
-            <li><strong>Secuencia</strong>: los mensajes entre sistemas o personas, en orden.</li>
-            <li><strong>Causa-efecto</strong>: las causas de un problema, agrupadas en categorías.</li>
-          </ul>
-          <p>¿No sabes cuál? Escribe el tema y pulsa <strong>Sugerir tipo</strong>.</p>
+      <!-- floating on the drawing: the pill, the creation card and the notices -->
+      <div id="map-left" class="map-left">
+        <div class="map-pillrow">
+          <div class="map-pill">
+            <button id="map-drawer-toggle" class="map-icon-btn" type="button" aria-label="Mis mapas" title="Mis mapas"
+              aria-controls="map-history" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></svg></button>
+            <span id="map-drawer-sep" class="map-pill-sep" aria-hidden="true" hidden></span>
+            <button id="map-title" class="map-title" type="button" aria-controls="map-creator" aria-expanded="false"
+              title="Cambiar el tema o el tipo" hidden>
+              <span id="map-title-topic" class="map-title-topic"></span>
+              <span id="map-title-kind" class="map-chip"></span>
+              <span id="map-title-count" class="map-title-count"></span>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <span id="map-title-sep" class="map-pill-sep" aria-hidden="true" hidden></span>
+            <button id="map-new" class="map-new" type="button" hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Nuevo
+            </button>
+          </div>
+          <div id="map-view" class="segmented map-view" role="radiogroup" aria-label="Vista" hidden>
+            <label><input type="radio" name="map-view" value="map" checked><span>Mapa</span></label>
+            <label><input type="radio" name="map-view" value="outline"><span>Esquema</span></label>
+          </div>
         </div>
-        <div id="map-stage" class="map-stage" hidden>
-          <svg id="map-svg-root" class="map-svg" role="group" aria-label="Mapa conceptual"><g id="map-viewport"></g></svg>
-          <ul id="map-legend" class="map-legend" aria-label="Leyenda de dominio" hidden>
-            <li><span class="swatch mastered"></span>Dominado</li>
-            <li><span class="swatch partial"></span>A medias</li>
-            <li><span class="swatch weak"></span>Por repasar</li>
-            <li><span class="swatch new"></span>Sin practicar</li>
-          </ul>
-        </div>
-        <div id="map-outline" class="map-outline md" hidden></div>
+        <section id="map-creator" class="map-creator" aria-label="Crear un mapa o diagrama">
+          <div id="map-empty" class="map-empty">
+            <h1>Mapas y <em>diagramas</em></h1>
+            <p>Escribe un tema, elige el tipo de diagrama y leo las secciones de tus notas que tratan de él.
+              Cada pieza lleva a la cita de tus notas de donde sale; lo que tus notas no dicen no se dibuja.
+              Tarda entre 20 y 40 segundos; el diagrama va creciendo mientras leo.</p>
+          </div>
+          <form id="map-form" class="map-form" autocomplete="off">
+            <div class="map-form-row">
+              <label for="map-topic" class="sr-only">Tema</label>
+              <input id="map-topic" type="text" maxlength="200" required placeholder="Tema, p. ej. Naive Bayes">
+              <button id="map-create" class="btn-primary" type="submit">Crear</button>
+            </div>
+            <div class="map-form-row">
+              <div class="segmented map-kinds" role="radiogroup" aria-label="Tipo de diagrama">
+                <label><input type="radio" name="map-kind" value="concepts" checked><span>Conceptos</span></label>
+                <label><input type="radio" name="map-kind" value="novak"><span>Mapa conceptual</span></label>
+                <label><input type="radio" name="map-kind" value="flow"><span>Flujo</span></label>
+                <label><input type="radio" name="map-kind" value="sequence"><span>Secuencia</span></label>
+                <label><input type="radio" name="map-kind" value="fishbone"><span>Causa-efecto</span></label>
+              </div>
+              <button id="map-suggest" class="btn" type="button"
+                title="El modelo propone el tipo de diagrama según el tema y tus notas">Sugerir tipo</button>
+            </div>
+            <p id="map-suggestion" class="small map-suggestion" role="status" hidden></p>
+          </form>
+          <div id="map-help" class="map-help">
+            <ul class="map-kind-help">
+              <li><strong>Conceptos</strong>: las ideas del tema alrededor de él, con sus relaciones.</li>
+              <li><strong>Mapa conceptual</strong>: de lo general a lo particular, cada flecha con su frase de enlace.</li>
+              <li><strong>Flujo</strong>: los pasos y decisiones de un proceso o algoritmo.</li>
+              <li><strong>Secuencia</strong>: los mensajes entre sistemas o personas, en orden.</li>
+              <li><strong>Causa-efecto</strong>: las causas de un problema, agrupadas en categorías.</li>
+            </ul>
+            <p>¿No sabes cuál? Escribe el tema y pulsa <strong>Sugerir tipo</strong>.</p>
+          </div>
+        </section>
+        <nav id="map-trail" class="map-trail" aria-label="Mapas abiertos" hidden></nav>
+        <p id="map-status" class="map-status" role="status"></p>
+        <div id="map-gap" class="map-gap" hidden></div>
+        <div id="map-diagram-bar" class="map-diagram-bar" hidden></div>
+        <p id="map-error" class="error" hidden></p>
       </div>
-      <aside id="map-panel" class="source-panel map-panel" aria-label="Concepto seleccionado">
-        <p id="map-panel-empty" class="muted">Pulsa una pieza del diagrama para ver su cita y los fragmentos de tus notas de donde sale.</p>
+
+      <aside id="map-history" class="map-drawer" aria-label="Mis mapas" hidden>
+        <div class="map-drawer-head">
+          <h2>Mis mapas</h2>
+          <button id="map-drawer-close" class="map-icon-btn" type="button" aria-label="Cerrar mis mapas"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        </div>
+        <label for="map-history-search" class="sr-only">Buscar en tus mapas</label>
+        <input id="map-history-search" type="search" maxlength="200" placeholder="Buscar por tema, concepto o paso…">
+        <ul id="map-history-list" class="history-list"></ul>
+        <p id="map-history-empty" class="small muted" hidden></p>
+      </aside>
+
+      <div id="map-tools" class="map-actions" role="toolbar" aria-label="Acciones del diagrama" hidden>
+        <button id="map-mastery" class="map-icon-btn" type="button" aria-pressed="false" disabled aria-label="Dominio"
+          title="Dominio: colorear cada concepto según cuánto lo recuerdas hoy"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 3v9h9"/></svg></button>
+        <button id="map-reset" class="map-icon-btn" type="button" disabled aria-label="Reorganizar"
+          title="Reorganizar: deshacer los movimientos de nodos y volver a la disposición automática"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg></button>
+        <button id="map-save" class="map-icon-btn" type="button" disabled aria-label="Guardar"
+          title="Guardar en drafts/maps como Markdown y Canvas de Obsidian"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/></svg></button>
+        <details id="map-more" class="dict-more">
+          <summary class="map-icon-btn" aria-label="Más acciones del diagrama" title="Más: Descargar SVG, Copiar Mermaid, Borrar">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+          </summary>
+          <div class="dict-menu">
+            <button id="map-svg" type="button" disabled>Descargar SVG</button>
+            <button id="map-mermaid" type="button" disabled
+              title="Copiar el diagrama como Mermaid, para pegarlo en una nota de Obsidian">Copiar Mermaid</button>
+            <button id="map-delete" class="danger-text" type="button" disabled>Borrar</button>
+          </div>
+        </details>
+      </div>
+
+      <div id="map-zoom" class="map-zoom" role="group" aria-label="Zoom" hidden>
+        <button id="map-zoom-in" type="button" aria-label="Acercar">+</button>
+        <button id="map-zoom-out" type="button" aria-label="Alejar">−</button>
+        <button id="map-fit" type="button" aria-label="Centrar" title="Centrar el diagrama">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+
+      <aside id="map-panel" class="map-panel" aria-label="Pieza seleccionada" hidden>
+        <button id="map-panel-close" class="map-icon-btn map-panel-close" type="button" aria-label="Cerrar"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+        <p id="map-panel-empty" class="muted" hidden>Pulsa una pieza del diagrama para ver su cita y los fragmentos de tus notas de donde sale.</p>
         <div id="map-panel-view" hidden></div>
       </aside>
-    </div>
     </div>
   </main>
 
@@ -490,7 +533,7 @@
     <div id="practice-form-screen" class="practice-sub" hidden>
       <button class="back-link" type="button" data-back>← Practicar</button>
       <form id="practice-form" class="practice-card practice-form" autocomplete="off">
-        <h1>¿Qué quieres practicar?</h1>
+        <h1>¿Qué quieres <em>practicar</em>?</h1>
 
         <fieldset class="scope-options">
           <legend>De dónde salen las preguntas</legend>

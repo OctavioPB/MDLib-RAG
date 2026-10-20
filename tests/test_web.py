@@ -679,3 +679,16 @@ def test_reset_never_touches_the_library(config: Config, tmp_path: Path) -> None
     with pytest.raises(ValueError):
         check_safe(cfg, [cfg.paths.index_db])
     check_safe(cfg, [cfg.conversations.db, cfg.paths.drafts_dir])
+
+
+def test_the_vendored_fonts_are_served_and_nothing_else(server: tuple[str, int]) -> None:
+    import re
+
+    css = (Path(__file__).parents[1] / "src/biblio/web/static/app.css").read_text(encoding="utf-8")
+    fonts = re.findall(r"url\(/static/vendor/fonts/([^)]+)\)", css)
+    assert len(fonts) == 8  # Fraunces 300/400 normal and italic, Plus Jakarta Sans 400-700
+    for name in fonts:
+        status, headers, _ = request(server, "GET", f"/static/vendor/fonts/{name}")
+        assert status == 200 and headers.get("content-type") == "font/woff2", name
+    for bad in ("LICENSE-Fraunces.txt", "../app.css", "..%2Fapp.css", "x/y.woff2", "nope.woff2"):
+        assert request(server, "GET", f"/static/vendor/fonts/{bad}")[0] == 404, bad

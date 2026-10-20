@@ -302,11 +302,16 @@ The reader also offers **Abrir en Obsidian** and **Marcar como leída** (for the
 - **Dominio** (ADR-026) colours each concept by how well you remember its sections today, from your
   practice: green mastered, amber half-remembered, red to review, dashed grey never practised. The
   panel gives the percentage.
-- **Concepto** shows or hides the panel of the selected concept, giving its width to the drawing.
 - **Esquema** shows the same map as an indented list with each relation written as a sentence.
-- **Every map is kept** (ADR-024) in `data/maps.db`: the list on the left shows them newest first,
-  can be searched by topic or by the concepts in them, and reopens a map instantly, without the LLM.
-  **Borrar** deletes the open map; **Historial** in the top bar shows or hides the list.
+- The drawing fills the page and the controls float on it: top left a bar with **Mis mapas**, the
+  open map's title (topic, type and size; click it to change the topic or the type) and **Nuevo**,
+  with **Mapa / Esquema** beside it; top right **Dominio**, **Reorganizar**, **Guardar** and **⋯**
+  (Descargar SVG, Copiar Mermaid, Borrar); zoom and centre bottom right. A selected piece opens a
+  card on the right (✕, or a click on the background, closes it). A diagram's versions or
+  categories fold into one line under the bar.
+- **Every map is kept** (ADR-024) in `data/maps.db`: **Mis mapas** opens the list, newest first;
+  it can be searched by topic or by the concepts in them, and reopens a map instantly, without the
+  LLM. **Borrar** deletes the open map.
 - **Guardar** writes it to `drafts/maps/` as Markdown and as an Obsidian Canvas file (`.canvas`):
   copy that file into your vault to open it in Obsidian, with each concept linked to its notes.
   **Descargar SVG** saves the drawing. `uv run biblio map "tema"` prints the outline in the terminal.
@@ -370,7 +375,8 @@ processed (about a second when nothing changed). It embeds on the GPU when free 
 the LLM server runs, and refuses politely if another index run is in progress.
 
 **Apariencia** in Ajustes switches between a light theme, a dark one, or following your system
-(the default); the choice is remembered in the browser.
+(the default); the choice is remembered in the browser. The look follows the OPB style (navy and gold,
+Fraunces and Plus Jakarta Sans); the fonts ship with the app under the SIL Open Font License (ADR-041).
 
 The server listens only on `127.0.0.1`, rejects requests addressed to any other host name, and loads
 nothing from the internet (ADR-016). The query embedder stays loaded, so a search takes about half a

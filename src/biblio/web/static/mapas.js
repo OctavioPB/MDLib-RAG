@@ -13,6 +13,8 @@ const mapState = {
   moved: false, // the user panned or zoomed: stop re-fitting the growing map
   mastery: false, // colour the nodes by how well they are remembered today (ADR-026)
   kind: "concepts", // the type chosen for the next map (ADR-036)
+  creatorOpen: false, // the creation card over an open map (always shown when none is open)
+  diagramBarOpen: false, // a diagram's versions or categories, folded into one line by default
 };
 
 const MAP_KINDS = {
@@ -67,6 +69,7 @@ async function createMap(topic, expand = false) {
   mapState.selected = null;
   mapState.moved = false;
   mapState.busy = true;
+  mapState.creatorOpen = false;
   mapState.controller = new AbortController();
   $("map-topic").value = topic;
   $("map-suggestion").hidden = true;
@@ -367,12 +370,46 @@ function bindPick(node, id) {
   });
 }
 
-/** «Concepto»: show or hide the panel of the selected concept; the choice is remembered. */
-function setConceptPanelOpen(open) {
-  $("map-panel").hidden = !open;
-  $("map-panel-toggle").setAttribute("aria-expanded", String(open));
-  $("map-panel-toggle").classList.toggle("active", open);
-  store.set("biblio.mapPanelOpen", open);
+// --- the controls floating on the drawing ---------------------------------------------------
+
+/** «Mis mapas»: the history as a drawer over the drawing. */
+function setMapDrawer(open) {
+  $("map-history").hidden = !open;
+  $("map-drawer-toggle").setAttribute("aria-expanded", String(open));
+  if (open) $("map-history-search").focus();
+}
+
+/** The creation card: always shown while no map is open; over a map, opened from its title or «Nuevo». */
+function setCreatorOpen(open, fresh = false) {
+  const entry = current();
+  mapState.creatorOpen = open;
+  if (open) {
+    $("map-topic").value = fresh || !entry ? "" : entry.topic;
+    $("map-suggestion").hidden = true;
+  }
+  renderCreator();
+  if (open) $("map-topic").focus();
+}
+
+function renderCreator() {
+  const entry = current();
+  const open = !entry || mapState.creatorOpen;
+  $("map-creator").hidden = !open;
+  $("map-title").setAttribute("aria-expanded", String(Boolean(entry) && open));
+  $("map-empty").hidden = Boolean(entry);
+  $("map-help").hidden = Boolean(entry);
+}
+
+/** The pill: the open map's topic, type and size, with «Nuevo». */
+function renderPill() {
+  const entry = current();
+  for (const id of ["map-title", "map-title-sep", "map-drawer-sep", "map-new", "map-view"]) $(id).hidden = !entry;
+  if (!entry) return;
+  $("map-title-topic").textContent = entry.topic;
+  $("map-title-kind").textContent = MAP_KINDS[entry.kind].label;
+  const count = entry.map ? (isDiagram(entry) ? entry.map.count : entry.map.nodes.length - 1) : null;
+  $("map-title-count").textContent = count === null ? "" : mapUnits(entry.kind, count);
+  $("map-title").title = `Cambiar el tema o el tipo${entry.created ? ` · creado el ${formatWhen(entry.created)}` : ""}`;
 }
 
 function selectNode(id) {
@@ -470,6 +507,23 @@ function mapBounds(entry) {
   return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys), padX: 160, padY: 80 };
 }
 
+/** What the floating controls cover: the pill and notices at the top and, when open on the right, the panel. */
+function mapInsets(box) {
+  let bottom = box.top; // the pill and the notices below it, not the creation card (it closes)
+  for (const child of $("map-left").children) {
+    if (child.id === "map-creator" || child.hidden || getComputedStyle(child).display === "none") continue;
+    bottom = Math.max(bottom, child.getBoundingClientRect().bottom);
+  }
+  const top = Math.max(0, bottom - box.top);
+  const panel = $("map-panel");
+  let right = 0;
+  if (!panel.hidden) {
+    const rect = panel.getBoundingClientRect();
+    if (rect.left > box.left + box.width / 2) right = Math.max(0, box.right - rect.left);
+  }
+  return { top, right };
+}
+
 function fitView() {
   const entry = current();
   const stage = $("map-stage");
@@ -480,15 +534,18 @@ function fitView() {
   const h = b.y1 - b.y0 + b.padY * 2;
   const box = stage.getBoundingClientRect();
   if (!box.width || !box.height) return; // hidden: fitted when shown
-  const k = Math.min(1.2, Math.max(0.2, Math.min(box.width / w, box.height / h)));
+  const { top, right } = mapInsets(box);
+  const width = box.width - right;
+  const height = box.height - top;
+  const k = Math.min(1.2, Math.max(0.2, Math.min(width / w, height / h)));
   const cx = (b.x0 + b.x1) / 2;
   const cy = (b.y0 + b.y1) / 2;
-  const readable = Math.min(1, box.width / w);
+  const readable = Math.min(1, width / w);
   if ((isDiagram(entry) || entry.kind === "novak") && k < 0.75 && readable > k) {
     // a tall flow, fishbone or Novak tree: fit the width and start at the top, so the text stays readable
-    mapState.zoom = { k: readable, x: box.width / 2 - cx * readable, y: b.padY * readable };
+    mapState.zoom = { k: readable, x: width / 2 - cx * readable, y: top + b.padY * readable };
   } else {
-    mapState.zoom = { k, x: box.width / 2 - cx * k, y: box.height / 2 - cy * k };
+    mapState.zoom = { k, x: width / 2 - cx * k, y: top + height / 2 - cy * k };
   }
   applyZoom();
 }
@@ -589,19 +646,24 @@ function mermaidBlock(text) {
   return [el("h3", null, "Mermaid"), el("p", "small muted", "Pega este bloque en una nota de Obsidian y lo dibuja."), pre];
 }
 
+// The flow or sequence version on show; empty while the first one is being read or when the notes have none.
+function shownVersion(map) {
+  return map.data.versions[map.data.current] || { source: 0, steps: [], messages: [], participants: [] };
+}
+
 function diagramOutline(entry) {
   const map = entry.map;
   const out = [el("h2", null, entry.topic)];
   if (entry.kind === "flow") {
     const list = el("ol");
-    for (const s of map.data.versions[map.data.current].steps) {
+    for (const s of shownVersion(map).steps) {
       const li = el("li");
       li.append(pickButton(s.label, s.id), document.createTextNode(` ${cites(s)}`));
       list.append(li);
     }
     out.push(list, el("p", "small muted", "Las flechas punteadas marcan un orden que tus notas no escriben."));
   } else if (entry.kind === "sequence") {
-    const version = map.data.versions[map.data.current];
+    const version = shownVersion(map);
     const list = el("ol");
     for (const m of version.messages) {
       const li = el("li");
@@ -751,7 +813,7 @@ function renderDiagramPanel(entry) {
   const id = mapState.selected;
   let parts = null;
   if (entry.kind === "flow") {
-    const steps = map.data.versions[map.data.current].steps;
+    const steps = shownVersion(map).steps;
     const i = steps.findIndex((s) => s.id === id);
     if (i >= 0) {
       const s = steps[i];
@@ -767,7 +829,7 @@ function renderDiagramPanel(entry) {
       parts.push(move, pieceActions(entry, s.label, s.sources[0]), ...sourceList(entry, s.sources));
     }
   } else if (entry.kind === "sequence") {
-    const version = map.data.versions[map.data.current];
+    const version = shownVersion(map);
     const i = version.messages.findIndex((m) => m.id === id);
     const box = map.drawing.boxes.find((b) => b.id === id);
     if (i >= 0) {
@@ -932,7 +994,21 @@ function renderDiagramBar() {
         : "Las flechas siguen el orden en que la nota escribe los pasos."));
     }
   }
-  bar.replaceChildren(...parts);
+  // one line on the drawing; opened, the versions or the categories
+  const [first, ...rest] = parts;
+  if (!rest.length) {
+    bar.replaceChildren(first);
+    return;
+  }
+  const details = el("details", "map-diagram-more");
+  details.open = mapState.diagramBarOpen;
+  details.addEventListener("toggle", () => {
+    mapState.diagramBarOpen = details.open;
+  });
+  const body = el("div", "map-diagram-body");
+  body.append(...rest);
+  details.append(el("summary", null, first.textContent.replace(/:$/, "")), body);
+  bar.replaceChildren(details);
 }
 
 function renderTrail() {
@@ -961,8 +1037,9 @@ function renderAll() {
   const entry = current();
   const hasMap = Boolean(entry && entry.map);
   const concept = hasMap && !isDiagram(entry);
-  $("map-empty").hidden = Boolean(entry);
   $("map-stage").hidden = !entry || mapState.view !== "map";
+  $("map-tools").hidden = !entry;
+  $("map-zoom").hidden = !entry || mapState.view !== "map";
   $("map-outline").hidden = !entry || mapState.view !== "outline";
   $("map-create").disabled = mapState.busy;
   $("map-suggest").disabled = mapState.busy;
@@ -977,12 +1054,15 @@ function renderAll() {
   $("map-mastery").setAttribute("aria-pressed", String(mapState.mastery));
   $("map-legend").hidden = !(mapState.mastery && masteryReady && entry.mastery);
   if (masteryReady && !entry.mastery && !entry.masteryLoading) loadMastery(entry);
+  renderPill();
+  renderCreator();
   renderTrail();
   renderGap();
   renderDiagramBar();
   drawMap();
   renderMapOutline();
   renderPanel();
+  $("map-panel").hidden = $("map-panel-view").hidden; // the panel floats only while a piece is selected
 }
 
 // --- mastery (ADR-026) --------------------------------------------------------------------
@@ -1050,15 +1130,17 @@ async function openStoredMap(id) {
   }
   const data = await response.json();
   const kind = MAP_KINDS[data.kind] ? data.kind : "concepts";
-  const entry = { id: data.id, kind, topic: data.topic, map: data.map, fragments: data.fragments };
+  const entry = { id: data.id, kind, topic: data.topic, map: data.map, fragments: data.fragments, created: data.created };
   if (!isDiagram(entry)) applyPositions(entry, data.positions);
   mapState.trail = [entry];
   mapState.selected = null;
   mapState.moved = false;
+  mapState.creatorOpen = false;
+  setMapDrawer(false);
   $("map-topic").value = data.topic;
   setMapKind(kind);
   $("map-suggestion").hidden = true;
-  setStatus(`${MAP_KINDS[kind].label} · ${mapUnits(kind, data.concepts)} · creado el ${formatWhen(data.created)}`);
+  setStatus(""); // the pill says what it is
   renderAll();
   fitView();
 }
@@ -1181,6 +1263,9 @@ function bindMapas() {
   $("map-svg").addEventListener("click", downloadSvg);
   $("map-mermaid").addEventListener("click", copyMermaid);
   $("map-delete").addEventListener("click", deleteMap);
+  $("map-more").addEventListener("click", (event) => {
+    if (event.target.closest(".dict-menu button")) $("map-more").open = false;
+  });
   $("map-reset").addEventListener("click", resetLayout);
   mapState.mastery = store.get("biblio.mapMastery", false);
   $("map-mastery").addEventListener("click", () => {
@@ -1188,11 +1273,24 @@ function bindMapas() {
     store.set("biblio.mapMastery", mapState.mastery);
     renderAll();
   });
-  setConceptPanelOpen(store.get("biblio.mapPanelOpen", true));
-  $("map-panel-toggle").addEventListener("click", () => {
-    setConceptPanelOpen($("map-panel").hidden);
-    fitView(); // the drawing gains or gives back the panel's width
+  $("map-panel-close").addEventListener("click", () => selectNode(null));
+  $("map-drawer-toggle").addEventListener("click", () => setMapDrawer($("map-history").hidden));
+  $("map-drawer-close").addEventListener("click", () => setMapDrawer(false));
+  $("map-history").addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    setMapDrawer(false);
+    $("map-drawer-toggle").focus();
   });
+  $("map-title").addEventListener("click", () => setCreatorOpen(!mapState.creatorOpen));
+  $("map-new").addEventListener("click", () => setCreatorOpen(true, true));
+  $("map-creator").addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !current()) return;
+    setCreatorOpen(false);
+    $("map-title").focus();
+  });
+  // the outline starts below whatever floats at the top left
+  const left = $("map-left");
+  new ResizeObserver(() => left.parentElement.style.setProperty("--map-left-h", `${left.offsetHeight}px`)).observe(left);
   let timer = null;
   $("map-history-search").addEventListener("input", () => {
     clearTimeout(timer);
@@ -1228,11 +1326,18 @@ function bindMapas() {
     mapState.moved = true;
     applyZoom();
   });
-  const release = () => {
+  const release = (event) => {
     const nd = mapState.nodeDrag;
+    const still = drag && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 4;
     mapState.nodeDrag = null;
     drag = null;
     stage.classList.remove("dragging-node");
+    if (still) {
+      // a click on the background closes what floats over the drawing
+      setMapDrawer(false);
+      if (mapState.creatorOpen) setCreatorOpen(false);
+      if (mapState.selected) selectNode(null);
+    }
     if (!nd) return;
     if (nd.moved) {
       rememberPosition(nd.node);

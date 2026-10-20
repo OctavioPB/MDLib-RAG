@@ -1139,7 +1139,20 @@ def make_handler(
             return True
 
         def _vendor_get(self) -> bool:
-            """GET /static/vendor/katex/… : only files that exist in that folder, no other path."""
+            """GET /static/vendor/katex/… (ADR-031) and /static/vendor/fonts/<name>.woff2 (the OPB
+            style's typefaces): only files that exist in those folders, no other path."""
+            fonts = "/static/vendor/fonts/"
+            if self.path.startswith(fonts):
+                name = self.path.removeprefix(fonts)
+                ok = name.endswith(".woff2") and "/" not in name and "\\" not in name
+                file = _STATIC / "vendor" / "fonts" / name if ok and name[0] != "." else None
+                if file is None or not file.is_file():
+                    self._not_found()
+                    return True
+                body = file.read_bytes()
+                self._headers(HTTPStatus.OK, "font/woff2", len(body))
+                self.wfile.write(body)
+                return True
             prefix = "/static/vendor/katex/"
             if not self.path.startswith(prefix):
                 return False

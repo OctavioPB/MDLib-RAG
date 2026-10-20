@@ -925,11 +925,10 @@ async function postConversation(path, body) {
   return response.json();
 }
 
-/** Pages with a history panel that the «Historial» button shows or hides (ADR-023, ADR-024).
- *  Each page remembers its own choice. */
+/** Pages with a history panel that the «Historial» button shows or hides (ADR-023); Mapas has
+ *  its own drawer, «Mis mapas». Each page remembers its own choice. */
 const HISTORY_PANELS = {
   conversar: { panel: "history", search: "history-search", key: "biblio.historyOpen" },
-  mapas: { panel: "map-history", search: "map-history-search", key: "biblio.mapHistoryOpen" },
 };
 
 function setHistoryOpen(page, open) {
@@ -959,7 +958,6 @@ function bindHistory() {
     setHistoryOpen(page, open);
     syncHistoryToggle();
     if (open) $(p.search).focus();
-    if (page === "mapas" && typeof fitView === "function") fitView();
   });
   let timer = null;
   $("history-search").addEventListener("input", () => {
@@ -1089,7 +1087,16 @@ function bindComposer() {
   $("source-next").addEventListener("click", () => stepSource(1));
 }
 
+// Sticky panels sit below the top bar, whose height changes when it wraps.
+function watchTopbarHeight() {
+  const bar = document.querySelector(".topbar");
+  const set = () => document.documentElement.style.setProperty("--topbar-h", `${bar.offsetHeight}px`);
+  new ResizeObserver(set).observe(bar);
+  set();
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  watchTopbarHeight();
   bindTheme();
   $("reindex").addEventListener("click", reindexLibrary);
   bindSettings();
