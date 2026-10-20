@@ -12,7 +12,7 @@ import statistics
 import subprocess
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -155,6 +155,9 @@ def run_eval(
             "reranker_device": getattr(retriever, "reranker_device", None),
             "rerank_max_tokens": config.reranker.max_tokens,
             "final_k": final_k,
+            "thread": (  # questions planned first (ADR-038)
+                asdict(config.thread) if hasattr(retriever, "last_plan") else None
+            ),
             "identical_copies_accepted": True,
             **{
                 k: meta.get(k)

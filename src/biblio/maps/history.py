@@ -25,8 +25,9 @@ class MapSummary:
     id: int
     topic: str
     created: str
-    concepts: int
+    concepts: int  # concepts, steps, messages or causes, by kind
     snippet: str = ""  # where a search matched
+    kind: str = "concepts"  # concepts | novak | flow | sequence | fishbone (ADR-036)
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,8 @@ class MapStore:
                     names     TEXT NOT NULL,        -- concept names, for search
                     map       TEXT NOT NULL,        -- JSON, as sent to the page
                     fragments TEXT NOT NULL,        -- JSON, as sent to the page
-                    positions TEXT NOT NULL DEFAULT '{}'  -- nodes moved by the user
+                    positions TEXT NOT NULL DEFAULT '{}', -- nodes moved by the user
+                    kind      TEXT NOT NULL DEFAULT 'concepts'  -- diagram type (ADR-036)
                 );
                 CREATE VIRTUAL TABLE IF NOT EXISTS maps_fts USING fts5(
                     topic, names, content='maps', content_rowid='id',
@@ -78,26 +80,59 @@ class MapStore:
                 self._conn.execute(
                     "ALTER TABLE maps ADD COLUMN positions TEXT NOT NULL DEFAULT '{}'"
                 )
+            if "kind" not in columns:  # maps.db created before the other diagram types
+                self._conn.execute(
+                    "ALTER TABLE maps ADD COLUMN kind TEXT NOT NULL DEFAULT 'concepts'"
+                )
 
     def close(self) -> None:
         self._conn.close()
 
     def add(self, topic: str, page_map: dict[str, Any], fragments: list[dict[str, Any]]) -> int:
-        concepts = [n["label"] for n in page_map["nodes"] if n["level"] > 0]
+        kind, count, names = _summary(page_map)
         with self._lock, self._conn:
             cur = self._conn.execute(
-                "INSERT INTO maps (topic, created, concepts, names, map, fragments) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO maps (topic, created, concepts, names, map, fragments, kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     topic,
                     _now(),
-                    len(concepts),
-                    " · ".join(concepts),
+                    count,
+                    names,
                     json.dumps(page_map, ensure_ascii=False),
                     json.dumps(fragments, ensure_ascii=False),
+                    kind,
                 ),
             )
             return int(cur.lastrowid or 0)
+
+    def replace_map(self, map_id: int, page_map: dict[str, Any]) -> bool:
+        """A diagram edited by the user (a step moved, causes regrouped): same id, same sources.
+        The search text is refreshed through the FTS triggers (delete, then insert)."""
+        kind, count, names = _summary(page_map)
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT topic, created, fragments, positions FROM maps WHERE id = ?", (map_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            self._conn.execute("DELETE FROM maps WHERE id = ?", (map_id,))
+            self._conn.execute(
+                "INSERT INTO maps (id, topic, created, concepts, names, map, fragments, "
+                "positions, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    map_id,
+                    row[0],
+                    row[1],
+                    count,
+                    names,
+                    json.dumps(page_map, ensure_ascii=False),
+                    row[2],
+                    row[3],
+                    kind,
+                ),
+            )
+            return True
 
     def set_positions(self, map_id: int, positions: dict[str, tuple[int, int]]) -> bool:
         """Replace the positions of the nodes the user moved; `{}` restores the automatic layout.
@@ -106,7 +141,7 @@ class MapStore:
             row = self._conn.execute("SELECT map FROM maps WHERE id = ?", (map_id,)).fetchone()
             if row is None:
                 return False
-            ids = {n["id"] for n in json.loads(row[0])["nodes"]}
+            ids = {n["id"] for n in json.loads(row[0]).get("nodes", [])}  # concept kinds only
             kept = {k: [int(x), int(y)] for k, (x, y) in positions.items() if k in ids}
             self._conn.execute(
                 "UPDATE maps SET positions = ? WHERE id = ?", (json.dumps(kept), map_id)
@@ -122,13 +157,14 @@ class MapStore:
         with self._lock:
             if not query or (match := fts_all_words(query)) is None:
                 rows = self._conn.execute(
-                    "SELECT id, topic, created, concepts FROM maps ORDER BY id DESC LIMIT ?",
+                    "SELECT id, topic, created, concepts, '', kind FROM maps "
+                    "ORDER BY id DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
                 return [MapSummary(*row) for row in rows]
             rows = self._conn.execute(
                 "SELECT m.id, m.topic, m.created, m.concepts, "
-                "snippet(maps_fts, 1, '«', '»', '…', 10) FROM maps_fts "
+                "snippet(maps_fts, 1, '«', '»', '…', 10), m.kind FROM maps_fts "
                 "JOIN maps m ON m.id = maps_fts.rowid WHERE maps_fts MATCH ? "
                 "ORDER BY m.id DESC LIMIT ?",
                 (match, limit),
@@ -138,14 +174,24 @@ class MapStore:
     def get(self, map_id: int) -> StoredMap | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, topic, created, concepts, map, fragments, positions FROM maps "
+                "SELECT id, topic, created, concepts, map, fragments, positions, kind FROM maps "
                 "WHERE id = ?",
                 (map_id,),
             ).fetchone()
         if row is None:
             return None
         positions = {k: (int(v[0]), int(v[1])) for k, v in json.loads(row[6]).items()}
-        return StoredMap(MapSummary(*row[:4]), json.loads(row[4]), json.loads(row[5]), positions)
+        summary = MapSummary(row[0], row[1], row[2], row[3], kind=row[7])
+        return StoredMap(summary, json.loads(row[4]), json.loads(row[5]), positions)
+
+
+def _summary(page_map: dict[str, Any]) -> tuple[str, int, str]:
+    """(kind, how many pieces, the names searched) of a map or diagram as the page receives it."""
+    kind = str(page_map.get("kind", "concepts"))
+    if "nodes" in page_map:  # concepts and novak: the topic is a node too
+        names = [n["label"] for n in page_map["nodes"] if n["level"] > 0]
+        return kind, len(names), " · ".join(names)
+    return kind, int(page_map["count"]), " · ".join(page_map.get("names", []))
 
 
 # --- back to domain objects, for saving to drafts/maps ------------------------------------------

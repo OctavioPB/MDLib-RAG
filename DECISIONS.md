@@ -23,11 +23,11 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 016 | Local web UI for `search` and `ask`: stdlib HTTP server + own HTML/JS, loopback only | Accepted; loopback-only relaxed by ADR-035 when LAN mode is on |
 | 017 | Map-reduce is a manual opt-in for `ask`, off by default | Accepted |
 | 018 | Automatic reindexing by polling file metadata (stdlib), GPU if free else CPU | Accepted |
-| 019 | Web UI v2: Conversar, Guías and Practicar pages on the stdlib server | Accepted |
+| 019 | Web UI v2: Conversar, Guías and Practicar pages on the stdlib server | Accepted; independent turns superseded by ADR-038 |
 | 020 | Practice quizzes generated from library sections, with local history | Accepted |
-| 021 | One-step launcher: setup steps that download only when missing, after asking | Accepted |
+| 021 | One-step launcher: setup steps that download only when missing, after asking | Accepted; «asked once» superseded by ADR-039 |
 | 022 | Concept maps by LLM extraction per fragment, checked against the text | Accepted |
-| 023 | Conversation history in a local SQLite file on the server | Accepted |
+| 023 | Conversation history in a local SQLite file on the server | Accepted; «not memory» superseded by ADR-038 |
 | 024 | Concept-map history in a local SQLite file on the server, as ADR-023 | Accepted |
 | 025 | Spaced repetition with FSRS over practised sections, 20 reviews a day | Accepted |
 | 026 | Mastery map: concepts coloured by how well their sections are remembered today | Accepted |
@@ -40,6 +40,11 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 033 | A «Biblioteca» page in the menu to browse and open notes in the reader | Accepted · Supersedes part of ADR-031 |
 | 034 | Dictionary of a topic or guide: concepts, functions and formulas checked against the notes; flashcards | Accepted |
 | 035 | LAN mode: the web UI on the home network for paired phones and tablets, off by default | Accepted · Supersedes part of ADR-016 |
+| 036 | Four more diagram types in Mapas, drawn by our own renderer, with Mermaid export | Accepted; «Flujo» combination and Novak layout superseded by ADR-037 |
+| 037 | Diagrams: one version per note for flows, the Novak map read left to right | Accepted · Supersedes part of ADR-036 |
+| 038 | Conversations that keep their topic, and answers that relate guides | Accepted · Supersedes part of ADR-019, ADR-023 |
+| 039 | Changing the library's location from the app or the terminal, reusing the index when it is the same library | Accepted · Supersedes part of ADR-021 |
+| 040 | «Reset»: start the app over without its memory, never touching the library | Accepted |
 
 ---
 
@@ -614,3 +619,98 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 - **QR codes** with `segno` (pure Python, BSD; checked: no network code), as SVG for the page and as text for the terminal.
 
 **Consequences.** (+) The whole app on a phone or tablet at home, with nothing moved off the PC. (+) Unpaired devices on the same network get nothing. (−) Traffic on the network is unencrypted. (−) Windows asks once to allow Python on private networks. (−) The PC's address can change (DHCP); a paired device then needs the new address, not a new pairing.
+
+---
+
+## ADR-036 — Four more diagram types in Mapas, drawn by our own renderer, with Mermaid export
+
+**Date:** 2026-10-19 · **State:** Accepted; how «Flujo» combines notes and the Novak layout superseded by ADR-037
+
+**Context.** The user asked Mapas to draw flowcharts, sequence diagrams, cause-effect (fishbone) diagrams and concept maps in Novak's sense (top-down, every link a linking phrase), next to the radial concept map of ADR-022. The design was reviewed on a canvas before any code. The constraints are those of ADR-022: every piece must lead to the fragment it comes from, nothing invented to fill the drawing, and the 4B model reads one fragment at a time, where it is reliable (ADR-017). The page loads nothing from outside (ADR-016).
+
+**Options.**
+1. **Vendor Mermaid** and have the model write Mermaid text. (+) Many diagram types for free. (−) ~3 MB of script to vendor and audit; the model would write the whole structure in one reply (the option rejected in ADR-022); the drawn pieces are not clickable to their quotes, and a 4B model often breaks Mermaid syntax.
+2. **Our own renderer, structure checked in code, Mermaid as an export (chosen by the user).** The model extracts per fragment, code checks every piece against the text and lays it out; the page draws boxes and lines from the server's layout; Mermaid text is generated from the checked structure, to paste into Obsidian, which renders it.
+
+**Decision.** Option 2, with the user's answers to the three open questions: Mermaid as an export; a «Sugerir tipo» button; fishbone categories proposed by the model, with the 6M and the user's own list a click away.
+- **Types.** «Conceptos» (ADR-022, unchanged), «Mapa conceptual» (the same extraction, drawn top-down in levels, straight arrows with their linking phrase), «Flujo», «Secuencia», «Causa-efecto». The type is chosen next to the topic before «Crear».
+- **Flujo.** Per fragment, the model returns the process it describes, if any: steps in order, each with a quote; decisions with where «sí» and «no» lead. A step is kept only if its quote is in the fragment. The fragment with most steps is the backbone, never reordered by the model; steps from other fragments that are not already there (same words) are placed by one short LLM call that only says after which step each goes, or that it does not belong (then it is left out and counted). An arrow is **cited** when both steps come from one fragment and the second one's quote comes later in the text; any other arrow is **inferred** and drawn dashed. The user can move a step up or down.
+- **Secuencia.** Per fragment: participants (named in the fragment) and messages in order (sender, receiver, text, quote, reply or not, an optional condition). Messages under one condition form a frame (`opt`; two adjacent ones `alt`/`else`). Sequences from different notes are not merged, since they usually describe different interactions: the one with most messages is shown and the others are offered as versions.
+- **Causa-efecto.** The effect is the topic. Per fragment, the causes it states, each with a quote. Causes are merged by name across fragments; one LLM call groups the cause names (no fragment text) into 3–6 categories it names, or into the 6M, or into the user's list; every cause ends in exactly one category («Otras» for any it leaves out). Regrouping and moving a cause by hand do not read the notes again.
+- **Sugerir tipo.** One short LLM call with the topic and the headings of the sections retrieval returns for it; it proposes a type and a one-line reason, the page selects it, and the user confirms with «Crear».
+- **Drawing.** The server lays out every type and sends boxes, lines and frames with coordinates; the page draws them as SVG with pan and zoom and makes every piece selectable: the side panel shows its quote, its citation, «Leer en la nota» and «Explícamelo tú». Nodes of the new types are not dragged (their layout follows the structure); the concept types keep dragging and the mastery colours (ADR-026).
+- **Export.** «Copiar Mermaid» (flowchart, sequenceDiagram; mindmap for the fishbone, Mermaid having no fishbone; flowchart for the Novak map); «Guardar» writes `drafts/maps/<topic>.md` with the outline, the Mermaid block and the sources, and a `.canvas` laid out as drawn; SVG download as before.
+- **History.** Every type is kept in `data/maps.db` (ADR-024) with its type, listed and searched together.
+
+**Consequences.** (+) Five ways to see a topic, each piece tied to a quote; the Mermaid export carries diagrams into Obsidian. (+) No new dependency. (−) Retrieval is the one of maps: a process spread over several notes depends on the placement call, whose arrows are always dashed. (−) Three new extraction prompts and two short ones (placement, grouping, suggestion) to measure: they join the map evaluation pending in Phase 8, with the user's topics per type. (−) Our renderer covers only these layouts; anything else needs code.
+
+---
+
+## ADR-037 — Diagrams: one version per note for flows, the Novak map read left to right
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-036, how «Flujo» combines fragments and the Novak map's top-down layout
+
+**Context.** ADR-036 was built and tried live with the real model on the user's library before release. Two parts did not hold:
+- **Flows merged across notes.** For «descenso de gradiente» the backbone came from one note and the placement call inserted steps from five others: an analogy («Imaginamos estar en una montaña con niebla»), the formulas of another note and the variants of a third ended up as steps of one process. Every inserted step was cited, but the process they formed is not in any note. Tightening the extraction prompt (variants, comparisons, analogies and definitions are not steps; 4-word quotes) reduced it, not removed it.
+- **The Novak map top-down.** With 9 level-1 concepts the row was ~5,000 px wide and unreadable once fitted to the screen; wrapping the branches into bands made the topic's lines cross the bands above.
+
+**Decision.**
+- **Flows as versions, like sequences.** Each fragment whose process has at least `diagrams.min_steps` steps (3) is a version of its own, the one with most steps shown first; the others are a click away in the bar above the drawing («3 procesos en tus notas»). A step written in another version too only adds that fragment to its sources. Nothing from two notes is joined, so the placement call and its prompts are gone. An arrow is still cited only when the second step's quote comes later in the text; moving a step by hand makes its arrows dashed.
+- **The Novak map read left to right:** the topic on the left, its branches in a column, each branch's children beside it, every arrow with its linking phrase. No line crosses another, and a tall map is fitted to the width and read by scrolling down.
+- Also from the live test: a decision whose two answers lead to the same place is a step, and a cause must not be a symptom, a consequence, a remedy or an example (causes per fragment 8 → 5, so one fragment cannot fill the diagram).
+
+**Consequences.** (+) A flow shows a process as one note writes it, never a mix. (+) Large Novak maps stay readable. (−) A process explained across several notes is seen one note at a time. (−) The Novak map is no longer drawn top-down as in the design; the Mermaid export keeps `flowchart TD`.
+
+---
+
+## ADR-038 — Conversations that keep their topic, and answers that relate guides
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-019's «each message is answered on its own» and ADR-023's «the history is for reading, not memory for the model»
+
+**Context.** The user showed a conversation that failed three times. «¿Cómo puede la ciencia de datos aportar a la química?» was answered from one guide: 7 of the 8 retrieved sections came from `Ciencia Quimica.md`, pulled by the word «ciencia», while the library has the bridge (`Polímeros › Predicción de propiedades`, `Química medicinal › Predicción ADME/Tox`, `Farmacocinética`, `Termoquímica`, `Bioquímica computacional`), found only by searching each side. «¿Qué algoritmos o métodos se usan?» was searched as written and answered with Merge Sort in file systems. «Hablamos de química», a correction, was taken as a new question and answered with a general introduction to chemistry. The user asked for conversations that keep their context and answers that relate guides, with up to ~45 s per answer, and for a new conversation to be suggested when they insist on another topic. PLAN 9.8 had left memory out until now.
+
+**Options.**
+1. **Send the previous turns to the model and search the message as written.** Fixes nothing of the above: retrieval, not the model, lost the topic.
+2. **Plan each message before searching (chosen).** One short LLM call reads the conversation's topic, the last turns and the message, and returns whether the message follows, corrects or leaves the topic, the message as a standalone question, and 1–4 searches (one per area the question joins, plus one joining them). The searches are fused and the evidence is spread across guides.
+3. **Map-reduce per guide (ADR-017).** Relates guides by reading each apart; measured at 0.58 faithfulness against 0.87. Stays an opt-in.
+
+**Decision.** Option 2, with the user's choices:
+- **Topic of the conversation («marco»).** One sentence stored with the conversation, set by the first plan, kept or refined by the next ones, shown above the thread and editable.
+- **Plan.** JSON from the model, validated; `relacion` sigue | corrige | nuevo, `pregunta` standalone, `busquedas` 1–4, `tema`, `relacionar`. If unusable twice, the message is searched as written. Applied to the first message too (the first failure was there), so a lone question also gets searches per area (rule 3: measured before and after on `eval/questions.jsonl` and `eval/questionsv3.jsonl`).
+- **Retrieval.** The standalone question through the usual first stage keeps its best `thread.question_head` hits (6); the plan's searches are fused by RRF and their best `thread.fill` hits (2) that the question missed come next, and the tutor reads all eight (`thread.evidence_fragments`, within the same token budget), so nothing it read before is lost. Measured before adoption (rule 3): fusing every search with equal weight, or capping fragments per guide, lowered synthesis recall@8 from 0.54 to 0.43–0.48 on `eval/questions.jsonl`; slotting the two fills inside the first six still cost one synthesis item.
+- **Answer.** The prompt gets the topic and the last turns (each question with the first sentences of its answer, marked as context, not a source) besides the fragments; the rules of citation and abstention are unchanged. When the plan says the question relates areas, the answer explains each side from its fragments and then how they connect: a connection a fragment writes is cited; one the model draws from fragments of both sides is written as «Relación propuesta:» with citations to both, never as something the notes say. A follow-up goes straight to what is new; asked for an example the notes do not have, the model invented one with a fake citation twice despite being told not to, so it may give one in a paragraph starting «Ejemplo ilustrativo (no está en tus notas):», without a citation (as the beginner level's «Es como…», ADR-032).
+- **Another topic.** When the plan says `nuevo`, the page does not answer yet: «Esto parece otro tema…» with «Nueva conversación con esta pregunta» and «Responder aquí». Answering here keeps the topic and suggests the new conversation again.
+
+**Consequences.** (+) Follow-ups and corrections are understood; questions that join areas reach both sides of the library. (+) Every answer still cites only fragments. (−) One more LLM call per message (~2 s) and up to five searches (~2 s). (−) The plan is the model's reading of the conversation: a wrong `nuevo` interrupts, a wrong `sigue` drags an old topic; the topic line shows it and can be edited. (−) «Relación propuesta» is the model's reasoning, checked only in that both sides are cited. (−) To be measured on chained conversations written by the user (`eval/chains.jsonl`, PLAN 9.8) before «experimental» is dropped.
+
+---
+
+## ADR-039 — Changing the library's location from the app or the terminal, reusing the index when it is the same library
+
+**Date:** 2026-10-19 · **State:** Accepted · **Supersedes:** ADR-021's «the library is asked once»; the index's refusal of another library root (rule 6 mechanics) for a library that is mostly the same
+
+**Context.** The user asked for an option to change where the library is. The path is asked once by `biblio start` and written to `config/local.toml`; the index stores the library root in `index_meta` and refuses to run against another one, asking for `--full` (~35 min on the GPU, hours on CPU while the LLM runs). Vectors depend only on each note's path relative to the root and its content, so a vault moved or synced to another folder needs no new vectors. A browser cannot hand the server the real path of a folder picked with a file dialog.
+
+**Decision** (the user's choices: app and terminal; reuse what matches; type or browse):
+- **Where.** A «Ubicación de la biblioteca» section on the Biblioteca page, and `biblio library` / `biblio library set <ruta>` in the terminal. Choosing, checking and changing the location are served to the PC only (loopback): paired devices in LAN mode (ADR-035) neither see paths nor change them.
+- **Choosing.** A field to paste the path and «Examinar», a folder browser served by the app (drives, then folders, hidden ones left out). «Comprobar» counts the Markdown notes and compares them with the index.
+- **The index.** The notes of the new folder are hashed and compared with the index by relative path and content. If at least `library.relocate_min_overlap` (half) of them match, it is the same library moved: the index is updated in place as an incremental run would (matching notes untouched, others added, changed or removed) and its root is rewritten at the end. Otherwise it is another library: a full index is built apart and replaces the current one only if it completes (the `--full` path); the app closes its connection to the index around the swap. While the LLM server holds the GPU the work runs on CPU, and the page says how long that may take before starting.
+- **After the change.** `config/local.toml` keeps the new path; the running app, its automatic reindexing (ADR-018) and the reader use it at once, without a restart. Practice history, maps, dictionaries and plans name notes by relative path: they still work for a moved library and point to absent notes for another one, which the page says before the change.
+
+**Consequences.** (+) Moving the vault costs seconds, not a reindex. (+) A failed rebuild leaves the previous library working. (−) A different library on CPU takes hours; the page says so and the user decides. (−) The index's own guard against a different root is relaxed for libraries that are mostly the same; everything else in `index_meta` (model, chunker, thresholds) is still enforced.
+
+---
+
+## ADR-040 — «Reset»: start the app over without its memory, never touching the library
+
+**Date:** 2026-10-19 · **State:** Accepted
+
+**Context.** The user asked for a «Reset» button that restarts the app without what it remembers (guides, diagrams, conversations, topics studied…), only the app's memory and nothing of the library, behind an «¿Estás seguro?» warning.
+
+**Decision.**
+- **What is the app's memory.** `conversations.db` (ADR-023), `maps.db` (ADR-024, ADR-036), `practice.db` (quizzes and attempts, the review schedule, «Explícamelo tú», study plans and read marks, pending topics, dictionaries and their cards) and the `drafts/` folder (generated guides and outlines, saved maps, exported conversations and dictionaries). In the browser, the page's own settings and remembered choices (`biblio.*` in localStorage) are cleared too.
+- **What is kept.** The library, the index (it is derived from the library and costs ~35 min on the GPU to rebuild), the models, `config/local.toml` (the library's location, LAN mode), paired devices and logs.
+- **Safety.** Nothing is deleted outright: the files are moved to `data/backups/reset-<date>/`, which the user can delete. A path inside the library, or the index, is never moved, whatever the config says. The app closes its stores first and refuses while something is being generated; the stores start empty on next use, without restarting the server.
+- **Where.** «Reset» on the Biblioteca page, on this PC only (not for paired devices), with a dialog that lists what will be erased, with counts, and asks «¿Estás seguro?». `biblio reset` in the terminal does the same when the app is not running.
+
+**Consequences.** (+) A clean start in one step, with the library and its index intact. (+) A mistaken reset can be undone by copying the backup back. (−) Backups take disk space until deleted (the page says where they are).

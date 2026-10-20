@@ -138,8 +138,15 @@ def index_library(
     counter_factory: CounterFactory,
     progress: Progress | None = None,
     on_start: Callable[[int], None] | None = None,
+    relocate: bool = False,
+    swap: Callable[[Callable[[], None]], None] | None = None,
 ) -> IndexStats:
-    """Index `library` into `paths.index_db`; only one run at a time (lock file next to the DB)."""
+    """Index `library` into `paths.index_db`; only one run at a time (lock file next to the DB).
+
+    `relocate` (ADR-039): the index may have been built from another root, the same library
+    moved; it is updated in place and takes the new root when the run completes. Every other
+    setting in `index_meta` is still enforced. `swap` wraps the replacement of the index by a
+    full rebuild, for a process that holds the index open (the web app closes and reopens it)."""
     with _index_lock(config.paths.index_db):
         return _index_library(
             config,
@@ -150,6 +157,8 @@ def index_library(
             counter_factory=counter_factory,
             progress=progress,
             on_start=on_start,
+            relocate=relocate,
+            swap=swap,
         )
 
 
@@ -193,6 +202,8 @@ def _index_library(
     counter_factory: CounterFactory,
     progress: Progress | None,
     on_start: Callable[[int], None] | None,
+    relocate: bool = False,
+    swap: Callable[[Callable[[], None]], None] | None = None,
 ) -> IndexStats:
     start = time.perf_counter()
     db_path = config.paths.index_db
@@ -212,7 +223,10 @@ def _index_library(
             write_meta(conn, {**expected, "embedding_dim": str(dim), "created_at": _now()})
         else:
             stored_meta = read_meta(conn)
-            differences = meta_differences(stored_meta, expected)
+            differences = meta_differences(
+                stored_meta,
+                {k: v for k, v in expected.items() if not (relocate and k == "library")},
+            )
             if differences:
                 raise IndexMismatchError(
                     "The index was built with a different configuration; "
@@ -260,7 +274,7 @@ def _index_library(
 
         total_docs = conn.execute("SELECT count(*) FROM documents").fetchone()[0]
         total_chunks = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        write_meta(conn, {"updated_at": _now()})
+        write_meta(conn, {"updated_at": _now(), "library": expected["library"]})
     except BaseException:
         conn.close()
         if full:
@@ -271,8 +285,12 @@ def _index_library(
 
     conn.close()
     if full:
-        _remove_db(db_path)
-        os.replace(target, db_path)
+
+        def replace_index() -> None:
+            _remove_db(db_path)
+            os.replace(target, db_path)
+
+        (swap or (lambda do: do()))(replace_index)
 
     return IndexStats(
         full=full,

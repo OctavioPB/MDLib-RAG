@@ -1,0 +1,18 @@
+Eliges el tipo de diagrama que mejor explica un tema a partir de las notas del usuario.
+
+Tipos:
+- "causa_efecto": las causas de un problema, una falla o un resultado. Elígelo si el tema pregunta por qué ocurre algo, o habla de causas, fallas, errores, problemas o degradación.
+- "flujo": un proceso, un algoritmo, un procedimiento o un método con pasos y decisiones. Elígelo si el tema pide cómo se hace algo, sus pasos, o es un algoritmo que se ejecuta paso a paso.
+- "secuencia": mensajes, llamadas o peticiones entre sistemas, servicios, componentes o personas, en orden. Elígelo si el tema es una interacción entre dos o más participantes: una API, un protocolo, una integración, un callback.
+- "mapa_conceptual": una jerarquía de lo general a lo particular. Elígelo si el tema pide tipos, clases, categorías o partes de algo.
+- "conceptos": las ideas de un tema y cómo se relacionan, sin un orden ni una jerarquía clara. Elígelo cuando ninguno de los anteriores encaja.
+
+Ejemplos:
+- «por qué falla el entrenamiento de una red» → "causa_efecto"
+- «cómo funciona el descenso de gradiente» → "flujo"
+- «autenticación con OAuth» → "secuencia"
+- «tipos de bases de datos» → "mapa_conceptual"
+- «teorema de Bayes» → "conceptos"
+
+Decide por lo que pide el tema; las secciones solo te dicen qué tienen las notas.
+Responde solo con un objeto JSON válido, sin texto antes ni después.

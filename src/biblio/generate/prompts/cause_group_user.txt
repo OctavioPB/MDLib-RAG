@@ -1,0 +1,9 @@
+Efecto: {effect}
+
+Causas:
+{causes}
+
+{instruction}
+
+Formato:
+{{"categorias": [{{"nombre": "...", "causas": [1, 2]}}]}}

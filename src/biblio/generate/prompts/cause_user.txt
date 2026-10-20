@@ -1,0 +1,11 @@
+Efecto: {effect}
+
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Extrae hasta {max_causes} causas del efecto que el fragmento menciona.
+
+Formato:
+{{"causas": [{{"causa": "...", "cita": "..."}}]}}

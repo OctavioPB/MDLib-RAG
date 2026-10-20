@@ -231,6 +231,7 @@ const app = {
   thread: [], // the open conversation's messages, from the server (ADR-023)
   conversationId: store.get("biblio.conversation", null),
   title: "",
+  frame: "", // the conversation's topic (ADR-038)
   busy: false,
   selection: null, // {turn, index}
 };
@@ -432,6 +433,12 @@ function citeButton(turn, number, known) {
 function answerNode(turn) {
   const known = new Set((turn.fragments || []).map((f) => f.number));
   const node = markdownNode(turn.answer || "", (n) => citeButton(turn, Number(n), known), "md answer");
+  // what the model adds of its own, marked by the prompt (ADR-038): a connection between areas the
+  // notes do not write, or an example they do not have
+  for (const p of node.querySelectorAll("p")) {
+    if (/^\s*Relación propuesta/i.test(p.textContent)) p.classList.add("proposed-relation");
+    if (/^\s*Ejemplo ilustrativo/i.test(p.textContent)) p.classList.add("proposed-relation", "illustrative");
+  }
   // formulas in the answer, once it is complete (reader.js, KaTeX vendored: ADR-031)
   return turn.done && typeof renderMathIn === "function" ? renderMathIn(node) : node;
 }
@@ -522,6 +529,41 @@ function followupsNode(turn) {
   return row;
 }
 
+/** «Entendí: …» and the searches, when the message was read with the conversation (ADR-038). */
+function planNode(turn) {
+  const plan = turn.plan;
+  const box = el("details", "plan-note");
+  const same = plan.question.trim().toLowerCase() === turn.question.trim().toLowerCase();
+  box.append(el("summary", null, same ? "Cómo lo busqué" : `Entendí: «${plan.question}»`));
+  const searches = [plan.question, ...plan.searches];
+  box.append(el("p", "small muted", `Búsquedas: ${searches.join(" · ")}${plan.relate ? " · relacionando áreas" : ""}`));
+  return box;
+}
+
+function offtopicNode(turn) {
+  const box = el("div", "offtopic");
+  const topic = turn.offtopic.frame ? ` distinto de «${turn.offtopic.frame}»` : "";
+  box.append(el("p", null, `Esto parece otro tema${topic}. Para no mezclarlos, conviene abrir una conversación nueva.`));
+  const row = el("div", "row");
+  const fresh = el("button", "btn-primary", "Nueva conversación con esta pregunta");
+  fresh.type = "button";
+  fresh.addEventListener("click", () => {
+    app.thread = app.thread.filter((t) => t !== turn);
+    startNewConversation();
+    send(turn.question, { mode: turn.mode, scope: turn.scope });
+  });
+  const here = el("button", "btn", "Responder aquí");
+  here.type = "button";
+  here.addEventListener("click", () => {
+    app.thread = app.thread.filter((t) => t !== turn);
+    renderThread();
+    send(turn.question, { mode: turn.mode, scope: turn.scope, force: true });
+  });
+  row.append(fresh, here);
+  box.append(row);
+  return box;
+}
+
 function turnNode(turn) {
   const wrap = el("div");
   wrap.className = "turn";
@@ -543,13 +585,19 @@ function turnNode(turn) {
       meta.append(document.createTextNode(`${turn.hits.length} secciones · ${(turn.ms / 1000).toFixed(1)} s${scopeLabel(turn.scope)}`));
       reply.append(turn.hits.length ? resultsNode(turn) : el("p", "muted", "No encontré nada sobre esto."));
     }
+  } else if (turn.offtopic) {
+    reply.append(offtopicNode(turn));
   } else {
     const n = (turn.fragments || []).length;
-    if (!turn.fragments) meta.append(document.createTextNode("Buscando en tus notas…"));
+    if (!turn.fragments) meta.append(document.createTextNode(turn.planning ? "Entendiendo tu pregunta…" : "Buscando en tus notas…"));
     else if (!turn.done) meta.append(document.createTextNode(`Redactando con ${n} fragmentos…`));
     else {
       const strategy = turn.strategy === "map-reduce" ? " · por guía (experimental)" : "";
       meta.append(document.createTextNode(`Basada en ${n} fragmentos · ${turn.done.seconds} s${scopeLabel(turn.scope)}${strategy}`));
+    }
+    if (turn.plan) reply.append(planNode(turn));
+    if (turn.plan && turn.plan.relation === "nuevo") {
+      reply.append(el("p", "small muted", "Respondida fuera del tema de la conversación; para seguir con este tema, abre una conversación nueva."));
     }
     if (turn.answer) reply.append(answerNode(turn));
     if (turn.done) {
@@ -652,15 +700,22 @@ async function runExplain(turn) {
     strategy: turn.strategy,
     conversation_id: app.conversationId,
     level: turn.level,
+    force: Boolean(turn.force),
   };
+  turn.planning = true;
   try {
     await streamEvents("/api/ask", body, (name, data) => {
-      if (name === "meta") turn.fragments = data.fragments;
-      else if (name === "token") turn.answer += data.text;
+      if (name === "meta") {
+        turn.fragments = data.fragments;
+        turn.plan = data.plan || null;
+      } else if (name === "token") turn.answer += data.text;
       else if (name === "done") {
         turn.done = data;
         setConversation(data.conversation_id);
+        if (turn.plan && turn.plan.relation !== "nuevo") app.frame = turn.plan.frame;
+        renderConversationBar();
       } else if (name === "gap") turn.gap = data;
+      else if (name === "offtopic") turn.offtopic = data; // nothing answered yet: ask (ADR-038)
       rerender(turn);
     });
   } catch (error) {
@@ -686,6 +741,7 @@ async function send(raw, overrides = {}) {
     strategy: app.settings.strategy,
     level: app.settings.level,
     status: "pending",
+    force: Boolean(overrides.force),
   };
   app.thread.push(turn);
   app.busy = true;
@@ -736,6 +792,7 @@ function turnFromRecord(record) {
     turn.answer = record.answer;
     turn.fragments = record.payload.fragments || [];
     turn.done = record.payload.done || null;
+    turn.plan = record.payload.plan || null;
   } else {
     turn.hits = record.payload.hits || [];
     turn.ms = record.payload.milliseconds || 0;
@@ -747,6 +804,7 @@ function turnFromRecord(record) {
 function startNewConversation() {
   setConversation(null);
   app.title = "";
+  app.frame = "";
   app.thread = [];
   app.selection = null;
   renderThread();
@@ -770,6 +828,7 @@ async function openConversation(id) {
   }
   setConversation(data.id);
   app.title = data.title;
+  app.frame = data.frame || "";
   app.thread = data.turns.map(turnFromRecord);
   const lastLevel = [...app.thread].reverse().find((t) => t.level);
   if (lastLevel) setLevel(lastLevel.level); // continue at the level the conversation was at
@@ -824,6 +883,36 @@ function markActiveConversation() {
 function renderConversationBar() {
   $("conversation-bar").hidden = !app.conversationId;
   $("conversation-title").textContent = app.title;
+  $("conversation-frame").hidden = !app.frame || !$("conversation-frame-form").hidden;
+  $("conversation-frame-text").textContent = app.frame;
+}
+
+/** «Tema: … · Editar» (ADR-038): the topic the planner reads every message against. */
+function bindConversationFrame() {
+  const form = $("conversation-frame-form");
+  const close = () => {
+    form.hidden = true;
+    renderConversationBar();
+  };
+  $("conversation-frame-edit").addEventListener("click", () => {
+    $("conversation-frame-input").value = app.frame;
+    form.hidden = false;
+    $("conversation-frame").hidden = true;
+    $("conversation-frame-input").focus();
+  });
+  $("conversation-frame-cancel").addEventListener("click", close);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const frame = $("conversation-frame-input").value.trim();
+    if (!frame || !app.conversationId) return;
+    try {
+      await postConversation("/api/conversations/frame", { id: app.conversationId, frame });
+      app.frame = frame;
+    } catch (error) {
+      conversationStatus(error.message);
+    }
+    close();
+  });
 }
 
 function conversationStatus(text) {
@@ -1008,6 +1097,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindHistory();
   renderThread();
   showSource();
+  bindConversationFrame();
   if (app.conversationId) openConversation(app.conversationId);
   loadHistory();
   window.addEventListener("hashchange", route);

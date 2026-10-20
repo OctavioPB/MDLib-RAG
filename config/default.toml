@@ -67,6 +67,24 @@ map_reduce_max_fragments = 12            # ...or fragments dropped by the budget
 max_answer_tokens = 1024
 probe_timeout_s = 0.5                    # loopback check for a running server (ADR-012)
 
+[library]                    # changing where the library is, from the app or `biblio library set` (ADR-039)
+relocate_min_overlap = 0.5       # share of notes matching the index (path + content) to treat it as the same library moved
+browse_max_entries = 400         # folders listed at once by «Examinar»
+minutes_per_1000_gpu = 13        # full index estimate shown before a rebuild (~35 min for 2,673 notes, ADR-012)
+minutes_per_1000_cpu = 260       # the same on CPU (~11.5 h for 2,673 notes)
+
+[thread]                     # a conversation keeps its topic; questions that join areas reach each one (ADR-038)
+plan = true                      # plan each message: standalone question + searches per area (false = as before)
+plan_max_tokens = 350            # LLM output budget for the plan (JSON)
+history_turns = 3                # previous turns shown to the model, newest last
+gist_chars = 320                 # characters of each previous answer kept for that (its first sentences)
+max_searches = 4                 # searches from the plan, besides the standalone question
+search_depth = 20                # hits of each search before fusing them
+question_head = 6                # the question's own best hits keep their places (measured, ADR-038)
+fill = 2                         # then the best hits of the plan's searches the question missed
+evidence_fragments = 8           # the tutor reads them all (question_head + fill; within the token budget)
+frame_max_chars = 160            # the conversation's topic, one sentence
+
 [tutor]                      # answer levels in Conversar (ADR-032)
 default_level = "intermediate"   # beginner | intermediate | advanced
 beginner_max_tokens = 700        # answer budget per level; evidence budget stays llm.context_budget_tokens
@@ -167,6 +185,23 @@ children_max = 5             # concepts under each of them
 max_nodes = 40               # past this a map stops being readable
 history_db = "data/maps.db" # generated maps (ADR-024); apart from the index
 history_limit = 200          # maps listed in the side panel, newest first
+
+[diagrams]                       # flowcharts, sequence and cause-effect diagrams in Mapas (ADR-036)
+fragments = 8                    # retrieved sections read for one diagram (~3 s each with the LLM)
+max_fragment_chars = 6000        # longer sections are cut to this before extraction
+extract_max_tokens = 900         # LLM output budget for one fragment's steps, messages or causes
+steps_per_fragment = 12          # flowchart steps kept from one fragment (each note is a version, ADR-037)
+min_steps = 3                    # fewer steps from one fragment are not a process to draw
+messages_per_fragment = 14       # sequence messages kept from one fragment
+max_participants = 6             # sequence participants kept from one fragment
+causes_per_fragment = 5          # causes kept from one fragment (8 let one fragment fill the cap)
+max_causes = 18                  # causes drawn in all
+categories_min = 3               # categories the model proposes for the causes
+categories_max = 6
+group_max_tokens = 600           # LLM output budget for grouping the causes
+six_m = ["Método", "Máquina", "Materiales", "Mano de obra", "Medición", "Medio ambiente"]
+suggest_fragments = 6            # section headings shown to the model to suggest a diagram type
+suggest_max_tokens = 150
 
 [launcher]
 ollama_path = ""             # Ollama executable for `biblio start`; "" = find it on PATH or in its default folder

@@ -44,6 +44,7 @@ ASSETS = (
     "library.js",
     "dictionary.js",
     "devices.js",
+    "settings.js",
     "mapas.js",
 )
 
@@ -513,7 +514,7 @@ def test_reindex_from_the_page(server: tuple[str, int], engine: Engine) -> None:
     events = _events(raw)
     names = [n for n, _ in events]
     assert status == 200 and names[0] == "start" and names[-1] == "done"
-    assert events[0][1] == {"files": 3, "device": "cpu"}
+    assert events[0][1] == {"files": 3, "device": "cpu", "full": False}
     done = events[-1][1]
     assert (done["added"], done["unchanged"], done["documents"]) == (1, 2, 3)
     assert json.loads(request(server, "GET", "/api/status")[2])["documents"] == 3
@@ -557,3 +558,124 @@ def test_page_scripts_do_not_redefine_each_others_globals() -> None:
             owners[found[0] or found[1]].append(name)
     clashes = {k: v for k, v in owners.items() if len(v) > 1}
     assert clashes == {}
+
+
+# --- where the library is (ADR-039) -------------------------------------------------------------
+
+
+def test_a_moved_library_reuses_the_index(
+    server: tuple[str, int], engine: Engine, tmp_path: Path
+) -> None:
+    import shutil
+
+    old = engine.config.paths.library
+    assert old is not None
+    moved = tmp_path / "moved vault"
+    shutil.copytree(old, moved)
+    status, _, raw = request(server, "POST", "/api/library/check", {"path": str(moved)})
+    check = json.loads(raw)
+    assert status == 200 and check["plan"] == "relocate" and check["matching"] == check["notes"]
+    status, _, raw = request(server, "POST", "/api/library/set", {"path": str(moved)})
+    events = _events(raw)
+    names = [n for n, _ in events]
+    assert names[0] == "check" and names[-1] == "library" and "done" in names
+    done = dict(events)["done"]
+    assert done["unchanged"] == check["notes"] and done["added"] == 0  # nothing re-embedded
+    assert engine.config.paths.library == moved.resolve()
+    assert json.loads(request(server, "GET", "/api/library")[2])["path"] == str(moved.resolve())
+    local = (engine.config.root / "config" / "local.toml").read_text(encoding="utf-8")
+    assert moved.resolve().as_posix() in local
+    query = {"query": "teorema de Bayes", "precision": "fast"}
+    assert json.loads(request(server, "POST", "/api/search", query)[2])["hits"]  # still searchable
+
+
+def test_another_library_gets_its_own_index(
+    server: tuple[str, int], engine: Engine, tmp_path: Path
+) -> None:
+    other = tmp_path / "other"
+    (other / "bio").mkdir(parents=True)
+    (other / "bio" / "celula.md").write_text(
+        "# Célula\n\n## Mitocondria\n\n" + "La mitocondria produce energía para la célula. " * 3,
+        encoding="utf-8",
+    )
+    check = json.loads(request(server, "POST", "/api/library/check", {"path": str(other)})[2])
+    assert check["plan"] == "rebuild" and check["notes"] == 1 and check["matching"] == 0
+    events = _events(request(server, "POST", "/api/library/set", {"path": str(other)})[2])
+    assert dict(events)["start"]["full"] is True and dict(events)["done"]["documents"] == 1
+    assert json.loads(request(server, "GET", "/api/status")[2])["documents"] == 1  # swapped
+    hits = json.loads(
+        request(server, "POST", "/api/search", {"query": "mitocondria", "precision": "fast"})[2]
+    )["hits"]
+    assert hits[0]["doc_path"] == "bio/celula.md"
+    assert not engine.config.paths.index_db.with_name("index.db.tmp").exists()
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    status, _, raw = request(server, "POST", "/api/library/set", {"path": str(empty)})
+    assert status == 400 and "Markdown" in json.loads(raw)["error"]
+    assert engine.config.paths.library == other.resolve()  # unchanged
+
+
+def test_folders_can_be_browsed(server: tuple[str, int], tmp_path: Path) -> None:
+    from urllib.parse import quote
+
+    (tmp_path / "Notas").mkdir()
+    (tmp_path / ".oculta").mkdir()
+    status, _, raw = request(server, "GET", f"/api/library/browse?path={quote(str(tmp_path))}")
+    listing = json.loads(raw)
+    names = [f["name"] for f in listing["folders"]]
+    assert status == 200 and "Notas" in names and ".oculta" not in names
+    assert listing["parent"] == str(tmp_path.resolve().parent)
+    top = json.loads(request(server, "GET", "/api/library/browse")[2])
+    assert top["path"] == "" and top["folders"]  # the drives
+    missing = quote(str(tmp_path / "no existe"))
+    assert request(server, "GET", f"/api/library/browse?path={missing}")[0] == 400
+
+
+# --- «Reset» (ADR-040) ---------------------------------------------------------------------------
+
+
+def test_reset_moves_the_app_memory_and_keeps_the_library(
+    server: tuple[str, int], engine: Engine
+) -> None:
+    cfg = engine.config
+    library = cfg.paths.library
+    assert library is not None and cfg.conversations.db.is_relative_to(cfg.root)  # a test root
+    notes = sorted(p.relative_to(library) for p in library.rglob("*.md"))
+    request(server, "POST", "/api/search", {"query": "teorema de Bayes", "precision": "fast"})
+    cfg.paths.drafts_dir.mkdir(parents=True, exist_ok=True)
+    (cfg.paths.drafts_dir / "guia.md").write_text("# Guía\n", encoding="utf-8")
+    items = {
+        i["key"]: i["count"] for i in json.loads(request(server, "GET", "/api/reset")[2])["items"]
+    }
+    assert items["conversations"] == 1 and items["drafts"] == 1
+
+    assert request(server, "POST", "/api/reset", {})[0] == 400  # the page's «¿Estás seguro?»
+    status, _, raw = request(server, "POST", "/api/reset", {"confirm": True})
+    result = json.loads(raw)
+    backup = Path(result["backup"])
+    assert (
+        status == 200 and (backup / "conversations.db").is_file() and (backup / "drafts").is_dir()
+    )
+    assert not cfg.paths.drafts_dir.exists()
+    assert json.loads(request(server, "GET", "/api/conversations")[2])["conversations"] == []
+    request(server, "POST", "/api/search", {"query": "Bayes", "precision": "fast"})  # stores reopen
+    assert len(json.loads(request(server, "GET", "/api/conversations")[2])["conversations"]) == 1
+    assert sorted(p.relative_to(library) for p in library.rglob("*.md")) == notes  # untouched
+    assert cfg.paths.index_db.is_file()
+    assert json.loads(request(server, "GET", "/api/status")[2])["documents"] == len(notes)
+
+
+def test_reset_never_touches_the_library(config: Config, tmp_path: Path) -> None:
+    from biblio.reset import check_safe
+
+    library = tmp_path / "vault"
+    library.mkdir()
+    cfg = replace(config, paths=replace(config.paths, library=library))
+    with pytest.raises(ValueError):
+        check_safe(cfg, [library / "drafts"])  # drafts configured inside the library
+    with pytest.raises(ValueError):
+        check_safe(cfg, [tmp_path])  # a folder that contains the library
+    with pytest.raises(ValueError):
+        check_safe(cfg, [cfg.paths.index_db])
+    check_safe(cfg, [cfg.conversations.db, cfg.paths.drafts_dir])

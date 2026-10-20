@@ -54,6 +54,7 @@ class ConversationSummary:
     updated: str
     turns: int
     snippet: str = ""  # where a search matched
+    frame: str = ""  # the conversation's topic, kept by the planner and editable (ADR-038)
 
 
 def _now() -> str:
@@ -115,6 +116,11 @@ class ConversationStore:
                 END;
                 """
             )
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(conversations)")}
+            if "frame" not in columns:  # conversations.db created before ADR-038
+                self._conn.execute(
+                    "ALTER TABLE conversations ADD COLUMN frame TEXT NOT NULL DEFAULT ''"
+                )
 
     def close(self) -> None:
         self._conn.close()
@@ -161,6 +167,15 @@ class ConversationStore:
             assert conversation_id is not None
             return conversation_id, int(cur.lastrowid or 0)
 
+    def set_frame(self, conversation_id: int, frame: str) -> bool:
+        """The conversation's topic (ADR-038): set by the planner, or edited by the user."""
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE conversations SET frame = ? WHERE id = ?",
+                (" ".join(frame.split()), conversation_id),
+            )
+            return cur.rowcount == 1
+
     def rename(self, conversation_id: int, title: str) -> bool:
         with self._lock, self._conn:
             cur = self._conn.execute(
@@ -178,12 +193,12 @@ class ConversationStore:
     def _summaries(self, ids: list[int] | None, limit: int) -> list[ConversationSummary]:
         where = "" if ids is None else f"WHERE c.id IN ({','.join('?' * len(ids))})"
         rows = self._conn.execute(
-            "SELECT c.id, c.title, c.created, c.updated, count(t.id) FROM conversations c "
+            "SELECT c.id, c.title, c.created, c.updated, count(t.id), c.frame FROM conversations c "
             f"LEFT JOIN turns t ON t.conversation_id = c.id {where} "
             "GROUP BY c.id ORDER BY c.updated DESC, c.id DESC LIMIT ?",
             (*(ids or []), limit),
         ).fetchall()
-        return [ConversationSummary(*row) for row in rows]
+        return [ConversationSummary(r[0], r[1], r[2], r[3], r[4], frame=r[5]) for r in rows]
 
     def conversations(self, limit: int, query: str | None = None) -> list[ConversationSummary]:
         """Newest first; with `query`, only conversations where every word appears in a question
@@ -204,7 +219,9 @@ class ConversationStore:
                 return []
             found = self._summaries(list(snippets), limit)
         return [
-            ConversationSummary(s.id, s.title, s.created, s.updated, s.turns, snippets[s.id])
+            ConversationSummary(
+                s.id, s.title, s.created, s.updated, s.turns, snippets[s.id], s.frame
+            )
             for s in found
         ]
 

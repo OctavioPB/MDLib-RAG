@@ -1,0 +1,1 @@
+Propón de {min} a {max} categorías breves, de 1 a 3 palabras, que agrupen estas causas según su origen, por ejemplo «Datos», «Entrenamiento» o «Despliegue».

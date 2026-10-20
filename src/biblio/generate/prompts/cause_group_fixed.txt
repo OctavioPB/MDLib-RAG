@@ -1,0 +1,1 @@
+Usa solo estas categorías, con estos nombres exactos: {names}. Puedes dejar alguna sin causas.

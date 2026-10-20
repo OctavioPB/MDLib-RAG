@@ -227,6 +227,47 @@ class MapsConfig:
 
 
 @dataclass(frozen=True)
+class LibraryConfig:
+    relocate_min_overlap: float
+    browse_max_entries: int
+    minutes_per_1000_gpu: float
+    minutes_per_1000_cpu: float
+
+
+@dataclass(frozen=True)
+class ThreadConfig:
+    plan: bool
+    plan_max_tokens: int
+    history_turns: int
+    gist_chars: int
+    max_searches: int
+    search_depth: int
+    question_head: int
+    fill: int
+    evidence_fragments: int
+    frame_max_chars: int
+
+
+@dataclass(frozen=True)
+class DiagramsConfig:
+    fragments: int
+    max_fragment_chars: int
+    extract_max_tokens: int
+    steps_per_fragment: int
+    min_steps: int
+    messages_per_fragment: int
+    max_participants: int
+    causes_per_fragment: int
+    max_causes: int
+    categories_min: int
+    categories_max: int
+    group_max_tokens: int
+    six_m: tuple[str, ...]
+    suggest_fragments: int
+    suggest_max_tokens: int
+
+
+@dataclass(frozen=True)
 class LauncherConfig:
     ollama_path: str
     llm_start_timeout_s: float
@@ -270,6 +311,9 @@ class Config:
     tutor: TutorConfig
     dictionary: DictionaryConfig
     maps: MapsConfig
+    diagrams: DiagramsConfig
+    thread: ThreadConfig
+    library: LibraryConfig
     launcher: LauncherConfig
     watch: WatchConfig
     eval: EvalConfig
@@ -294,6 +338,9 @@ _SECTIONS: dict[str, type[Any]] = {
     "tutor": TutorConfig,
     "dictionary": DictionaryConfig,
     "maps": MapsConfig,
+    "diagrams": DiagramsConfig,
+    "thread": ThreadConfig,
+    "library": LibraryConfig,
     "launcher": LauncherConfig,
     "watch": WatchConfig,
     "eval": EvalConfig,
@@ -434,6 +481,11 @@ def _validate(config: Config) -> None:
         raise ConfigError(
             "gaps: expected 0 < candidate_similarity <= 1, topic_max_words >= 2, "
             "max_candidates >= 1"
+        )
+    dg = config.diagrams
+    if not 2 <= dg.categories_min <= dg.categories_max <= 8 or len(dg.six_m) != 6:
+        raise ConfigError(
+            "diagrams: expected 2 <= categories_min <= categories_max <= 8, six_m of 6"
         )
     fy = config.feynman
     if not 0 < fy.partial_at < fy.correct_at <= 1 or not 0 < fy.min_fragments <= fy.fragments:

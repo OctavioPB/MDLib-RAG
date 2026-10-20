@@ -1,0 +1,11 @@
+Tema del diagrama: {topic}
+
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Extrae hasta {max_messages} mensajes de la interacción que el fragmento describe sobre el tema.
+
+Formato:
+{{"participantes": ["...", "..."], "mensajes": [{{"de": "...", "a": "...", "mensaje": "...", "respuesta": false, "condicion": "", "cita": "..."}}]}}

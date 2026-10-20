@@ -8,6 +8,7 @@ A test that needs the network is a design bug (ADR-002).
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,4 +26,7 @@ def project_copy(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def config(project_copy: Path) -> Config:
-    return load_config(project_copy)
+    """The default config, with the conversation planner off (ADR-038): the fake LLMs of the
+    answer tests do not speak its JSON. `tests/test_thread.py` turns it on."""
+    loaded = load_config(project_copy)
+    return replace(loaded, thread=replace(loaded.thread, plan=False))

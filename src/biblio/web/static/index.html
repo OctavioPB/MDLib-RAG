@@ -17,6 +17,7 @@
   <script src="/static/library.js" defer></script>
   <script src="/static/dictionary.js" defer></script>
   <script src="/static/devices.js" defer></script>
+  <script src="/static/settings.js" defer></script>
   <script src="/static/mapas.js" defer></script>
 </head>
 <body>
@@ -35,26 +36,18 @@
       </nav>
     </div>
     <div class="topbar-right">
-      <div class="segmented theme-switch" role="radiogroup" aria-label="Tema de colores">
-        <label title="Claro"><input type="radio" name="theme" value="light" aria-label="Tema claro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg></span></label>
-        <label title="Como el sistema"><input type="radio" name="theme" value="system" aria-label="Tema del sistema"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg></span></label>
-        <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg></span></label>
-      </div>
       <span id="status" class="pill" role="status">Cargando…</span>
-      <button id="lan-connect" class="btn-icon" type="button" aria-label="Conectar un dispositivo"
-        title="Conectar un teléfono o una tableta de tu red" hidden>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"></rect><path d="M11 18h2"></path></svg>
-      </button>
-      <button id="reindex" class="btn-icon" type="button" aria-label="Actualizar la biblioteca"
-        title="Actualizar la biblioteca: indexa las notas nuevas, modificadas o borradas">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"></path><path d="M4 3v5h5"></path><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"></path><path d="M20 21v-5h-5"></path></svg>
-      </button>
       <button id="history-toggle" class="btn" type="button" aria-controls="history" aria-expanded="true"
         title="Mostrar u ocultar el historial">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
         <span>Historial</span>
       </button>
       <button id="new-thread" class="btn" type="button">Nueva conversación</button>
+      <!-- always last: the gear is in the right corner on every page -->
+      <button id="settings-open" class="btn-icon" type="button" aria-label="Ajustes" title="Ajustes"
+        aria-haspopup="dialog" aria-controls="settings-dialog">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      </button>
     </div>
   </header>
 
@@ -70,6 +63,17 @@
     <section class="chat" aria-label="Conversación">
       <div id="conversation-bar" class="conversation-bar" hidden>
         <h2 id="conversation-title"></h2>
+        <p id="conversation-frame" class="conversation-frame" hidden>
+          <span class="muted">Tema:</span> <span id="conversation-frame-text"></span>
+          <button id="conversation-frame-edit" class="link-button" type="button"
+            title="El tema guía cómo entiendo tus preguntas en esta conversación">Editar</button>
+        </p>
+        <form id="conversation-frame-form" class="row" hidden>
+          <label for="conversation-frame-input" class="sr-only">Tema de la conversación</label>
+          <input id="conversation-frame-input" type="text" maxlength="160" required>
+          <button class="btn-primary" type="submit">Guardar</button>
+          <button id="conversation-frame-cancel" class="btn-ghost" type="button">Cancelar</button>
+        </form>
         <form id="conversation-rename" class="row" hidden>
           <label for="conversation-title-input" class="sr-only">Nuevo título</label>
           <input id="conversation-title-input" type="text" maxlength="120" required>
@@ -138,7 +142,7 @@
             </label>
             <p class="settings-help">Atajos al inicio del mensaje: <code>/ubicar</code> · <code>/explicar</code> · <code>/en Math</code> (cualquier carpeta). «Por guía» cita con menos fidelidad: revisa las fuentes.</p>
           </div>
-          <p class="composer-note">Cada mensaje se responde por separado y solo con tus notas.</p>
+          <p class="composer-note">Cada mensaje se entiende dentro del tema de la conversación y se responde solo con tus notas.</p>
         </form>
       </div>
     </section>
@@ -349,16 +353,30 @@
   <main id="page-mapas" class="page mapas" hidden>
     <aside id="map-history" class="history-side" aria-label="Historial de mapas">
       <label for="map-history-search" class="sr-only">Buscar en tus mapas</label>
-      <input id="map-history-search" type="search" maxlength="200" placeholder="Buscar por tema o concepto…">
+      <input id="map-history-search" type="search" maxlength="200" placeholder="Buscar por tema, concepto o paso…">
       <ul id="map-history-list" class="history-list"></ul>
       <p id="map-history-empty" class="small muted" hidden></p>
     </aside>
     <div class="mapas-content">
     <div class="map-bar">
       <form id="map-form" class="map-form" autocomplete="off">
-        <label for="map-topic" class="sr-only">Tema del mapa</label>
-        <input id="map-topic" type="text" maxlength="200" required placeholder="Tema del mapa, p. ej. Naive Bayes">
-        <button id="map-create" class="btn-primary" type="submit">Crear mapa</button>
+        <div class="map-form-row">
+          <label for="map-topic" class="sr-only">Tema</label>
+          <input id="map-topic" type="text" maxlength="200" required placeholder="Tema, p. ej. Naive Bayes">
+          <button id="map-create" class="btn-primary" type="submit">Crear</button>
+        </div>
+        <div class="map-form-row">
+          <div class="segmented map-kinds" role="radiogroup" aria-label="Tipo de diagrama">
+            <label><input type="radio" name="map-kind" value="concepts" checked><span>Conceptos</span></label>
+            <label><input type="radio" name="map-kind" value="novak"><span>Mapa conceptual</span></label>
+            <label><input type="radio" name="map-kind" value="flow"><span>Flujo</span></label>
+            <label><input type="radio" name="map-kind" value="sequence"><span>Secuencia</span></label>
+            <label><input type="radio" name="map-kind" value="fishbone"><span>Causa-efecto</span></label>
+          </div>
+          <button id="map-suggest" class="btn" type="button"
+            title="El modelo propone el tipo de diagrama según el tema y tus notas">Sugerir tipo</button>
+        </div>
+        <p id="map-suggestion" class="small map-suggestion" role="status" hidden></p>
       </form>
       <div class="map-tools">
         <div class="segmented" role="radiogroup" aria-label="Vista">
@@ -376,21 +394,32 @@
           title="Deshacer los movimientos de nodos y volver a la disposición automática">Reorganizar</button>
         <button id="map-save" class="btn" type="button" disabled>Guardar</button>
         <button id="map-svg" class="btn" type="button" disabled>Descargar SVG</button>
+        <button id="map-mermaid" class="btn" type="button" disabled
+          title="Copiar el diagrama como Mermaid, para pegarlo en una nota de Obsidian">Copiar Mermaid</button>
         <button id="map-delete" class="btn danger-text" type="button" disabled>Borrar</button>
       </div>
     </div>
     <nav id="map-trail" class="map-trail" aria-label="Mapas abiertos" hidden></nav>
     <p id="map-status" class="muted map-status" role="status"></p>
     <div id="map-gap" class="map-gap" hidden></div>
+    <div id="map-diagram-bar" class="map-diagram-bar" hidden></div>
     <p id="map-error" class="error" hidden></p>
 
     <div class="map-layout">
       <div class="map-main">
         <div id="map-empty" class="map-empty">
-          <h1>Mapas de conceptos</h1>
-          <p>Escribe un tema y leo las secciones de tus notas que tratan de él: extraigo sus conceptos y
-            cómo se relacionan, y los dibujo alrededor del tema. Cada concepto lleva a los fragmentos donde
-            aparece. Tarda unos 30 segundos; el mapa va creciendo mientras lee.</p>
+          <h1>Mapas y diagramas</h1>
+          <p>Escribe un tema, elige el tipo de diagrama y leo las secciones de tus notas que tratan de él.
+            Cada pieza lleva a la cita de tus notas de donde sale; lo que tus notas no dicen no se dibuja.
+            Tarda entre 20 y 40 segundos; el diagrama va creciendo mientras leo.</p>
+          <ul class="map-kind-help">
+            <li><strong>Conceptos</strong>: las ideas del tema alrededor de él, con sus relaciones.</li>
+            <li><strong>Mapa conceptual</strong>: de lo general a lo particular, cada flecha con su frase de enlace.</li>
+            <li><strong>Flujo</strong>: los pasos y decisiones de un proceso o algoritmo.</li>
+            <li><strong>Secuencia</strong>: los mensajes entre sistemas o personas, en orden.</li>
+            <li><strong>Causa-efecto</strong>: las causas de un problema, agrupadas en categorías.</li>
+          </ul>
+          <p>¿No sabes cuál? Escribe el tema y pulsa <strong>Sugerir tipo</strong>.</p>
         </div>
         <div id="map-stage" class="map-stage" hidden>
           <svg id="map-svg-root" class="map-svg" role="group" aria-label="Mapa conceptual"><g id="map-viewport"></g></svg>
@@ -404,7 +433,7 @@
         <div id="map-outline" class="map-outline md" hidden></div>
       </div>
       <aside id="map-panel" class="source-panel map-panel" aria-label="Concepto seleccionado">
-        <p id="map-panel-empty" class="muted">Pulsa un concepto para ver sus relaciones y los fragmentos de tus notas donde aparece.</p>
+        <p id="map-panel-empty" class="muted">Pulsa una pieza del diagrama para ver su cita y los fragmentos de tus notas de donde sale.</p>
         <div id="map-panel-view" hidden></div>
       </aside>
     </div>
@@ -592,6 +621,83 @@
     <div id="practice-results" class="practice-quiz" hidden></div>
     <div id="practice-feynman" class="practice-quiz" hidden></div>
   </main>
+  <!-- Ajustes: everything that is not studying, in one place on every page --------------------->
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+    <div class="settings-head">
+      <h2 id="settings-title">Ajustes</h2>
+      <button id="settings-close" class="btn-icon" type="button" aria-label="Cerrar los ajustes">✕</button>
+    </div>
+    <section class="settings-group" aria-labelledby="settings-look">
+      <h3 id="settings-look">Apariencia</h3>
+      <div class="segmented theme-switch settings-theme" role="radiogroup" aria-label="Tema de colores">
+        <label title="Claro"><input type="radio" name="theme" value="light" aria-label="Tema claro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"></path></svg>Claro</span></label>
+        <label title="Como el sistema"><input type="radio" name="theme" value="system" aria-label="Tema del sistema"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg>Sistema</span></label>
+        <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg>Oscuro</span></label>
+      </div>
+    </section>
+    <section class="settings-group" aria-labelledby="settings-library">
+      <h3 id="settings-library">Biblioteca</h3>
+      <section id="libloc" class="libloc" hidden>
+        <p class="libloc-current"><span class="muted">Ubicación:</span><br> <code id="libloc-path"></code>
+          <button id="libloc-open" class="link-button" type="button" aria-expanded="false">Cambiar</button></p>
+        <div id="libloc-panel" class="libloc-panel" hidden>
+          <form id="libloc-form" class="libloc-form">
+            <label for="libloc-input" class="sr-only">Carpeta de la biblioteca</label>
+            <input id="libloc-input" type="text" maxlength="1000" autocomplete="off" required
+              placeholder="Pega la ruta de la carpeta, p. ej. C:\Users\tú\Obsidian\Mi bóveda">
+            <button id="libloc-browse" class="btn" type="button">Examinar</button>
+            <button class="btn-primary" type="submit">Comprobar</button>
+            <button id="libloc-cancel" class="btn-ghost" type="button">Cancelar</button>
+          </form>
+          <div id="libloc-browser" class="libloc-browser" hidden></div>
+          <div id="libloc-result" class="libloc-result" role="status" hidden></div>
+        </div>
+      </section>
+      <div class="settings-row">
+        <button id="reindex" class="btn" type="button" aria-label="Actualizar la biblioteca"
+          title="Actualizar la biblioteca: indexa las notas nuevas, modificadas o borradas">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.6-4.5L4 8"></path><path d="M4 3v5h5"></path><path d="M4 13a8 8 0 0 0 14.6 4.5L20 16"></path><path d="M20 21v-5h-5"></path></svg>
+          <span>Actualizar ahora</span>
+        </button>
+        <span class="small muted">Indexa las notas nuevas, modificadas o borradas.</span>
+      </div>
+    </section>
+    <section id="settings-devices" class="settings-group" aria-labelledby="settings-devices-title" hidden>
+      <h3 id="settings-devices-title">Dispositivos</h3>
+      <div class="settings-row">
+        <button id="lan-connect" class="btn" type="button" aria-label="Conectar un dispositivo"
+          title="Conectar un teléfono o una tableta de tu red" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"></rect><path d="M11 18h2"></path></svg>
+          <span>Conectar un dispositivo</span>
+        </button>
+        <span class="small muted">Usa la app desde un teléfono o una tableta de tu red.</span>
+      </div>
+    </section>
+    <section id="app-reset" class="settings-group app-reset" aria-labelledby="app-reset-title" hidden>
+      <h3 id="app-reset-title">Memoria de la app</h3>
+      <p class="small muted">Empieza de cero sin conversaciones, mapas, diagramas, cuestionarios, repasos,
+        planes, diccionarios ni guías generadas. Tus notas y su índice no se tocan.</p>
+      <button id="app-reset-open" class="btn danger-text" type="button">Reset</button>
+    </section>
+  </dialog>
+
+  <dialog id="reset-dialog" class="reset-dialog" aria-labelledby="reset-title">
+    <h2 id="reset-title">¿Estás seguro?</h2>
+    <div id="reset-body">
+      <p>Se borrará toda la memoria de la app:</p>
+      <ul id="reset-items"></ul>
+      <p><strong>No se toca</strong> tu biblioteca, su índice, los modelos ni la configuración
+        (ubicación de la biblioteca, modo red local).</p>
+      <p class="small muted">Por si te arrepientes, todo se mueve a una copia en <code>data/backups/</code>,
+        que puedes borrar después.</p>
+    </div>
+    <p id="reset-error" class="error" hidden></p>
+    <div id="reset-actions" class="row">
+      <button id="reset-confirm" class="btn-primary danger-fill" type="button">Sí, borrar la memoria</button>
+      <button id="reset-cancel" class="btn" type="button">Cancelar</button>
+    </div>
+  </dialog>
+
   <dialog id="lan-dialog" class="lan-dialog" aria-labelledby="lan-title">
     <div class="row-between">
       <h2 id="lan-title">Conectar un teléfono o una tableta</h2>

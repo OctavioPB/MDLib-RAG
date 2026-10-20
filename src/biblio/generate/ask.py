@@ -18,6 +18,7 @@ from biblio.config import TUTOR_LEVELS, Config
 from biblio.generate.citations import Validation, is_abstention, validate
 from biblio.generate.context import Context, Fragment, assemble
 from biblio.generate.llm import LLMClient, Message
+from biblio.generate.thread import Plan, PriorTurn, make_plan, render_history, search_plan
 from biblio.ingest.tokens import TokenCounter
 from biblio.retrieve.types import Hit, Retriever
 
@@ -56,6 +57,7 @@ class PreparedAsk:
     strategy: str = DIRECT
     groups: tuple[tuple[Fragment, ...], ...] = ()  # map-reduce: fragments per guide
     notes: list[MapNote] = field(default_factory=list)  # filled while streaming
+    plan: Plan | None = None  # how the message was read and searched (ADR-038)
 
 
 class Tutor:
@@ -90,10 +92,14 @@ class Tutor:
             abstention=self.abstention, level=level_block
         )
         self._reduce_user = load_prompt("reduce_user")
+        self._thread_user = load_prompt("tutor_thread_user")
+        self._relate = load_prompt("tutor_relate")
 
     # --- preparation ----------------------------------------------------------------------------
 
     def prepare(self, question: str) -> PreparedAsk:
+        if self._config.thread.plan:  # a lone question is a conversation's first message (ADR-038)
+            return self.prepare_planned(self.plan(question))
         llm = self._config.llm
         final_k = self._config.retrieval.final_k
         depth = final_k if self._mode == "off" else max(final_k, llm.map_reduce_max_fragments)
@@ -102,6 +108,28 @@ class Tutor:
         if not direct.context.fragments or not self._wants_map_reduce(direct.context):
             return direct
         return self._map_reduce_plan(question, hits)
+
+    def plan(self, message: str, frame: str = "", history: Sequence[PriorTurn] = ()) -> Plan:
+        """How to read and search a message of a conversation (ADR-038)."""
+        return make_plan(self._llm, self._config.thread, message, frame, history)
+
+    def prepare_planned(self, plan: Plan, history: Sequence[PriorTurn] = ()) -> PreparedAsk:
+        """The plan's searches, fused and spread across guides; the previous turns, if any, go
+        into the prompt as context (never as a source)."""
+        llm = self._config.llm
+        final_k = self._config.retrieval.final_k
+        depth = final_k if self._mode == "off" else max(final_k, llm.map_reduce_max_fragments)
+        rrf_k = self._config.retrieval.rrf_k
+        hits = search_plan(self._retriever, plan, depth, self._config.thread, rrf_k)
+        frame = plan.frame if history else ""
+        evidence = self._config.thread.evidence_fragments if plan.searches else llm.max_fragments
+        shown = hits[: max(final_k, evidence)]
+        prepared = self._direct(plan.question, shown, True, frame, history, plan.relate, evidence)
+        if prepared.context.fragments and self._wants_map_reduce(prepared.context):
+            prepared = self._map_reduce_plan(plan.question, hits)
+        prepared.plan = plan
+        prepared.retriever = f"{self._retriever.name}+plan"
+        return prepared
 
     def prepare_passage(
         self, question: str, passage: Hit, query: str, around: Hit | None = None
@@ -127,19 +155,41 @@ class Tutor:
         # pinned first, never merged with each other (the passage is inside its section)
         return self._direct(question, [*pinned, *hits], merge=False)
 
-    def _direct(self, question: str, hits: Sequence[Hit], merge: bool = True) -> PreparedAsk:
+    def _direct(
+        self,
+        question: str,
+        hits: Sequence[Hit],
+        merge: bool = True,
+        frame: str = "",
+        history: Sequence[PriorTurn] = (),
+        relate: bool = False,
+        max_fragments: int | None = None,
+    ) -> PreparedAsk:
         llm = self._config.llm
-        fixed = self._counter.count(self._system) + self._counter.count(
-            self._user.format(evidence="", question=question)
-        )
+        system = f"{self._system}\n\n{self._relate}" if relate else self._system
+
+        def user(evidence: str) -> str:
+            if not history:
+                return self._user.format(evidence=evidence, question=question)
+            return self._thread_user.format(
+                frame=frame or "(ninguno)",
+                history=render_history(history),
+                evidence=evidence,
+                question=question,
+            )
+
+        # the history counts against the evidence budget: the context window is fixed (ADR-015)
+        fixed = self._counter.count(system) + self._counter.count(user(""))
         context = assemble(
-            hits, self._counter, llm.context_budget_tokens, llm.max_fragments, fixed, merge
+            hits,
+            self._counter,
+            llm.context_budget_tokens,
+            max_fragments or llm.max_fragments,
+            fixed,
+            merge,
         )
         evidence = context.render() or "(ningún fragmento)"
-        messages = (
-            Message("system", self._system),
-            Message("user", self._user.format(evidence=evidence, question=question)),
-        )
+        messages = (Message("system", system), Message("user", user(evidence)))
         return PreparedAsk(question, context, messages, self._retriever.name)
 
     def _wants_map_reduce(self, context: Context) -> bool:

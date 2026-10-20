@@ -1,0 +1,9 @@
+Tema de la conversación: {frame}
+
+Últimos turnos:
+{history}
+
+Mensaje nuevo del usuario: {message}
+
+Formato:
+{{"relacion": "sigue", "pregunta": "...", "busquedas": ["...", "..."], "tema": "...", "relacionar": false}}

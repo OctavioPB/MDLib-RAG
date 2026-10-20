@@ -1,0 +1,9 @@
+Tema: {topic}
+
+Secciones de las notas que tratan el tema:
+{headings}
+
+¿Qué tipo de diagrama conviene para este tema? Da el motivo en una frase breve.
+
+Formato:
+{{"tipo": "...", "motivo": "..."}}

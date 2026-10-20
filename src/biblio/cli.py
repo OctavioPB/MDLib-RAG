@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
@@ -38,6 +39,8 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Manage local model weights.", no_args_is_help=True)
 app.add_typer(models_app, name="models")
+library_app = typer.Typer(help="Where the library is, and moving it (ADR-039).")
+app.add_typer(library_app, name="library")
 
 console = Console()
 
@@ -188,7 +191,9 @@ def index(
         raise typer.Exit(1)
 
 
-def _run_index(config: Config, root: Path, full: bool, choice: DeviceChoice) -> IndexStats:
+def _run_index(
+    config: Config, root: Path, full: bool, choice: DeviceChoice, relocate: bool = False
+) -> IndexStats:
     """Index with a progress bar and print the summary. Index errors propagate to the caller."""
     from rich.progress import (
         BarColumn,
@@ -234,6 +239,7 @@ def _run_index(config: Config, root: Path, full: bool, choice: DeviceChoice) -> 
             counter_factory=lambda: load_token_counter(config),
             progress=advance,
             on_start=lambda n: bar.update(task, total=n),
+            relocate=relocate,
         )
 
     rate = f"{stats.chunks_written / stats.embed_seconds:.1f}" if stats.embed_seconds else "—"
@@ -294,8 +300,20 @@ def watch(
         raise typer.Exit(2) from exc
 
 
-def _make_watcher(config: Config, root: Path, preferred: DeviceChoice) -> Watcher:
-    """The ADR-018 watcher: GPU when free, CPU while the LLM server runs; prints each run."""
+def _make_watcher(
+    config: Config,
+    root: Path,
+    preferred: DeviceChoice,
+    current: Callable[[], Config] | None = None,
+) -> Watcher:
+    """The ADR-018 watcher: GPU when free, CPU while the LLM server runs; prints each run.
+    `current` gives the app's config at each check, so a library moved from the page (ADR-039)
+    is watched at its new place."""
+
+    def now() -> tuple[Config, Path]:
+        cfg = current() if current is not None else config
+        return cfg, cfg.paths.library or root
+
     from datetime import datetime
 
     from biblio.index.embedder import load_index_embedder
@@ -305,13 +323,14 @@ def _make_watcher(config: Config, root: Path, preferred: DeviceChoice) -> Watche
     from biblio.offline import loopback_port_open
 
     def reindex() -> tuple[DeviceChoice | None, IndexStats | None]:
-        running = loopback_port_open(config.llm.base_url, config.llm.probe_timeout_s)
+        cfg, where = now()
+        running = loopback_port_open(cfg.llm.base_url, cfg.llm.probe_timeout_s)
         choice = choose_device(preferred, running)
         if choice is None:
             return None, None
         stats = index_library(
-            config,
-            root,
+            cfg,
+            where,
             full=False,
             dtype=choice.dtype,
             embedder_factory=lambda: load_index_embedder(config, choice),
@@ -337,7 +356,7 @@ def _make_watcher(config: Config, root: Path, preferred: DeviceChoice) -> Watche
                 + (f" [red]failed: {', '.join(s.failed)}[/red]" if s.failed else "")
             )
 
-    return Watcher(config.watch, lambda: snapshot(config, root), reindex, report)
+    return Watcher(config.watch, lambda: snapshot(*now()), reindex, report)
 
 
 @models_app.callback()
@@ -494,6 +513,13 @@ def eval_command(
     questions_file: Annotated[
         Path | None, typer.Option("--questions", help="Default: eval.questions in config.")
     ] = None,
+    plan: Annotated[
+        bool,
+        typer.Option(
+            "--plan",
+            help="Plan each question as a conversation's first message (ADR-038; needs the LLM).",
+        ),
+    ] = False,
 ) -> None:
     """Measure retrieval on eval/questions.jsonl and append the run to eval/results/runs.jsonl."""
     from datetime import datetime
@@ -522,6 +548,16 @@ def eval_command(
         raise typer.Exit(2)
 
     retriever = _open_retriever(config, mode)
+    if plan:
+        from biblio.generate.llm import load_llm_client
+        from biblio.generate.thread import PlannedRetriever
+
+        retriever = PlannedRetriever(
+            retriever,
+            load_llm_client(config.llm),
+            config.thread,
+            config.retrieval.rrf_k,
+        )
     try:
         record = run_eval(
             config,
@@ -1422,7 +1458,9 @@ def start(
     try:
         server, engine = _open_web(config, port, _lan_wanted(config, lan))
         if config.launcher.watch:
-            watcher = _make_watcher(config, root, resolve_index_device(config))
+            watcher = _make_watcher(
+                config, root, resolve_index_device(config), lambda: engine.config
+            )
 
             def watch_forever() -> None:
                 try:
@@ -1465,3 +1503,107 @@ def ask_eval_sheet(
         sheet = carry_over_grades(sheet, sheet_path.read_text(encoding="utf-8"))
     sheet_path.write_text(sheet, encoding="utf-8", newline="\n")
     console.print(f"Review sheet regenerated → {sheet_path}")
+
+
+# --- where the library is (ADR-039) ------------------------------------------------------------
+
+
+@library_app.callback(invoke_without_command=True)
+def library_main(ctx: typer.Context) -> None:
+    """Show where the library is; `biblio library set <ruta>` moves it."""
+    if ctx.invoked_subcommand is not None:
+        return
+    config = _config(ctx)
+    library = config.paths.library
+    console.print(f"Library: {library if library is not None else '(not set)'}")
+
+
+@library_app.command("set")
+def library_set(
+    ctx: typer.Context,
+    path: Annotated[Path, typer.Argument(help="The library folder (e.g. an Obsidian vault).")],
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask before a full index.")] = False,
+) -> None:
+    """Move the library to another folder: the index is reused when most notes match (the same
+    library moved), otherwise a full index is built and replaces the current one if it completes."""
+    from biblio.index.embedder import resolve_index_device
+    from biblio.index.indexer import IndexLockedError, IndexMismatchError
+    from biblio.index.watch import choose_device
+    from biblio.library import INVALID, RELOCATE, SAME, check_library, save_library
+    from biblio.offline import loopback_port_open
+    from biblio.retrieve.store import open_index
+
+    config = _config(ctx)
+    conn = open_index(config) if config.paths.index_db.is_file() else None
+    try:
+        found = check_library(config, path, conn)
+    finally:
+        if conn is not None:
+            conn.close()
+    if found.plan == INVALID:
+        console.print(f"[red]{found.path}: {found.reason}[/red]")
+        raise typer.Exit(2)
+    if found.plan == SAME:
+        console.print(f"[green]✓[/green] The library is already {found.path}.")
+        return
+    llm_running = loopback_port_open(config.llm.base_url, config.llm.probe_timeout_s)
+    choice = choose_device(resolve_index_device(config), llm_running)
+    if choice is None:
+        console.print("[red]The index is float16 and the LLM server holds the GPU: stop it first.")
+        raise typer.Exit(2)
+    if found.plan == RELOCATE:
+        console.print(
+            f"The same library moved: {found.matching} of {found.notes} notes match the index; "
+            "it is reused."
+        )
+    else:
+        minutes = found.minutes_cpu if choice.device == "cpu" else found.minutes_gpu
+        console.print(
+            f"Another library: {found.notes} notes, {found.matching} in the index now. A full "
+            f"index on {choice.device} takes about {minutes} min; the current one stays until "
+            "it completes. Practice history, maps and plans refer to notes of the old library."
+        )
+        if not _confirm("Build it now?", yes):
+            raise typer.Exit(1)
+    try:
+        _run_index(config, Path(found.path), found.plan != RELOCATE, choice, relocate=True)
+    except (IndexLockedError, IndexMismatchError) as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    save_library(config, Path(found.path))
+    console.print(f"[green]✓[/green] Library: {found.path} (saved in config/local.toml)")
+
+
+@app.command("reset")
+def reset_command(
+    ctx: typer.Context,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask «¿Estás seguro?».")] = False,
+) -> None:
+    """Start the app over without its memory (ADR-040): conversations, maps and diagrams,
+    practice, plans, dictionaries and drafts are moved to data/backups/. The library, its index,
+    the models and the settings are not touched. Close the app first."""
+    from biblio.offline import loopback_port_open
+    from biblio.reset import memory_items, reset_memory
+
+    config = _config(ctx)
+    url = f"http://{config.web.host}:{config.web.port}"
+    if loopback_port_open(url, config.llm.probe_timeout_s):
+        console.print(f"[red]The app is running at {url}: use «Reset» in Biblioteca, or close it.")
+        raise typer.Exit(2)
+    labels = {
+        "conversations": "conversations",
+        "maps": "maps and diagrams",
+        "practice": "practice questions (with reviews, plans, dictionaries…)",
+        "drafts": "files in drafts/",
+    }
+    for item in memory_items(config):
+        console.print(f"  {item.count:>5} {labels[item.key]}  [dim]{item.path}[/dim]")
+    console.print("The library, its index, the models and config/local.toml stay as they are.")
+    if not _confirm("¿Estás seguro? Erase the app's memory (a copy goes to data/backups/)", yes):
+        raise typer.Exit(1)
+    try:
+        result = reset_memory(config)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    console.print(f"[green]✓[/green] Memory moved to {result.backup} ({len(result.moved)} items).")

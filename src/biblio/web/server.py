@@ -26,6 +26,8 @@ from biblio.config import TUTOR_LEVELS
 from biblio.conversations import NewTurn
 from biblio.conversations import to_markdown as conversation_markdown
 from biblio.generate.draft import OutlineSection, slugify
+from biblio.maps.diagrams import DIAGRAM_KINDS, GROUPINGS
+from biblio.maps.diagrams import KINDS as MAP_KINDS
 from biblio.practice.quiz import SCOPE_KINDS
 from biblio.practice.store import KINDS, RESULTS
 from biblio.retrieve.types import Hit
@@ -51,6 +53,7 @@ _STATIC_FILES = {
     "/static/library.js": ("library.js", "text/javascript; charset=utf-8"),
     "/static/dictionary.js": ("dictionary.js", "text/javascript; charset=utf-8"),
     "/static/devices.js": ("devices.js", "text/javascript; charset=utf-8"),
+    "/static/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
 }
 _MAX_BODY = 64 * 1024
 _PAIR_HINT = (
@@ -78,6 +81,9 @@ _MAX_TITLE = 200
 _MAX_NOTES = 1000
 _MAX_SECTIONS = 20
 _MAX_NODE_POSITIONS = 500
+_MAX_PATH = 1000  # a library folder (ADR-039)
+_MAX_CATEGORIES = 8  # a fishbone grouped into the user's own list (ADR-036)
+_MAX_CATEGORY_CHARS = 40
 
 
 def parse_sections(raw: Any) -> list[OutlineSection] | None:
@@ -244,6 +250,78 @@ def make_handler(
             self.wfile.write(body)
             return True
 
+        # --- where the library is (ADR-039): this PC only --------------------------------------
+
+        def _library_get(self) -> bool:
+            """GET /api/library and /api/library/browse?path=…; False if neither."""
+            parts = urlsplit(self.path)
+            if parts.path not in ("/api/library", "/api/library/browse"):
+                return False
+            local = self._client_is_local()
+            if parts.path == "/api/library":
+                library = engine.config.paths.library
+                path = str(library) if library is not None and local else None
+                self._send_json({"path": path, "local": local})
+                return True
+            if not local:
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return True
+            raw = parse_qs(parts.query).get("path", [""])[0][:_MAX_PATH]
+            try:
+                listing = engine.browse_folders(raw or None)
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return True
+            self._send_json(asdict(listing))
+            return True
+
+        def _library_path(self, payload: dict[str, Any]) -> str | None:
+            """The folder of a check or a change; None after a 4xx (this PC only)."""
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return None
+            return self._text_field(payload, "path", _MAX_PATH)
+
+        def _library_check(self, payload: dict[str, Any]) -> None:
+            path = self._library_path(payload)
+            if path is not None:
+                self._send_json(asdict(engine.library_check(path)))
+
+        def _library_set(self, payload: dict[str, Any]) -> None:
+            path = self._library_path(payload)
+            if path is not None:
+                self._stream(lambda: engine.change_library(path), needs_llm=False)
+
+        # --- «Reset» (ADR-040): this PC only ---------------------------------------------------
+
+        def _reset_get(self) -> bool:
+            """GET /api/reset: what a reset would move, with counts; False if not this route."""
+            if urlsplit(self.path).path != "/api/reset":
+                return False
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return True
+            items = [{"key": i.key, "path": str(i.path), "count": i.count} for i in engine.memory()]
+            self._send_json({"items": items})
+            return True
+
+        def _reset(self, payload: dict[str, Any]) -> None:
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return
+            if payload.get("confirm") is not True:  # the page's «¿Estás seguro?»
+                self._send_json({"error": "'confirm' must be true"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                result = engine.reset_memory()
+            except BusyError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._send_json({"backup": str(result.backup), "moved": list(result.moved)})
+
         def _lan_pair(self, payload: dict[str, Any]) -> None:
             if lan is None or not lan_ip:
                 self._send_json(
@@ -343,7 +421,7 @@ def make_handler(
             if self.path.split("?", 1)[0] == LAN_PAIR_PATH:
                 self._pair()
                 return
-            if self._lan_get():
+            if self._lan_get() or self._library_get() or self._reset_get():
                 return
             if self._conversations_get() or self._maps_get() or self._plans_get():
                 return
@@ -429,8 +507,15 @@ def make_handler(
                 "/api/maps/save": self._map_save,
                 "/api/maps/delete": self._map_delete,
                 "/api/maps/positions": self._map_positions,
+                "/api/maps/suggest": self._map_suggest,
+                "/api/maps/edit": self._map_edit,
+                "/api/maps/regroup": self._map_regroup,
                 "/api/reindex": lambda _payload: self._stream(engine.reindex, needs_llm=False),
+                "/api/library/check": self._library_check,
+                "/api/library/set": self._library_set,
+                "/api/reset": self._reset,
                 "/api/conversations/rename": self._conversation_rename,
+                "/api/conversations/frame": self._conversation_frame,
                 "/api/conversations/delete": self._conversation_delete,
                 "/api/conversations/export": self._conversation_export,
             }
@@ -478,6 +563,7 @@ def make_handler(
             if strategy is None or not ok or conversation is False or level is False:
                 return
             chosen = level if isinstance(level, str) and level else None
+            force = payload.get("force") is True  # «Responder aquí» to another topic (ADR-038)
             self._stream(
                 lambda: engine.ask_recorded(
                     question,
@@ -485,6 +571,7 @@ def make_handler(
                     strategy=strategy,
                     conversation_id=conversation,
                     level=chosen,
+                    force=force,
                 )
             )
 
@@ -543,6 +630,14 @@ def make_handler(
                 ok = engine.conversations.rename(cid, title)
                 self._send_json({"ok": True}) if ok else self._not_found()
 
+        def _conversation_frame(self, payload: dict[str, Any]) -> None:
+            """The conversation's topic, edited by the user (ADR-038)."""
+            cid = self._id_field(payload, "id")
+            frame = self._text_field(payload, "frame", engine.config.thread.frame_max_chars)
+            if cid is not None and frame is not None:
+                ok = engine.conversations.set_frame(cid, frame)
+                self._send_json({"ok": True}) if ok else self._not_found()
+
         def _conversation_delete(self, payload: dict[str, Any]) -> None:
             cid = self._id_field(payload, "id")
             if cid is not None:
@@ -587,9 +682,94 @@ def make_handler(
 
         def _map(self, payload: dict[str, Any]) -> None:
             topic = self._text_field(payload, "topic", _MAX_TITLE)
+            if topic is None:
+                return
             ok, scope = self._scope_field(payload)
-            if topic is not None and ok:
-                self._stream(lambda: engine.concept_map(topic, scope))
+            kind = self._choice_field(payload, "kind", MAP_KINDS) if ok else None
+            if kind in DIAGRAM_KINDS:  # ADR-036
+                self._stream(lambda: engine.diagram(topic, kind, scope))
+            elif kind is not None:
+                self._stream(lambda: engine.concept_map(topic, scope, kind))
+
+        def _map_suggest(self, payload: dict[str, Any]) -> None:
+            """The diagram type the model proposes for a topic (ADR-036)."""
+            topic = self._text_field(payload, "topic", _MAX_TITLE)
+            ok, scope = self._scope_field(payload)
+            if topic is None or not ok:
+                return
+            self._llm_json(lambda: engine.suggest_diagram(topic, scope))
+
+        def _map_edit(self, payload: dict[str, Any]) -> None:
+            """{id, op: move_step (step, delta ±1) | move_cause (cause, category) | version
+            (index)}: changes by hand, without the LLM."""
+            map_id = self._id_field(payload, "id")
+            if map_id is None:
+                return
+            if payload.get("op") not in ("move_step", "move_cause", "version"):
+                self._send_json(
+                    {"error": "'op' must be move_step, move_cause or version"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            page = engine.edit_diagram(map_id, payload)
+            self._send_json({"map": page}) if page is not None else self._not_found()
+
+        def _map_regroup(self, payload: dict[str, Any]) -> None:
+            """{id, grouping: model | 6m | custom, categories (custom only)}."""
+            map_id = self._id_field(payload, "id")
+            grouping = self._choice_field(payload, "grouping", GROUPINGS)
+            if map_id is None or grouping is None:
+                return
+            raw = payload.get("categories", [])
+            names = (
+                [" ".join(c.split()) for c in raw if isinstance(c, str) and c.strip()]
+                if isinstance(raw, list)
+                else []
+            )
+            if grouping == "custom" and not (
+                2 <= len(names) <= _MAX_CATEGORIES
+                and all(len(n) <= _MAX_CATEGORY_CHARS for n in names)
+            ):
+                self._send_json(
+                    {
+                        "error": f"Escribe de 2 a {_MAX_CATEGORIES} categorías de hasta "
+                        f"{_MAX_CATEGORY_CHARS} caracteres."
+                    },
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return
+            found: list[dict[str, Any] | None] = []
+
+            def run() -> dict[str, Any]:
+                page = engine.regroup_diagram(map_id, grouping, names)
+                found.append(page)
+                return {"map": page}
+
+            self._llm_json(run, lambda: found == [None])
+
+        def _llm_json(
+            self, call: Callable[[], dict[str, Any]], missing: Callable[[], bool] = lambda: False
+        ) -> None:
+            """A short LLM call answered as JSON: 503 without the LLM, 409 while something else
+            is generating."""
+            if not engine.llm_running():
+                self._send_json(
+                    {"error": "No LLM server running. Start it with scripts/serve-llm.ps1."},
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                )
+                return
+            try:
+                result = call()
+            except BusyError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except Exception as exc:  # the LLM server stopped, …
+                self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            self._not_found() if missing() else self._send_json(result)
 
         def _map_save(self, payload: dict[str, Any]) -> None:
             map_id = self._id_field(payload, "id")

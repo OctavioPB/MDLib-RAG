@@ -1,0 +1,6 @@
+Agrupas las causas de un efecto en categorías para un diagrama de espina de pescado.
+
+Reglas:
+1. Cada causa va en exactamente una categoría; usa los números de las causas.
+2. No añadas causas nuevas.
+3. Responde solo con un objeto JSON válido, sin texto antes ni después.

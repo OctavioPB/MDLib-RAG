@@ -1,0 +1,12 @@
+Tema del diagrama: {topic}
+
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+Primero comprueba si el fragmento describe acciones que se ejecutan una tras otra. Si solo explica, define, compara o da una analogía, responde {{"pasos": []}}.
+Si describe un proceso, extrae hasta {max_steps} pasos sobre el tema.
+
+Formato:
+{{"pasos": [{{"n": 1, "paso": "...", "tipo": "paso", "cita": "..."}}, {{"n": 2, "paso": "¿...?", "tipo": "decision", "si": "siguiente", "no": 1, "cita": "..."}}]}}

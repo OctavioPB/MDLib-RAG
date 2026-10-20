@@ -15,7 +15,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, TypeVar
@@ -39,6 +39,7 @@ from biblio.generate.draft import (
     slugify,
 )
 from biblio.generate.llm import LLMClient, load_llm_client
+from biblio.generate.thread import Plan, PriorTurn, gist
 from biblio.index.embedder import (
     DeviceChoice,
     Embedder,
@@ -48,7 +49,35 @@ from biblio.index.embedder import (
 from biblio.index.indexer import IndexLockedError, IndexMismatchError, IndexStats, index_library
 from biblio.index.watch import choose_device
 from biblio.ingest.tokens import TokenCounter, load_llm_token_counter, load_token_counter
+from biblio.library import (
+    INVALID,
+    RELOCATE,
+    SAME,
+    LibraryCheck,
+    Listing,
+    browse,
+    check_library,
+    save_library,
+)
 from biblio.maps.build import CachedEmbed, ConceptMap, generate_map, topic_in_text
+from biblio.maps.diagrams import (
+    DIAGRAM_KINDS,
+    Fishbone,
+    Flow,
+    group_causes,
+    move_cause,
+    move_step,
+    suggest_kind,
+)
+from biblio.maps.diagrams import generate_diagram as run_diagram
+from biblio.maps.drawing import (
+    diagram_canvas,
+    diagram_from_page,
+    diagram_markdown,
+    diagram_page,
+    novak_layout,
+    novak_markdown_block,
+)
 from biblio.maps.export import map_fragments, numbered_fragments, to_canvas, to_markdown
 from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
 from biblio.offline import loopback_port_open
@@ -78,6 +107,7 @@ from biblio.practice.store import (
     StoredQuestion,
 )
 from biblio.reader import note_tree
+from biblio.reset import MemoryItem, ResetResult, memory_items, reset_memory
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
@@ -88,7 +118,7 @@ from biblio.retrieve.rerank import (
     load_reranker,
     resolve_rerank_plan,
 )
-from biblio.retrieve.store import library_folders
+from biblio.retrieve.store import library_folders, open_index
 from biblio.retrieve.types import Hit, Retriever
 from biblio.study.gaps import GapStore, extract_topic, same_topic
 from biblio.study.plan import (
@@ -276,8 +306,14 @@ class Engine:
         map_reduce: str = "off",
         passage: Hit | None = None,
         level: str | None = None,
+        frame: str = "",
+        history: Sequence[PriorTurn] = (),
+        force: bool = False,
     ) -> Generator[Event, None, None]:
-        """UI events: ("meta", …) once, ("token", …) while generating, ("done", …) at the end."""
+        """UI events: ("meta", …) once, ("token", …) while generating, ("done", …) at the end.
+        In a conversation (ADR-038) the message is planned first from its topic (`frame`) and
+        previous turns; a message on another topic gets ("offtopic", …) instead of an answer,
+        unless `force`."""
         with self.lock:
             self._release_reranker()  # before the LLM loads its model on the GPU (ADR-014)
             if self._counter is None:
@@ -286,19 +322,29 @@ class Engine:
             try:
                 tutor = Tutor(self.config, self._base(scope), llm, self._counter, map_reduce, level)
                 t0 = time.perf_counter()
-                prepared = (  # a passage of a note is fragment [1] (ADR-031)
-                    tutor.prepare_passage(
+                plan: Plan | None = None
+                if passage is not None:  # a passage of a note is fragment [1] (ADR-031)
+                    prepared = tutor.prepare_passage(
                         question, passage, passage.text, self._section_of(passage)
                     )
-                    if passage is not None
-                    else tutor.prepare(question)
-                )
+                elif self.config.thread.plan:
+                    plan = tutor.plan(question, frame, history)
+                    if plan.relation == "nuevo" and not force:
+                        yield "offtopic", {"frame": frame, "question": question}
+                        return
+                    # answered here anyway: on its own, the conversation's topic unchanged
+                    prepared = tutor.prepare_planned(
+                        plan, () if plan.relation == "nuevo" else history
+                    )
+                else:
+                    prepared = tutor.prepare(question)
                 yield (
                     "meta",
                     {
                         "retriever": prepared.retriever,
                         "strategy": prepared.strategy,
                         "fragments": [fragment_json(f, self) for f in prepared.context.fragments],
+                        "plan": plan_json(plan, time.perf_counter() - t0) if plan else None,
                     },
                 )
                 parts = []
@@ -567,7 +613,7 @@ class Engine:
             for f in stored.fragments
         }
         nodes = {}
-        for n in stored.map["nodes"]:
+        for n in stored.map.get("nodes", []):  # the diagrams of ADR-036 have no mastery
             sections = [keys[s] for s in n["sources"] if s in keys]
             recalls = [schedules[k].recall_now for k in sections if k in schedules]
             recall = sum(recalls) / len(recalls) if recalls else None
@@ -952,6 +998,12 @@ class Engine:
         library = self.config.paths.library
         if library is None:
             raise ValueError("No hay biblioteca configurada (paths.library en config/local.toml).")
+        yield from self._index_stream(library, full=False, relocate=False)
+
+    def _index_stream(
+        self, library: Path, *, full: bool, relocate: bool
+    ) -> Generator[Event, None, None]:
+        """One indexing run with its progress as events (`reindex`, `change_library`)."""
         choice = choose_device(self._index_device(self.config), self.llm_running())
         if choice is None:
             raise ValueError(
@@ -965,7 +1017,7 @@ class Engine:
 
             def on_start(total: int) -> None:
                 seen["total"] = total
-                emit(("start", {"files": total, "device": choice.device}))
+                emit(("start", {"files": total, "device": choice.device, "full": full}))
 
             def progress(chunks: int) -> None:
                 seen["files"] += 1
@@ -979,12 +1031,14 @@ class Engine:
                 return index_library(
                     self.config,
                     library,
-                    full=False,
+                    full=full,
                     dtype=choice.dtype,
                     embedder_factory=lambda: self._index_embedder_factory(self.config, choice),
                     counter_factory=lambda: self._index_counter_factory(self.config),
                     progress=progress,
                     on_start=on_start,
+                    relocate=relocate,
+                    swap=self._swap_index,
                 )
             except IndexLockedError as exc:
                 busy = "La biblioteca ya se está actualizando; espera a que termine."
@@ -1011,6 +1065,42 @@ class Engine:
             },
         )
 
+    def _swap_index(self, replace_index: Callable[[], None]) -> None:
+        """A full rebuild replaces the index file: Windows cannot replace a file that is open, so
+        the app's connection is closed around it (ADR-039)."""
+        with self.lock:
+            self._release_reranker()
+            self._conn.close()
+            try:
+                replace_index()
+            finally:
+                self._conn = open_index(self.config, shared_across_threads=True)
+
+    # --- where the library is (ADR-039) -------------------------------------------------------
+
+    def library_check(self, path: str) -> LibraryCheck:
+        with self.lock:
+            return check_library(self.config, Path(path), self._conn)
+
+    def browse_folders(self, path: str | None) -> Listing:
+        return browse(path, self.config.library.browse_max_entries)
+
+    def change_library(self, path: str) -> Generator[Event, None, None]:
+        """Events: ("check", …) with the plan, then the indexing run's events, then ("library",
+        {path}) once the new location is in use and saved. Raises ValueError before any event if
+        the folder has no notes."""
+        found = self.library_check(path)
+        if found.plan == INVALID:
+            raise ValueError(found.reason)
+        yield "check", asdict(found)
+        new = Path(found.path)
+        if found.plan != SAME:
+            # the library is switched only once its index is ready: a failed run changes nothing
+            yield from self._index_stream(new, full=found.plan != RELOCATE, relocate=True)
+        save_library(self.config, new)
+        self.config = replace(self.config, paths=replace(self.config.paths, library=new))
+        yield "library", {"path": str(new)}
+
     # --- conversation history (ADR-023) -------------------------------------------------------
 
     @property
@@ -1028,19 +1118,32 @@ class Engine:
         conversation_id: int | None,
         passage: Hit | None = None,
         level: str | None = None,
+        force: bool = False,
     ) -> Generator[Event, None, None]:
         """`ask`, stored in the history when the answer is complete: the "done" event carries the
-        conversation id. An error is stored too and sent as an ("error", …) event with the id."""
+        conversation id. An error is stored too and sent as an ("error", …) event with the id.
+        The conversation's topic and last turns are the context of the message (ADR-038)."""
         map_reduce = "on" if strategy == "map-reduce" else "off"  # opt-in only (ADR-017)
         meta: dict[str, Any] = {}
         parts: list[str] = []
         abstained = False
         try:
             level = level or self.config.tutor.default_level  # ADR-032
+            frame, history = self.thread_context(conversation_id)
             asked = self.ask(
-                question, scope=scope, map_reduce=map_reduce, passage=passage, level=level
+                question,
+                scope=scope,
+                map_reduce=map_reduce,
+                passage=passage,
+                level=level,
+                frame=frame,
+                history=history,
+                force=force,
             )
             for name, data in asked:
+                if name == "offtopic":  # nothing answered, nothing stored: the page asks
+                    yield name, {**data, "conversation_id": conversation_id}
+                    return
                 if name == "meta":
                     meta = data
                 elif name == "token":
@@ -1056,6 +1159,9 @@ class Engine:
                         payload={**meta, "done": data, "level": level},
                     )
                     cid, _ = self.conversations.add_turn(conversation_id, turn)
+                    plan = meta.get("plan")
+                    if plan and plan["relation"] != "nuevo":
+                        self.conversations.set_frame(cid, plan["frame"])
                     data = {**data, "conversation_id": cid}
                 yield name, data
                 abstained = abstained or (name == "done" and bool(data.get("abstained")))
@@ -1068,6 +1174,27 @@ class Engine:
             gap = self._gap_from_question(question)
             if gap is not None:
                 yield "gap", gap
+
+    def thread_context(self, conversation_id: int | None) -> tuple[str, list[PriorTurn]]:
+        """A conversation's topic and its last explained turns, as the planner and the tutor see
+        them (ADR-038). A search-only turn («Solo ubicar») has no answer: its question is kept."""
+        if conversation_id is None:
+            return "", []
+        found = self.conversations.get(conversation_id)
+        if found is None:
+            return "", []
+        summary, turns = found
+        cfg = self.config.thread
+        done = [t for t in turns if t.status == "done"][-cfg.history_turns :]
+        prior = [
+            PriorTurn(
+                (t.payload.get("plan") or {}).get("question") or t.question,
+                gist(t.answer, cfg.gist_chars) if t.mode == "explain" else "",
+            )
+            for t in done
+        ]
+        frame = summary.frame or (prior[0].question if prior else "")
+        return frame, prior
 
     # --- gap detector (ADR-029) ----------------------------------------------------------------
 
@@ -1129,9 +1256,12 @@ class Engine:
         with self.lock:  # the query embedder is shared with searches
             return self._embedder.embed(list(names))
 
-    def concept_map(self, topic: str, scope: str | None = None) -> Generator[Event, None, None]:
+    def concept_map(
+        self, topic: str, scope: str | None = None, kind: str = "concepts"
+    ) -> Generator[Event, None, None]:
         """Events: ("start", {fragments}), then ("map", …) after each fragment with the map so far,
-        then ("done", …). Raises ValueError before the first event if nothing is found."""
+        then ("done", …). Raises ValueError before the first event if nothing is found. `kind`
+        "novak" lays the same map out top-down (ADR-036)."""
         self._claim_generation()
         try:
             cfg = self.config.maps
@@ -1159,13 +1289,13 @@ class Engine:
                         {
                             "processed": progress.processed,
                             "skipped": progress.skipped,
-                            "map": map_json(progress.map),
+                            "map": map_json(progress.map, kind),
                         },
                     )
             finally:
                 llm.close()
             assert progress is not None
-            map_id = self.map_history.add(topic, map_json(progress.map), sources)  # ADR-024
+            map_id = self.map_history.add(topic, map_json(progress.map, kind), sources)  # ADR-024
             done = {"map_id": map_id, "skipped": progress.skipped, "omitted": progress.map.omitted}
             yield "done", done
             concepts = len(progress.map.nodes) - 1  # the topic is a node too
@@ -1193,17 +1323,153 @@ class Engine:
         stored = self.map_history.get(map_id)
         if stored is None:
             return None
-        cmap = concept_map_from_page(stored.map, stored.positions)
         fragments = [fragment_from_page(f) for f in stored.fragments]
-        slug = slugify(cmap.topic)
+        kind = stored.summary.kind
         folder = self.config.paths.drafts_dir / "maps"
         folder.mkdir(parents=True, exist_ok=True)
-        markdown = to_markdown(cmap, fragments, date.today())
+        canvas_data: dict[str, Any]
+        if kind in DIAGRAM_KINDS:  # ADR-036
+            slug = f"{slugify(stored.summary.topic)}-{_KIND_SLUGS[kind]}"
+            markdown = diagram_markdown(stored.map, fragments, date.today())
+            canvas_data = diagram_canvas(stored.map, fragments)
+        else:
+            cmap = concept_map_from_page(stored.map, stored.positions)
+            slug = slugify(cmap.topic) + ("-mapa-conceptual" if kind == "novak" else "")
+            markdown = to_markdown(cmap, fragments, date.today())
+            if kind == "novak":
+                block = "\n".join(novak_markdown_block(cmap))
+                markdown = markdown.replace("\n## Fuentes\n", f"{block}\n\n## Fuentes\n", 1)
+            canvas_data = to_canvas(cmap, fragments)
         md_path, canvas_path = folder / f"{slug}.md", folder / f"{slug}.canvas"
         md_path.write_text(markdown, encoding="utf-8", newline="\n")
-        canvas = json.dumps(to_canvas(cmap, fragments), ensure_ascii=False, indent=2)
+        canvas = json.dumps(canvas_data, ensure_ascii=False, indent=2)
         canvas_path.write_text(canvas + "\n", encoding="utf-8", newline="\n")
         return {"markdown": str(md_path), "canvas": str(canvas_path), "outline": markdown}
+
+    # --- flowcharts, sequence and cause-effect diagrams (ADR-036) ---------------------------------
+
+    def diagram(
+        self, topic: str, kind: str, scope: str | None = None
+    ) -> Generator[Event, None, None]:
+        """Events: ("start", {fragments}), ("diagram", …) after each fragment and step, then
+        ("done", {map_id}); map_id is None when the notes describe nothing of that kind.
+        Raises ValueError before the first event if nothing is found."""
+        self._claim_generation()
+        try:
+            cfg = self.config.diagrams
+            with self.lock:
+                hits = self._base(scope).search(topic, cfg.fragments * 2)
+            fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+            if not fragments:
+                self._record_gap(topic, "map", topic, "sin secciones")  # ADR-029
+                raise ValueError(
+                    "No encontré secciones sobre ese tema en tus notas. "
+                    "Lo apunté como tema pendiente en Guías."
+                )
+            sources = [fragment_json(f, self) for f in fragments]
+            yield "start", {"topic": topic, "kind": kind, "fragments": sources}
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            llm = self._llm_factory(self.config)
+            page: dict[str, Any] = {}
+            try:
+                turns = lambda: self._llm_lock  # noqa: E731  (generation and grading take turns)
+                for progress in run_diagram(llm, cfg, kind, topic, fragments, turns):
+                    page = diagram_page(kind, topic, progress.diagram)
+                    yield (
+                        "diagram",
+                        {
+                            "processed": progress.processed,
+                            "skipped": progress.skipped,
+                            "stage": progress.stage,
+                            "map": page,
+                        },
+                    )
+            finally:
+                llm.close()
+            map_id = self.map_history.add(topic, page, sources) if page["count"] else None
+            yield "done", {"map_id": map_id, "omitted": page["omitted"]}
+        finally:
+            self._generating.release()
+
+    def suggest_diagram(self, topic: str, scope: str | None = None) -> dict[str, str]:
+        """The diagram type the model proposes for a topic, from the headings retrieval finds."""
+        self._claim_generation()
+        try:
+            cfg = self.config.diagrams
+            with self.lock:
+                hits = self._base(scope).search(topic, cfg.suggest_fragments * 2)
+                self._release_reranker()  # ADR-014
+            fragments = numbered_fragments(hits, cfg.suggest_fragments, 200)
+            headings = [" › ".join(f.heading_path) for f in fragments]
+            llm = self._llm_factory(self.config)
+            try:
+                with self._llm_lock:
+                    found = suggest_kind(llm, cfg, topic, headings)
+            finally:
+                llm.close()
+        finally:
+            self._generating.release()
+        if found is None:
+            return {"kind": "concepts", "reason": ""}
+        return {"kind": found.kind, "reason": found.reason}
+
+    def edit_diagram(self, map_id: int, edit: dict[str, Any]) -> dict[str, Any] | None:
+        """A change by hand, without the LLM: a step moved, a cause moved to another category, or
+        another version of a sequence shown. None if the map or the change does not exist."""
+        stored = self.map_history.get(map_id)
+        if stored is None or stored.summary.kind not in DIAGRAM_KINDS:
+            return None
+        kind, diagram, current = diagram_from_page(stored.map)
+        changed: object | None = None
+        op = edit.get("op")
+        if op == "move_step" and kind == "flow" and isinstance(diagram, tuple) and diagram:
+            delta = edit.get("delta")
+            flow = diagram[current]
+            moved = (
+                move_step(flow, str(edit.get("step")), delta)
+                if isinstance(flow, Flow) and isinstance(delta, int) and not isinstance(delta, bool)
+                else None
+            )
+            if moved is not None:
+                changed = (*diagram[:current], moved, *diagram[current + 1 :])
+        elif op == "move_cause" and isinstance(diagram, Fishbone):
+            changed = move_cause(diagram, str(edit.get("cause")), str(edit.get("category")))
+        elif op == "version" and isinstance(diagram, tuple):
+            index = edit.get("index")
+            if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(diagram):
+                changed, current = diagram, index
+        if changed is None:
+            return None
+        page = diagram_page(kind, stored.summary.topic, changed, current)
+        self.map_history.replace_map(map_id, page)
+        return page
+
+    def regroup_diagram(
+        self, map_id: int, grouping: str, custom: Sequence[str] = ()
+    ) -> dict[str, Any] | None:
+        """Group a fishbone's causes again (model, 6M or the user's list); the notes are not read
+        again (ADR-036). None if the map is not a fishbone."""
+        stored = self.map_history.get(map_id)
+        if stored is None or stored.summary.kind != "fishbone":
+            return None
+        _kind, diagram, _current = diagram_from_page(stored.map)
+        assert isinstance(diagram, Fishbone)
+        self._claim_generation()
+        try:
+            with self.lock:
+                self._release_reranker()  # ADR-014
+            llm = self._llm_factory(self.config)
+            try:
+                with self._llm_lock:
+                    grouped = group_causes(llm, self.config.diagrams, diagram, grouping, custom)
+            finally:
+                llm.close()
+        finally:
+            self._generating.release()
+        page = diagram_page("fishbone", stored.summary.topic, grouped)
+        self.map_history.replace_map(map_id, page)
+        return page
 
     # --- helpers ----------------------------------------------------------------------------------
 
@@ -1516,15 +1782,36 @@ class Engine:
             "final_k": self.config.retrieval.final_k,
         }
 
-    def close(self) -> None:
-        self._release_reranker()
-        self._embedder.close()
+    def _close_stores(self) -> None:
         if self._practice is not None:
             self._practice.close()
         if self._conversations is not None:
             self._conversations.close()
         if self._map_history is not None:
             self._map_history.close()
+        self._practice = self._conversations = self._map_history = None
+        self._gap_store = None  # it shares the practice connection
+
+    # --- «Reset» (ADR-040) --------------------------------------------------------------------
+
+    def memory(self) -> list[MemoryItem]:
+        return memory_items(self.config)
+
+    def reset_memory(self) -> ResetResult:
+        """Move the app's memory aside; the stores reopen empty on their next use. Refused while
+        something is being generated."""
+        self._claim_generation()
+        try:
+            with self.lock:
+                self._close_stores()
+                return reset_memory(self.config)
+        finally:
+            self._generating.release()
+
+    def close(self) -> None:
+        self._release_reranker()
+        self._embedder.close()
+        self._close_stores()
 
 
 def excerpt(text: str) -> str:
@@ -1588,8 +1875,28 @@ def question_json(q: StoredQuestion) -> dict[str, Any]:
     }
 
 
-def map_json(cmap: ConceptMap) -> dict[str, Any]:
+_KIND_SLUGS = {"flow": "flujo", "sequence": "secuencia", "fishbone": "causa-efecto"}
+
+
+def plan_json(plan: Plan, seconds: float) -> dict[str, Any]:
+    """How a message was read (ADR-038), shown under the answer and kept with the turn."""
     return {
+        "relation": plan.relation,
+        "question": plan.question,
+        "searches": list(plan.searches),
+        "frame": plan.frame,
+        "relate": plan.relate,
+        "planned": plan.planned,
+        "seconds": round(seconds, 1),
+    }
+
+
+def map_json(cmap: ConceptMap, kind: str = "concepts") -> dict[str, Any]:
+    """A concept map as the page receives it; "novak" is laid out top-down (ADR-036)."""
+    if kind == "novak":
+        cmap = novak_layout(cmap)
+    return {
+        "kind": kind,
         "topic": cmap.topic,
         "nodes": [
             {

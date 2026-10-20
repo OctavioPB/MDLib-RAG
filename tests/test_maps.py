@@ -410,6 +410,7 @@ def test_an_older_maps_db_gains_the_positions_column(tmp_path: Path) -> None:
     store = MapStore(path)
     stored = store.get(1)
     assert stored is not None and stored.positions == {}
+    assert stored.summary.kind == "concepts"  # and the kind column (ADR-036)
     assert store.set_positions(1, {"root": (5, 6)}) and store.get(1).positions == {"root": (5, 6)}  # type: ignore[union-attr]
 
 

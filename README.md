@@ -156,7 +156,20 @@ uv run biblio serve        # then open http://127.0.0.1:8765
 - **Solo ubicar** lists the sections where a topic appears.
 - Click a citation or a result to read the whole original passage in the side panel, with a link that
   opens the note in Obsidian.
-- Each message is answered on its own: follow-up questions do not remember earlier turns (ADR-019).
+- **A conversation keeps its topic** (ADR-038). The first message sets it («Tema: …» under the
+  title, editable). Each message is read with the topic and the last three turns before searching:
+  «¿Qué métodos se usan?» becomes «¿Qué algoritmos de ciencia de datos se usan en química?», and
+  «hablamos de química» brings the conversation back to its topic. Under each answer, «Entendí: …»
+  shows how the message was understood and what was searched.
+- **Questions that join areas reach each of them**: the message is searched as written, and the
+  model's searches per area add two more fragments the question alone missed (the tutor reads
+  eight instead of six). The answer explains each side from your notes and then how they connect;
+  a connection your notes do not write is marked **Relación propuesta** and cites both sides. If
+  you ask for an example and your notes have none, an invented one is marked **Ejemplo ilustrativo
+  (no está en tus notas)** and carries no citation.
+- **Another topic**: if a message has nothing to do with the conversation's topic, the tutor asks
+  first — **Nueva conversación con esta pregunta** or **Responder aquí** (answered on its own,
+  without changing the topic). Planning adds ~3 s to each answer.
 
 **Nivel** (ADR-032): next to «Explicar» in Conversar, choose how the tutor explains:
 **Principiante** (the simplest words, ending with one everyday comparison, marked «Es como…», the
@@ -226,6 +239,22 @@ number of notes in each, and a box that finds a note by title or folder as you t
 capitals do not matter). The notes you read last are listed first; notes marked as read show
 «✓ leída». Any of them opens in the reader.
 
+**Moving the library** (ADR-039): on the PC, Ajustes › Biblioteca shows «Ubicación: …» with
+**Cambiar**. Paste the folder or find it with **Examinar**, then **Comprobar**: if most notes match
+the index (the same vault moved or synced elsewhere), the index is reused and the change takes
+seconds; if it is another library, it is indexed in full (the page gives the estimate) while the
+current one keeps working, and it replaces it only if it completes. The new path is saved in
+`config/local.toml` and used at once, including automatic reindexing. In the terminal:
+`uv run biblio library` shows it and `uv run biblio library set "<ruta>"` changes it. Paired phones
+and tablets do not see or change it.
+
+**Reset** (ADR-040): in Ajustes › Memoria de la app, on the PC, **Reset**
+starts the app over without its memory: conversations, maps and diagrams, quizzes and reviews,
+«Explícamelo tú», study plans and read marks, pending topics, dictionaries and the `drafts/` folder.
+A «¿Estás seguro?» dialog lists what will go, with counts. Your library, its index, the models and
+`config/local.toml` are never touched, and everything erased is moved to `data/backups/reset-<date>/`
+in case you change your mind. `uv run biblio reset` does the same with the app closed.
+
 **Leer** (ADR-031) opens a note inside the app, at the cited line, from the **Leer** button next to
 every source (Conversar, Mapas, Practicar, Explícamelo tú and the study plan). Formulas are drawn
 with KaTeX, which ships with the app, so nothing is downloaded; `[[links]]` open the linked note
@@ -239,10 +268,27 @@ in the reader. Select a paragraph and choose:
 
 The reader also offers **Abrir en Obsidian** and **Marcar como leída** (for the study plan).
 
-**Mapas** draws a concept map of a topic from your notes (ADR-022):
+**Mapas** draws a topic from your notes as one of five diagrams (ADR-022, ADR-036, ADR-037):
 
-- Write a topic and press **Crear mapa**. The ten most relevant sections are read one by one; the map
-  grows as each is read (~3 s each, ~30 s in all).
+- Write a topic, choose the type and press **Crear**. **Sugerir tipo** asks the model which type fits
+  the topic (~1 s) and selects it; you confirm with **Crear**.
+  - **Conceptos**: the concept map below, around the topic.
+  - **Mapa conceptual**: the same concepts as a tree read left to right, every arrow with its
+    linking phrase («es un tipo de», «se calcula con»).
+  - **Flujo**: the steps and decisions of a process. Each note that describes the process is a
+    version of its own (never mixed); the bar above the drawing switches between them. A dashed
+    arrow is an order the note does not write; select a step to move it up or down.
+  - **Secuencia**: the messages between participants, in order; a reply is dashed, and a frame marks
+    the case in which messages happen. One version per note, as for flows.
+  - **Causa-efecto**: the causes of the topic (the effect) as a fishbone. The model groups them into
+    categories; **Usar las 6M** or **Mis categorías…** regroup them without reading the notes
+    again, and a selected cause can be moved to another category.
+- Every step, message and cause carries a quote that must be written in its fragment; the panel shows
+  it with its citation, **Leer en la nota** and **Explícamelo tú**. **Copiar Mermaid** copies the
+  diagram as a Mermaid block that Obsidian draws, and **Guardar** writes it to `drafts/maps/` with
+  that block, its outline and its sources, plus a Canvas file.
+- For concept maps, the ten most relevant sections are read one by one; the map grows as each is
+  read (~3 s each, ~30 s in all). Flows, sequences and fishbones read eight (~15-35 s).
 - Each concept comes from a fragment where it is written, and each relation was stated in a fragment;
   anything the model names that is not in the text is dropped. The topic is in the centre, the most
   connected concepts around it, and their sub-concepts further out.
@@ -265,8 +311,9 @@ The reader also offers **Abrir en Obsidian** and **Marcar como leída** (for the
   copy that file into your vault to open it in Obsidian, with each concept linked to its notes.
   **Descargar SVG** saves the drawing. `uv run biblio map "tema"` prints the outline in the terminal.
 
-The model can still state a wrong relation between two real concepts; the map's quality is to be
-measured on an evaluation set before it is considered finished (PLAN Phase 8).
+The model can still state a wrong relation between two real concepts, turn a description into a
+«step» or a symptom into a «cause»; the quote shows where each piece comes from. The quality of every
+type is to be measured on an evaluation set before it is considered finished (PLAN Phase 8 and 9.12).
 
 **Practicar** makes quizzes from your own notes (ADR-020). The page opens on what is due today, with
 one button to start it; below, three ways to practise something else (**Cuestionario**,
@@ -312,12 +359,17 @@ and a strip with your progress (**Ver todo** for the details).
 The history stays on this machine in `data/practice.db`, apart from the index, so rebuilding the
 index never deletes it. The answer to a question is never sent to the page before you answer it.
 
-The button next to the notes count (top right) **updates the library**: an incremental reindex,
-like `biblio index`, with its progress in the counter; only new, changed or deleted notes are
+**Ajustes** (the gear at the top right, on every page) holds everything that is not studying:
+**Apariencia** (Claro, Sistema, Oscuro), **Biblioteca** (its location, with **Cambiar**, and
+**Actualizar ahora**), **Dispositivos** (LAN mode) and **Memoria de la app** (**Reset**). Location,
+devices and reset appear on the PC only. The top bar keeps just the pages, the status and the gear.
+
+**Actualizar ahora** (in Ajustes) **updates the library**: an incremental reindex,
+like `biblio index`, with its progress in the status at the top; only new, changed or deleted notes are
 processed (about a second when nothing changed). It embeds on the GPU when free and on the CPU while
 the LLM server runs, and refuses politely if another index run is in progress.
 
-The buttons at the top right switch between a light theme, a dark one, or following your system
+**Apariencia** in Ajustes switches between a light theme, a dark one, or following your system
 (the default); the choice is remembered in the browser.
 
 The server listens only on `127.0.0.1`, rejects requests addressed to any other host name, and loads
@@ -335,8 +387,8 @@ for good with this in `config/local.toml`:
 lan = true
 ```
 
-When it starts, the terminal shows the PC's address and a QR code. In the app on the PC, the phone
-icon at the top, **Conectar un dispositivo**, shows a fresh QR code (one use, 10 minutes) and the
+When it starts, the terminal shows the PC's address and a QR code. In the app on the PC, Ajustes ›
+Dispositivos › **Conectar un dispositivo** shows a fresh QR code (one use, 10 minutes) and the
 paired devices, each with **Quitar**. Scan the code with the phone on the same Wi-Fi: the app opens
 and the device stays paired (180 days); next time the address is enough. Devices that were not
 paired, and any address outside private networks, get nothing, not even the page. «Abrir en

@@ -1,0 +1,12 @@
+Tema de la conversación: {frame}
+
+Conversación hasta ahora (solo para entender la pregunta: no es una fuente y no se cita):
+{history}
+
+Fragmentos:
+
+{evidence}
+
+Pregunta: {question}
+
+Responde a esta pregunta concreta, dentro del tema de la conversación. No repitas lo que ya se explicó en los turnos anteriores: ve directo a lo nuevo que pide. Si pide un ejemplo, usa uno que esté en los fragmentos, con su cita. Si los fragmentos no traen ninguno, puedes dar UN ejemplo sencillo tuyo en un párrafo que empiece exactamente por «Ejemplo ilustrativo (no está en tus notas):», sin cita; nunca le pongas una cita a algo que no está en los fragmentos. Hazlo según el nivel del estudiante, citando cada afirmación con [n].
