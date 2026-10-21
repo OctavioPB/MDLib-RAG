@@ -136,3 +136,64 @@ def test_start_never_downloads_without_consent(
     result = CliRunner().invoke(cli.app, ["start"])  # no terminal: questions are declined
     assert result.exit_code == 2, result.output
     assert "Not asked" in result.output and "models pull" in result.output
+
+
+# --- switching the LLM off and on from «Ajustes» (ADR-043) ---------------------------------------
+
+
+class _Process:
+    def __init__(self) -> None:
+        self.running = True
+
+    def poll(self) -> int | None:
+        return None if self.running else 0
+
+
+class _Server:
+    def __init__(self) -> None:
+        self.process = _Process()
+        self.stops = 0
+
+    def stop(self) -> None:
+        self.stops += 1
+        self.process.running = False
+
+
+def test_the_switch_stops_only_a_server_the_app_started(
+    config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import biblio.launcher as launcher
+
+    unloaded: list[str] = []
+    monkeypatch.setattr(
+        launcher, "unload_model", lambda url, model, timeout: unloaded.append(model) or True
+    )
+    server = _Server()
+    switch = launcher.LLMSwitch(config, server)  # type: ignore[arg-type]
+    assert switch.owned
+    assert switch.stop() == "stopped" and server.stops == 1 and not switch.owned
+    assert unloaded == []
+    # an Ollama opened outside the app is never killed: its model leaves memory instead
+    assert switch.stop() == "unloaded" and unloaded == [config.llm.model]
+    monkeypatch.setattr(launcher, "unload_model", lambda url, model, timeout: False)
+    with pytest.raises(RuntimeError):
+        switch.stop()
+
+
+def test_closing_the_app_stops_only_its_own_server(config: Config) -> None:
+    from biblio.launcher import LLMSwitch
+
+    mine = _Server()
+    LLMSwitch(config, mine).close()  # type: ignore[arg-type]
+    assert mine.stops == 1
+    LLMSwitch(config).close()  # nothing started here: nothing to stop
+
+
+def test_starting_without_ollama_says_so(config: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    import biblio.launcher as launcher
+
+    monkeypatch.setattr(launcher, "find_ollama", lambda configured: None)
+    switch = launcher.LLMSwitch(config)
+    assert not switch.can_start()
+    with pytest.raises(RuntimeError, match="no está instalado"):
+        switch.start()

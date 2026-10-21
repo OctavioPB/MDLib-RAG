@@ -189,7 +189,12 @@ def _summary(page_map: dict[str, Any]) -> tuple[str, int, str]:
     """(kind, how many pieces, the names searched) of a map or diagram as the page receives it."""
     kind = str(page_map.get("kind", "concepts"))
     if "nodes" in page_map:  # concepts and novak: the topic is a node too
-        names = [n["label"] for n in page_map["nodes"] if n["level"] > 0]
+        # with their Spanish names, so a search in Spanish finds a map of English notes (ADR-042)
+        names = [
+            f"{n['label']} ({n['translation']})" if n.get("translation") else n["label"]
+            for n in page_map["nodes"]
+            if n["level"] > 0
+        ]
         return kind, len(names), " · ".join(names)
     return kind, int(page_map["count"]), " · ".join(page_map.get("names", []))
 
@@ -209,7 +214,9 @@ def concept_map_from_page(
             n["level"],
             n["parent"],
             tuple(n["sources"]),
-            *moved.get(n["id"], (n["x"], n["y"])),
+            moved.get(n["id"], (n["x"], n["y"]))[0],
+            moved.get(n["id"], (n["x"], n["y"]))[1],
+            translation=n.get("translation", ""),
         )
         for n in page_map["nodes"]
     )

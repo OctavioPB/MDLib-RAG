@@ -123,7 +123,7 @@ function dictVisible() {
   const q = libraryFold(dict.filter.trim());
   return dict.view.entries
     .map((e, i) => [i, e])
-    .filter(([, e]) => e.kind === dict.kind && (!q || libraryFold(`${e.term} ${e.text} ${e.detail}`).includes(q)))
+    .filter(([, e]) => e.kind === dict.kind && (!q || libraryFold(`${e.term} ${e.translation || ""} ${e.text} ${e.detail}`).includes(q)))
     .sort((a, b) => a[1].term.localeCompare(b[1].term, "es", { sensitivity: "base" }));
 }
 
@@ -190,8 +190,10 @@ function dictRenderIndex(visible) {
     const dot = el("span", `dict-dot ${mark ? `is-${mark}` : ""}`);
     dot.setAttribute("aria-hidden", "true");
     const name = el(entry.kind === "function" ? "code" : "span", "dict-term-name", entry.kind === "function" ? `${entry.term}()` : entry.term);
+    if (entry.translation) name.append(el("span", "dict-term-tr", entry.translation)); // ADR-042
     button.append(dot, name);
-    button.setAttribute("aria-label", `${entry.term}${mark ? `, ${DICT_MARKS[mark].toLowerCase()}` : ""}`);
+    const said = entry.translation ? `${entry.term} (${entry.translation})` : entry.term;
+    button.setAttribute("aria-label", `${said}${mark ? `, ${DICT_MARKS[mark].toLowerCase()}` : ""}`);
     if (index === dict.selected) button.setAttribute("aria-current", "true");
     button.addEventListener("click", () => {
       dict.selected = index;
@@ -247,6 +249,7 @@ function dictRenderDetail(visible) {
     nodes.push(el("h2", "dict-detail-term", entry.term), renderMath(el("div", "math-block dict-formula"), entry.detail, true));
   } else {
     nodes.push(el("h2", "dict-detail-term", entry.term));
+    if (entry.translation) nodes.push(el("p", "dict-translation", `En español: ${entry.translation}`));
   }
   nodes.push(renderMathIn(el("p", "dict-definition", entry.text)));
   const first = dictSourceOf(view, entry.sources[0]);
@@ -343,7 +346,10 @@ function dictCardNode() {
   const entry = view.entries[index];
   const card = el("div", "practice-card dict-card");
   card.append(el("span", "eyebrow", DICT_KINDS.find(([k]) => k === entry.kind)[2]));
-  if (entry.kind === "concept") card.append(el("h2", "dict-front", entry.term));
+  if (entry.kind === "concept") {
+    card.append(el("h2", "dict-front", entry.term));
+    if (entry.translation) card.append(el("p", "dict-translation", entry.translation));
+  }
   else if (entry.kind === "function") card.append(el("pre", "dict-code dict-front", entry.detail));
   else card.append(el("h2", "dict-front", entry.term), renderMath(el("div", "math-block"), entry.detail, true));
   if (!c.flipped) {

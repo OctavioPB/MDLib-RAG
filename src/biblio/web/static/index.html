@@ -340,6 +340,14 @@
           <span class="small muted">Selecciona un párrafo para que te lo explique o te pregunte sobre él.</span>
         </div>
       </header>
+      <div id="reader-find-wrap" class="reader-find-wrap" hidden>
+        <form id="reader-find" class="reader-find" role="search" autocomplete="off">
+          <label for="reader-find-input" class="sr-only">Buscar en esta nota</label>
+          <input id="reader-find-input" type="search" maxlength="300" placeholder="Buscar en esta nota…">
+          <button id="reader-find-go" class="btn" type="submit">Buscar</button>
+        </form>
+        <div id="reader-find-results" class="reader-find-results" hidden></div>
+      </div>
       <div id="reader-body" class="reader-body md"></div>
     </article>
     <aside id="reader-panel" class="reader-panel" aria-label="Sobre tu selección" hidden>
@@ -715,6 +723,15 @@
         </button>
         <span class="small muted">Usa la app desde un teléfono o una tableta de tu red.</span>
       </div>
+    </section>
+    <section id="settings-llm" class="settings-group" aria-labelledby="settings-llm-title" hidden>
+      <h3 id="settings-llm-title">Modelo de lenguaje</h3>
+      <p id="llm-state" class="llm-state"><span class="llm-dot" aria-hidden="true"></span><span id="llm-state-text"></span></p>
+      <div class="settings-row">
+        <button id="llm-toggle" class="btn" type="button"></button>
+        <span id="llm-help" class="small muted"></span>
+      </div>
+      <p id="llm-result" class="small" role="status" hidden></p>
     </section>
     <section id="app-reset" class="settings-group app-reset" aria-labelledby="app-reset-title" hidden>
       <h3 id="app-reset-title">Memoria de la app</h3>

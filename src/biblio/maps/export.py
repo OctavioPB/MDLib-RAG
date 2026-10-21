@@ -90,7 +90,8 @@ def to_canvas(cmap: ConceptMap, fragments: Sequence[Fragment]) -> dict[str, Any]
     for n in cmap.nodes:
         width = _width(n)
         links = " ".join(_wikilink(by_number[s]) for s in n.sources if s in by_number)
-        text = f"**{n.label}**" + (f"\n\nFuentes: {links}" if links else "")
+        text = f"**{n.label}**" + (f"\n*{n.translation}*" if n.translation else "")
+        text += f"\n\nFuentes: {links}" if links else ""
         node: dict[str, Any] = {
             "id": n.id,
             "type": "text",

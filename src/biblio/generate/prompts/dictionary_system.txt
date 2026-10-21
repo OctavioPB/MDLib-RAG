@@ -2,7 +2,7 @@ Escribes las entradas de un diccionario de estudio a partir de un fragmento de l
 
 Reglas:
 1. Usa solo el fragmento. No añadas nada que no esté escrito en él.
-2. Conceptos: términos o ideas con nombre que el fragmento explica. Escribe el término exactamente como aparece en el texto (1 a 6 palabras), una definición propia de una o dos frases que se entienda sola, y una cita copiada literalmente del fragmento (5 a 30 palabras) que la respalde. No incluyas títulos de secciones ni palabras genéricas como «ejemplo», «modelo», «datos» o «sección».
+2. Conceptos: términos o ideas con nombre que el fragmento explica. Escribe el término exactamente como aparece en el texto (1 a 6 palabras) y en su idioma, una definición propia en español de una o dos frases que se entienda sola, y una cita copiada literalmente del fragmento (5 a 30 palabras) que la respalde. Si el fragmento está en inglés u otro idioma, el término y la cita van en ese idioma, sin traducir, porque lo traducido no está escrito en el fragmento y se descarta; pon entonces en «traduccion» el término en español. Si el fragmento está en español, deja «traduccion» vacía. No incluyas títulos de secciones ni palabras genéricas como «ejemplo», «modelo», «datos» o «sección».
 3. Funciones: solo si el fragmento tiene código. El nombre de la función, clase o método; su firma copiada exactamente del código, por ejemplo «def fit(self, X, y):»; y qué hace, en una frase.
 4. Fórmulas: solo si el fragmento tiene fórmulas en LaTeX. La fórmula copiada exactamente como está, sin los signos $; un nombre breve; y qué calcula, en una frase.
 5. Si una lista no aplica, déjala vacía.

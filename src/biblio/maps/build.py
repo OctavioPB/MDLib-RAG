@@ -16,7 +16,7 @@ import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -60,6 +60,24 @@ def fold(text: str) -> str:
     return " ".join(re.findall(r"\w+", plain))
 
 
+# Common words of each language, folded: enough to tell an English note from a Spanish one (ADR-042)
+_SPANISH_WORDS = frozenset(
+    {"el", "la", "los", "las", "de", "del", "que", "y", "en", "un", "una", "por", "para", "con"}
+    | {"es", "se", "su", "al", "lo", "como", "mas", "pero", "sus", "este", "esta", "son"}
+)
+_ENGLISH_WORDS = frozenset(
+    {"the", "of", "and", "to", "in", "is", "that", "for", "it", "with", "as", "was", "on", "be"}
+    | {"by", "this", "are", "from", "or", "an", "which", "have", "not", "can"}
+)
+
+
+def in_english(text: str) -> bool:
+    """Whether a note's text is in English rather than Spanish: a 4B model told only in general
+    to copy names as written still translated a whole English section (ADR-042)."""
+    words = fold(text).split()
+    return sum(w in _ENGLISH_WORDS for w in words) > sum(w in _SPANISH_WORDS for w in words)
+
+
 # --- 1. extraction ------------------------------------------------------------------------------
 
 
@@ -68,6 +86,9 @@ class Extraction:
     fragment: int  # Fragment.number
     concepts: tuple[str, ...]  # as written by the model, checked against the fragment
     relations: tuple[tuple[str, str, str], ...]  # (from, to, label), both ends in `concepts`
+    # ADR-042: a note in another language keeps its own names; the model adds a Spanish rendering
+    translations: tuple[tuple[str, str], ...] = ()  # (concept as written, its Spanish name)
+    topic_names: tuple[str, ...] = ()  # how the fragment itself names the topic («burnout»)
 
 
 def _json_object(text: str) -> dict[str, object] | None:
@@ -89,7 +110,11 @@ def parse_extraction(reply: str, fragment: Fragment, max_concepts: int) -> Extra
         return None
     haystack = f" {fold(fragment.text)} "
     kept: dict[str, str] = {}  # folded → as written
-    for raw in raw_concepts:
+    spanish: dict[str, str] = {}  # folded → the model's Spanish name, when it differs (ADR-042)
+    for item in raw_concepts:
+        # {"nombre": as written, "es": in Spanish}, or just the name
+        raw: object = item.get("nombre") if isinstance(item, dict) else item
+        translated: object = item.get("es") if isinstance(item, dict) else None
         if not isinstance(raw, str):
             continue
         name = " ".join(raw.split()).strip(" .,;:«»\"'")
@@ -104,6 +129,10 @@ def parse_extraction(reply: str, fragment: Fragment, max_concepts: int) -> Extra
         ):
             continue
         kept[key] = name
+        if isinstance(translated, str):
+            es = " ".join(translated.split()).strip(" .,;:«»\"'")
+            if fold(es) and fold(es) != key and len(es) <= _MAX_CONCEPT_CHARS:
+                spanish[key] = es
         if len(kept) == max_concepts:
             break
     relations: list[tuple[str, str, str]] = []
@@ -120,7 +149,28 @@ def parse_extraction(reply: str, fragment: Fragment, max_concepts: int) -> Extra
             triple = (kept[ka], kept[kb], label)
             if triple not in relations:
                 relations.append(triple)
-    return Extraction(fragment.number, tuple(kept.values()), tuple(relations))
+    raw_topic = data.get("tema") if data is not None else None
+    named = (
+        [raw_topic]
+        if isinstance(raw_topic, str)
+        else raw_topic
+        if isinstance(raw_topic, list)
+        else []
+    )
+    topic_names = tuple(
+        dict.fromkeys(
+            " ".join(n.split())
+            for n in named
+            if isinstance(n, str) and fold(n) and f" {fold(n)} " in haystack  # written in it
+        )
+    )
+    return Extraction(
+        fragment.number,
+        tuple(kept.values()),
+        tuple(relations),
+        tuple((kept[k], es) for k, es in spanish.items()),
+        topic_names,
+    )
 
 
 def extract(llm: LLMClient, cfg: MapsConfig, topic: str, fragment: Fragment) -> Extraction | None:
@@ -131,6 +181,8 @@ def extract(llm: LLMClient, cfg: MapsConfig, topic: str, fragment: Fragment) -> 
         section=fragment.text[: cfg.max_fragment_chars],
         max_concepts=cfg.concepts_per_fragment,
     )
+    if in_english(fragment.text):
+        user += "\n\n" + load_prompt("maps_english").format()
     messages = (Message("system", system), Message("user", user))
     for _ in range(2):  # one retry, then the fragment is skipped
         reply = "".join(llm.stream(messages, cfg.extract_max_tokens))
@@ -152,6 +204,13 @@ class MapNode:
     sources: tuple[int, ...]  # fragment numbers
     x: int
     y: int
+    # the Spanish name of a concept a note names in another language (ADR-042)
+    translation: str = ""
+
+    @property
+    def shown(self) -> str:
+        """The name with its translation, for exports: «replacement cost (costo de reemplazo)»."""
+        return f"{self.label} ({self.translation})" if self.translation else self.label
 
 
 @dataclass(frozen=True)
@@ -175,11 +234,20 @@ class _Concept:
     labels: Counter[str]
     folds: set[str]
     fragments: set[int]
+    translations: Counter[str] = field(default_factory=Counter)  # Spanish names (ADR-042)
 
     @property
     def label(self) -> str:
         top = max(self.labels.values())
         return min((name for name, n in self.labels.items() if n == top), key=len)
+
+    @property
+    def translation(self) -> str:
+        """The Spanish name most often given, unless the label already is that name."""
+        for name, _ in self.translations.most_common():
+            if fold(name) != fold(self.label):
+                return name
+        return ""
 
 
 def merge_concepts(
@@ -188,16 +256,17 @@ def merge_concepts(
     """Same folded name → one concept; then names whose embeddings are close enough → one."""
     groups: dict[str, _Concept] = {}
     for ex in extractions:
+        spanish = dict(ex.translations)
         for name in ex.concepts:
             key = fold(name)
             group = groups.setdefault(key, _Concept(Counter(), {key}, set()))
             group.labels[name] += 1
             group.fragments.add(ex.fragment)
+            if name in spanish:
+                group.translations[spanish[name]] += 1
     concepts = list(groups.values())
-    if embed is None or len(concepts) < 2:
+    if len(concepts) < 2:
         return concepts
-    vectors = np.asarray(embed([c.label for c in concepts]), dtype=np.float32)
-    vectors /= np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-12
     parent = list(range(len(concepts)))
 
     def root(i: int) -> int:
@@ -206,17 +275,28 @@ def merge_concepts(
             i = parent[i]
         return i
 
-    similar = vectors @ vectors.T
-    for i in range(len(concepts)):
-        for j in range(i + 1, len(concepts)):
-            if similar[i, j] >= threshold:
+    # a note's concept whose Spanish name another note writes is that concept (ADR-042)
+    index = {key: i for i, key in enumerate(groups)}
+    for i, c in enumerate(concepts):
+        for name in c.translations:
+            j = index.get(fold(name))
+            if j is not None and j != i:
                 parent[root(j)] = root(i)
+    if embed is not None:
+        vectors = np.asarray(embed([c.label for c in concepts]), dtype=np.float32)
+        vectors /= np.linalg.norm(vectors, axis=1, keepdims=True) + 1e-12
+        similar = vectors @ vectors.T
+        for i in range(len(concepts)):
+            for j in range(i + 1, len(concepts)):
+                if similar[i, j] >= threshold:
+                    parent[root(j)] = root(i)
     merged: dict[int, _Concept] = {}
     for i, c in enumerate(concepts):
         target = merged.setdefault(root(i), _Concept(Counter(), set(), set()))
         target.labels.update(c.labels)
         target.folds |= c.folds
         target.fragments |= c.fragments
+        target.translations.update(c.translations)
     return list(merged.values())
 
 
@@ -254,11 +334,13 @@ def build_map(
 ) -> ConceptMap:
     concepts = merge_concepts(extractions, embed, cfg.merge_similarity)
     topic_key = fold(topic)
+    # how notes in other languages name the topic: «burnout» for «agotamiento laboral» (ADR-042)
+    aliases = {fold(n) for ex in extractions for n in ex.topic_names} - {""}
     ids: dict[str, str] = {}  # folded name → node id
     root_fragments: set[int] = set()
     others: dict[str, _Concept] = {}
     for i, c in enumerate(concepts):
-        if any(_is_topic(k, topic_key) for k in c.folds):
+        if any(_is_topic(k, topic_key) or k in aliases for k in c.folds):
             root_fragments |= c.fragments
             for k in c.folds:
                 ids[k] = "root"
@@ -323,11 +405,15 @@ def build_map(
     for p in level1:
         x, y = positions[p]
         c = others[p]
-        nodes.append(MapNode(p, c.label, 1, "root", tuple(sorted(c.fragments)), x, y))
+        nodes.append(
+            MapNode(p, c.label, 1, "root", tuple(sorted(c.fragments)), x, y, c.translation)
+        )
         for child in children[p]:
             x, y = positions[child]
             c = others[child]
-            nodes.append(MapNode(child, c.label, 2, p, tuple(sorted(c.fragments)), x, y))
+            nodes.append(
+                MapNode(child, c.label, 2, p, tuple(sorted(c.fragments)), x, y, c.translation)
+            )
 
     def tree_edge(parent: str, child: str) -> MapEdge:
         if (parent, child) in linked:
@@ -393,9 +479,9 @@ def map_outline(cmap: ConceptMap) -> list[str]:
         return f" — _{names[e.source]} {e.label} {names[e.target]}_"
 
     for n1 in by_parent["root"]:
-        lines.append(f"- **{n1.label}** {cites(n1)}{relation('root', n1.id)}")
+        lines.append(f"- **{n1.shown}** {cites(n1)}{relation('root', n1.id)}")
         for n2 in by_parent[n1.id]:
-            lines.append(f"  - {n2.label} {cites(n2)}{relation(n1.id, n2.id)}")
+            lines.append(f"  - {n2.shown} {cites(n2)}{relation(n1.id, n2.id)}")
     return lines
 
 
@@ -423,6 +509,8 @@ class MapProgress:
     processed: int  # fragments read so far
     skipped: int  # fragments whose reply was unusable twice
     map: ConceptMap
+    # the notes name the topic in their own words (an English note's «burnout», ADR-042)
+    topic_named: bool = False
 
 
 def generate_map(
@@ -443,4 +531,7 @@ def generate_map(
             skipped += 1
         else:
             extractions.append(extraction)
-        yield MapProgress(i, skipped, build_map(topic, extractions, embed, cfg))
+        # only English notes count: a Spanish one must write the topic itself (ADR-029, 030)
+        english = {f.number for f in fragments if in_english(f.text)}
+        named = any(ex.topic_names and ex.fragment in english for ex in extractions)
+        yield MapProgress(i, skipped, build_map(topic, extractions, embed, cfg), named)

@@ -491,3 +491,69 @@ def test_cli_candidates_writes_a_review_file(
     assert "## m1 (lookup)" in review
     assert '{"path": "algebra/svd.md", "heading": "Definición"}' in review
     assert questions.read_text(encoding="utf-8").count("alternatives") == 0  # never edited
+
+
+# --- tables of contents and the heading weight (ADR-044) ----------------------------------------
+
+
+def _nav_hit(rank: int, *heading: str) -> Hit:
+    return Hit(rank, "g.md", ("Guía", *heading), "texto", 1, 2, rank, 1.0 / rank, "fake")
+
+
+class _NavListed:
+    name = "fake"
+
+    def __init__(self, hits: list[Hit]) -> None:
+        self.hits = hits
+        self.asked: list[int] = []
+
+    def search(self, query: str, k: int) -> list[Hit]:
+        self.asked.append(k)
+        return self.hits[:k]
+
+    def close(self) -> None:
+        pass
+
+
+def test_tables_of_contents_are_not_results() -> None:
+    from biblio.retrieve.navigation import SkipNavigation, is_navigation
+
+    assert is_navigation(("Guía", "0. Tabla de Contenidos"))
+    assert is_navigation(("Guide", "Table of contents"))
+    assert is_navigation(("Guía", "Índice"))
+    assert not is_navigation(("Índice",))  # a note titled so is content, not its own index
+    assert not is_navigation(("Guía", "Índice de masa corporal"))
+    base = _NavListed(
+        [
+            _nav_hit(1, "Índice"),
+            _nav_hit(2, "Sección A"),
+            _nav_hit(3, "Sección B"),
+            _nav_hit(4, "C"),
+        ]
+    )
+    hits = SkipNavigation(base, margin=2).search("q", 2)
+    assert [h.heading_path[-1] for h in hits] == ["Sección A", "Sección B"]
+    assert [h.rank for h in hits] == [1, 2] and base.asked == [4]  # k + margin asked for
+
+
+def test_the_heading_weight_is_used_and_validated(indexed: Config) -> None:
+    from biblio.config import ConfigError, _validate
+
+    conn = open_index(indexed)
+    for weight in (0.5, 1.0, 2.0):
+        hits = BM25Retriever(conn, heading_weight=weight).search("regresion", 5)
+        assert hits[0].doc_path == "estadistica/regresion.md"
+    with pytest.raises(ConfigError):
+        _validate(replace(indexed, retrieval=replace(indexed.retrieval, bm25_heading_weight=0)))
+
+
+def test_hits_are_grouped_by_note_in_rank_order() -> None:
+    from biblio.retrieve.grouping import group_by_note
+
+    def hit(rank: int, path: str) -> Hit:
+        return Hit(rank, path, ("G", f"s{rank}"), "t", 1, 2, rank, 1.0 / rank, "x")
+
+    hits = [hit(1, "a.md"), hit(2, "b.md"), hit(3, "a.md"), hit(4, "c.md"), hit(5, "b.md")]
+    groups = group_by_note(hits, 2)
+    assert [[h.rank for h in g] for g in groups] == [[1, 3], [2, 5]]  # c.md: over the 2 notes
+    assert group_by_note([], 3) == []

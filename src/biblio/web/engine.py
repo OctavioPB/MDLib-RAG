@@ -49,6 +49,7 @@ from biblio.index.embedder import (
 from biblio.index.indexer import IndexLockedError, IndexMismatchError, IndexStats, index_library
 from biblio.index.watch import choose_device
 from biblio.ingest.tokens import TokenCounter, load_llm_token_counter, load_token_counter
+from biblio.launcher import LLMSwitch
 from biblio.library import (
     INVALID,
     RELOCATE,
@@ -111,6 +112,7 @@ from biblio.reset import MemoryItem, ResetResult, memory_items, reset_memory
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
+from biblio.retrieve.navigation import SkipNavigation
 from biblio.retrieve.rerank import (
     Reranker,
     RerankingRetriever,
@@ -232,6 +234,7 @@ class Engine:
         self._reranker_factory = reranker_factory
         self._plan_resolver = plan_resolver
         self._llm_factory = llm_factory
+        self.llm_switch: LLMSwitch | None = None  # set by `biblio start`/`serve` (ADR-043)
         self._counter_factory = counter_factory
         self._index_embedder_factory = index_embedder_factory
         self._index_counter_factory = index_counter_factory
@@ -250,14 +253,19 @@ class Engine:
 
     def _base(self, scope: str | None = None) -> Retriever:
         """The configured first stage, optionally limited to one folder (ADR-019)."""
+        r = self.config.retrieval
         dense = DenseRetriever(self._conn, self._embedder, scope)
-        bm25 = BM25Retriever(self._conn, scope)
-        base_mode = self.config.retrieval.default_mode.partition("-")[0]
-        if base_mode == "dense":
-            return dense
-        if base_mode == "bm25":
-            return bm25
-        return HybridRetriever(dense, bm25, self.config.retrieval)
+        bm25 = BM25Retriever(self._conn, scope, r.bm25_heading_weight)
+        base_mode = r.default_mode.partition("-")[0]
+        base: Retriever = (
+            dense
+            if base_mode == "dense"
+            else bm25
+            if base_mode == "bm25"
+            else HybridRetriever(dense, bm25, r)
+        )
+        # tables of contents are never results, nor reranker candidates (ADR-044)
+        return SkipNavigation(base, r.navigation_margin) if r.skip_navigation else base
 
     def _release_reranker(self) -> None:
         if self._reranker is not None:
@@ -288,6 +296,12 @@ class Engine:
             t0 = time.perf_counter()
             hits = retriever.search(query, k)
             return SearchResult(retriever.name, (time.perf_counter() - t0) * 1000, tuple(hits))
+
+    def is_note(self, path: str) -> bool:
+        """Whether `path` is an indexed note (a search inside it, ADR-045)."""
+        with self.lock:
+            row = self._conn.execute("SELECT 1 FROM documents WHERE path = ?", (path,)).fetchone()
+        return row is not None
 
     def folders(self) -> list[tuple[str, int]]:
         with self.lock:
@@ -1299,7 +1313,10 @@ class Engine:
             done = {"map_id": map_id, "skipped": progress.skipped, "omitted": progress.map.omitted}
             yield "done", done
             concepts = len(progress.map.nodes) - 1  # the topic is a node too
-            absent = not any(topic_in_text(topic, f.text) for f in fragments)
+            # absent: no fragment writes the topic, nor names it in its own language (ADR-042)
+            absent = not progress.topic_named and not any(
+                topic_in_text(topic, f.text) for f in fragments
+            )
             if absent or concepts < self.config.gaps.map_min_concepts:  # thin (ADR-029, 030)
                 detail = (
                     "el tema no aparece en tus notas"
@@ -1634,7 +1651,14 @@ class Engine:
         if stored is None:
             return None
         entries = [
-            Entry(e["kind"], e["term"], e["text"], e["detail"], tuple(e["sources"]))
+            Entry(
+                e["kind"],
+                e["term"],
+                e["text"],
+                e["detail"],
+                tuple(e["sources"]),
+                e.get("translation", ""),
+            )
             for e in stored["entries"]
         ]
         fragments = [_fragment_from_record(r) for r in stored["fragments"]]
@@ -1780,7 +1804,42 @@ class Engine:
             "llm_running": llm,
             "llm_model": self.config.llm.model,
             "final_k": self.config.retrieval.final_k,
+            "llm_control": self.llm_control(llm),
         }
+
+    # --- switching the LLM off and on (ADR-043) ---------------------------------------------------
+
+    def llm_control(self, running: bool | None = None) -> dict[str, bool]:
+        """What «Ajustes» can do with the LLM: stop it (or unload its model), or start it."""
+        switch = self.llm_switch
+        return {
+            "available": switch is not None,
+            "owned": switch is not None and switch.owned,
+            "can_start": switch is not None and switch.can_start(),
+            "running": self.llm_running() if running is None else running,
+        }
+
+    def stop_llm(self) -> str:
+        """ "stopped" or "unloaded" (an Ollama opened outside the app keeps running without the
+        model in memory). Refused while something is being generated."""
+        if self.llm_switch is None:
+            raise ValueError("Esta sesión no controla el modelo de lenguaje.")
+        self._claim_generation()
+        try:
+            return self.llm_switch.stop()
+        finally:
+            self._generating.release()
+
+    def start_llm(self) -> None:
+        if self.llm_switch is None:
+            raise ValueError("Esta sesión no controla el modelo de lenguaje.")
+        if self.llm_running():
+            return
+        self._claim_generation()
+        try:
+            self.llm_switch.start()
+        finally:
+            self._generating.release()
 
     def _close_stores(self) -> None:
         if self._practice is not None:
@@ -1907,6 +1966,7 @@ def map_json(cmap: ConceptMap, kind: str = "concepts") -> dict[str, Any]:
                 "sources": list(n.sources),
                 "x": n.x,
                 "y": n.y,
+                "translation": n.translation,
             }
             for n in cmap.nodes
         ],
@@ -1965,4 +2025,5 @@ def _entry_json(e: Entry) -> dict[str, Any]:
         "text": e.text,
         "detail": e.detail,
         "sources": list(e.sources),
+        "translation": e.translation,
     }

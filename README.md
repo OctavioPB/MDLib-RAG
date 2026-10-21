@@ -180,6 +180,14 @@ shows its level, and reopening a conversation restores the level of its last mes
 use the same notes, citations and «No encuentro esto en tu biblioteca» rule; formulas in answers
 are drawn with KaTeX. `uv run biblio ask "…" --level advanced` does the same in the terminal.
 
+Tables of contents («Índice», «Tabla de contenidos») never appear as results: they list every heading
+of their note and used to compete with the sections they point to (ADR-044).
+
+«Solo ubicar» shows one line per note (ADR-045): its best section, the next two beneath it, and the
+rest folded under «N secciones más en esta nota», so a big note never fills the list. In the reader,
+**Buscar en esta nota** ranks the sections of the open note and jumps to the one you pick; the search
+bar stays at the top while you read.
+
 **Ajustes** holds the advanced settings: precision (reranker on or off), number of results, the folder
 to search in, and the answer strategy ("Por guía" is the experimental map-reduce). The same can be
 typed at the start of a message:
@@ -349,6 +357,10 @@ and a strip with your progress (**Ver todo** for the details).
   selected entry shows on the right. **Repasar como fichas** shows each card (the ones you missed
   first), you turn it over and say whether you knew it, which counts for your reviews and marks the
   term in the index; **Exportar** downloads Markdown or Anki (in Anki: File › Import).
+- **Notes in English** (ADR-042): maps and dictionaries keep each concept or term as the note
+  writes it, with its Spanish name beneath in italics («replacement cost» / *costo de reemplazo*);
+  quotes stay in English. A Spanish topic finds them, and «burnout» in an English note is taken as
+  the centre of a map of «agotamiento laboral». Diagrams and «Explícamelo tú» already worked.
 - **Tu progreso** shows your score per guide and the sections you missed; **Repasar mis fallos**
   makes a quiz from those. Sections you missed are asked first, then new ones.
 - **Explícamelo tú** (ADR-027, experimental): write a concept and explain it in your own words, as
@@ -366,8 +378,15 @@ index never deletes it. The answer to a question is never sent to the page befor
 
 **Ajustes** (the gear at the top right, on every page) holds everything that is not studying:
 **Apariencia** (Claro, Sistema, Oscuro), **Biblioteca** (its location, with **Cambiar**, and
-**Actualizar ahora**), **Dispositivos** (LAN mode) and **Memoria de la app** (**Reset**). Location,
-devices and reset appear on the PC only. The top bar keeps just the pages, the status and the gear.
+**Actualizar ahora**), **Dispositivos** (LAN mode), **Modelo de lenguaje** and **Memoria de la app**
+(**Reset**). Location, devices, the model and reset appear on the PC only. The top bar keeps just the
+pages, the status and the gear.
+
+**Modelo de lenguaje** (ADR-043) turns the LLM off and on. **Apagar el modelo** frees the GPU for
+search's reranker and for indexing; without the model you can search but not converse, make maps or
+practise. If the app started Ollama it closes it; if Ollama was opened outside the app (the tray
+app), it only takes the model out of memory and Ollama stays open. **Encender el modelo** starts it
+again with the settings of `scripts/serve-llm.ps1` (a few seconds).
 
 **Actualizar ahora** (in Ajustes) **updates the library**: an incremental reindex,
 like `biblio index`, with its progress in the status at the top; only new, changed or deleted notes are

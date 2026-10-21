@@ -66,6 +66,10 @@ class RetrievalConfig:
     rerank_candidates: int
     final_k: int
     latency_p95_target_ms: int
+    skip_navigation: bool  # tables of contents are not results (ADR-044)
+    navigation_margin: int  # extra hits asked for, to make up for the ones dropped
+    bm25_heading_weight: float  # BM25 weight of the heading path against the text (1 = equal)
+    group_depth: int  # grouped search asks for this many hits per note shown (ADR-045)
 
 
 @dataclass(frozen=True)
@@ -453,6 +457,10 @@ def _validate(config: Config) -> None:
     r = config.retrieval
     if r.final_k <= 0 or r.rerank_candidates < r.final_k:
         raise ConfigError("retrieval: expected 0 < final_k <= rerank_candidates")
+    if r.group_depth < 1:
+        raise ConfigError("retrieval.group_depth must be at least 1")
+    if r.navigation_margin < 0 or r.bm25_heading_weight <= 0:
+        raise ConfigError("retrieval: expected navigation_margin >= 0 and bm25_heading_weight > 0")
     if config.embedding.index_dtype not in ("float32", "float16"):
         raise ConfigError("embedding.index_dtype must be 'float32' or 'float16'")
     if config.llm.map_reduce not in ("auto", "on", "off"):

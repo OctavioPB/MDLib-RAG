@@ -30,6 +30,7 @@ from biblio.maps.diagrams import DIAGRAM_KINDS, GROUPINGS
 from biblio.maps.diagrams import KINDS as MAP_KINDS
 from biblio.practice.quiz import SCOPE_KINDS
 from biblio.practice.store import KINDS, RESULTS
+from biblio.retrieve.grouping import group_by_note
 from biblio.retrieve.types import Hit
 from biblio.study.gaps import STATUSES as GAP_STATUSES
 from biblio.web.drafts import list_drafts, read_draft
@@ -322,6 +323,26 @@ def make_handler(
                 return
             self._send_json({"backup": str(result.backup), "moved": list(result.moved)})
 
+        # --- switching the LLM off and on (ADR-043): this PC only -----------------------------
+
+        def _llm_switch(self, payload: dict[str, Any], on: bool) -> None:
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return
+            try:
+                if on:
+                    engine.start_llm()
+                    result = "started"
+                else:
+                    result = engine.stop_llm()
+            except BusyError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            except (ValueError, RuntimeError) as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            self._send_json({"result": result, "control": engine.llm_control()})
+
         def _lan_pair(self, payload: dict[str, Any]) -> None:
             if lan is None or not lan_ip:
                 self._send_json(
@@ -476,6 +497,7 @@ def make_handler(
                 return
             routes = {
                 "/api/search": self._search,
+                "/api/notes/search": self._note_search,
                 "/api/ask": self._ask,
                 "/api/drafts/outline": self._draft_outline,
                 "/api/drafts/write": self._draft_write,
@@ -495,6 +517,8 @@ def make_handler(
                 "/api/plans/read": self._plan_read,
                 "/api/plans/delete": self._plan_delete,
                 "/api/gaps/undo": self._gap_undo,
+                "/api/llm/stop": lambda payload: self._llm_switch(payload, False),
+                "/api/llm/start": lambda payload: self._llm_switch(payload, True),
                 "/api/gaps/status": self._gap_status,
                 "/api/notes/explain": self._note_explain,
                 "/api/notes/quiz": self._note_quiz,
@@ -542,15 +566,43 @@ def make_handler(
             conversation = self._conversation_field(payload)
             if conversation is False:
                 return
-            result = engine.search(query, k, precise=precision == "precise", scope=scope)
+            grouped = payload.get("group") is True  # one line per note, k notes (ADR-045)
+            depth = engine.config.retrieval.group_depth if grouped else 1
+            result = engine.search(
+                query, min(50, k * depth), precise=precision == "precise", scope=scope
+            )
+            hits: list[dict[str, Any]] = []
+            if grouped:
+                for number, group in enumerate(group_by_note(result.hits, k)):
+                    hits += [{**hit_json(h, engine), "group": number} for h in group]
+            else:
+                hits = [hit_json(h, engine) for h in result.hits]
             data: dict[str, Any] = {
                 "retriever": result.retriever,
                 "milliseconds": round(result.milliseconds),
-                "hits": [hit_json(h, engine) for h in result.hits],
+                "hits": hits,
             }
             turn = NewTurn(query, "find", scope, "direct", "done", payload=data)  # ADR-023
             data["conversation_id"], _ = engine.conversations.add_turn(conversation, turn)
             self._send_json(data)
+
+        def _note_search(self, payload: dict[str, Any]) -> None:
+            """Search inside one note, from the reader (ADR-045); not kept in the history."""
+            query = self._text_field(payload, "query")
+            path = payload.get("path")
+            if query is None:
+                return
+            if not isinstance(path, str) or not engine.is_note(path):
+                self._send_json({"error": "unknown note in 'path'"}, HTTPStatus.BAD_REQUEST)
+                return
+            result = engine.search(query, engine.config.retrieval.final_k, scope=path)
+            self._send_json(
+                {
+                    "retriever": result.retriever,
+                    "milliseconds": round(result.milliseconds),
+                    "hits": [hit_json(h, engine) for h in result.hits],
+                }
+            )
 
         def _ask(self, payload: dict[str, Any]) -> None:
             question = self._text_field(payload, "question")

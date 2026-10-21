@@ -8,4 +8,4 @@ Fragmento de «{citation}»:
 Extrae hasta {max_concepts} conceptos de este fragmento que tengan que ver con el tema, y las relaciones entre ellos que el fragmento afirma.
 
 Formato:
-{{"conceptos": ["...", "..."], "relaciones": [{{"de": "...", "a": "...", "tipo": "..."}}]}}
+{{"tema": "...", "conceptos": [{{"nombre": "...", "es": ""}}], "relaciones": [{{"de": "...", "a": "...", "tipo": "..."}}]}}

@@ -1066,3 +1066,40 @@ body::before { display: none; }
   .map-legend { bottom: 72px; left: 8px; }
   .map-canvas .map-panel { top: auto; bottom: 8px; left: 8px; right: 8px; width: auto; max-width: none; max-height: 60%; }
 }
+
+/* a concept or term from a note in another language: its Spanish name beneath it (ADR-042) */
+.map-node text.map-node-tr { fill: var(--muted); font-style: italic; font-weight: 400; }
+.map-node.level-0 text.map-node-tr { fill: var(--accent-fg); opacity: .8; }
+.map-translation, .dict-translation { margin: 0; color: var(--muted); font-style: italic; }
+.dict-term-tr { display: block; font-size: 12px; color: var(--muted); font-style: italic; }
+
+/* Ajustes › Modelo de lenguaje (ADR-043) */
+.llm-state { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--fg); }
+.llm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+#settings-llm.is-on .llm-dot { background: #27B97C; }
+
+/* «Solo ubicar» grouped by note (ADR-045): the best section, the next two beneath, the rest folded */
+.result-group { padding: 2px 0; }
+.result-subs { list-style: none; margin: 0; padding: 0; }
+.result-sub { padding-top: 0; padding-bottom: 0; }
+.result-sub .result-main { padding: 4px 14px 4px 34px; flex-direction: row; align-items: baseline; gap: 10px; }
+.result-sub .result-main strong { font-weight: 500; font-size: 14px; color: var(--fg-2); }
+.result-sub .result-main span { font-size: 12px; }
+.result-sub a { min-height: 32px; font-size: 13px; }
+.result-more { padding: 0 0 6px 34px; }
+.result-more > summary { cursor: pointer; padding: 4px 14px; font-size: 13px; color: var(--link); }
+
+.results .result-subs li + li { border-top: 0; }
+
+/* the reader's «Buscar en esta nota» (ADR-045): stays below the top bar while the note scrolls */
+.reader-find-wrap { position: sticky; top: var(--topbar-h); z-index: 6; max-width: 780px; margin: 0 auto 16px; padding: 10px 0; background: var(--bg); }
+.reader-find { display: flex; gap: 8px; }
+.reader-find input { flex: 1 1 auto; min-width: 0; min-height: 42px; padding: 0 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); font: inherit; font-size: 15px; }
+.reader-find-results { margin-top: 8px; max-height: 42vh; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 8px 24px rgba(0, 20, 50, .10); }
+.reader-find-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.reader-find-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.reader-find-item { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.reader-find-item:hover, .reader-find-item.active { background: var(--accent-soft); }
+.reader-find-item strong { font-weight: 600; font-size: 14px; color: var(--heading); }
+.reader-find-item span { font-size: 13px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+

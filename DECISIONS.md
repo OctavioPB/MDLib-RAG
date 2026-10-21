@@ -46,6 +46,10 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 039 | Changing the library's location from the app or the terminal, reusing the index when it is the same library | Accepted · Supersedes part of ADR-021 |
 | 040 | «Reset»: start the app over without its memory, never touching the library | Accepted |
 | 041 | OPB visual style with vendored fonts (Fraunces, Plus Jakarta Sans) | Accepted |
+| 042 | Notes in English: names and quotes copied as written, a Spanish name beside them | Accepted |
+| 043 | The LLM is switched off and on from Ajustes; the app stops only an Ollama it started | Accepted |
+| 044 | Tables of contents are not results; BM25 weighs the heading path at 0.5 | Accepted |
+| 045 | «Solo ubicar» grouped by note; a search inside a note in the reader | Accepted |
 
 ---
 
@@ -729,4 +733,78 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 - Practicar and Guías keep a small hero band (one line of title, one of text, one button).
 
 **Consequences.** (+) The app looks like the rest of the user's work, with no network at runtime. (+) A different style later means swapping tokens and the brand layer. (−) ~160 KB of fonts in the repo, to be updated by hand like KaTeX.
+
+## ADR-042 — Notes in English: names and quotes copied as written, a Spanish name beside them
+
+**Date:** 2026-10-20 · **State:** Accepted
+
+**Context.** 88 of the 2,720 notes are in English (Business Agents, Proyectos OPB). Search finds them from Spanish questions (bge-m3 and the reranker are multilingual; BM25 is not, so plain hybrid ranks them lower). But Mapas, the Diccionario, the diagrams and «Explícamelo tú» keep a piece only if its name or quote is written in the note (ADR-022, 027, 034, 036), and the 4B model, prompted in Spanish, translated names: «replacement cost» became «costo de reemplazo», which the note does not write, so it was dropped. Measured on 9 English sections (topics asked in Spanish) and 6 Spanish ones with the real model (`eval/results/english_notes.jsonl`, tag `before-english`): concepts kept by Mapas 56 % in English vs 74 % in Spanish (17 of the 28 dropped were translations; three sections kept none); Diccionario 73 % vs 86 % (5 translated). Diagrams (only the quote is checked: causes 100 %, flow 85 %) and «Explícamelo tú» (key ideas 93 % vs 92 %, claims 85 %, `before-english-claims`) lost nothing to translation: the model copies quotes as written. The gap detector also called a topic absent when the English notes name it in English (ADR-030 checks the topic's words in the text).
+
+**Options.**
+1. Keep the English name only (like «Laplace smoothing» today). Simplest; the map mixes languages.
+2. Show the Spanish name only, the original in the panel. Uniform maps, but the visible name is not in the note.
+3. Original plus its Spanish name beneath (chosen by the user). The check stays on the original.
+4. Relax the check to accept translations. Rejected: the check is what keeps invented concepts out (rule 2).
+
+**Decision.** Option 3.
+- Maps ask for `{"nombre": as written, "es": Spanish}` per concept and a `"tema"`: how the fragment itself names the topic. The check runs on `nombre`; `es` is kept as the node's `translation`; a `tema` written in the fragment makes that concept the centre. A concept another note writes in Spanish merges with the English one whose `es` it is.
+- The Diccionario asks for `traduccion` beside `termino`; term and quote are checked as before.
+- A general rule («copy names in the fragment's language») was not enough: one English section was still fully translated. When the fragment's common words are English (`maps.build.in_english`), the user message gets a direct note with an example (`maps_english.txt`, `dictionary_english.txt`), which also says not to translate proper names, products or terms used as-is in Spanish.
+- The page shows the Spanish name in italics under the node or term (panel: «En español: …»); exports write «name (translation)»; the map history searches translations too.
+- A map is not «absent» (ADR-030) when an English fragment names the topic in its `tema`; Spanish fragments still have to write the topic.
+
+**Evidence.** After the change (`after-adr042-v3`): Mapas in English 86 % (56 % before), 0 dropped as translations; Diccionario in English 91 % (73 %), 0 translated. Spanish maps on 16 sections, old prompt vs new (`es-maps-old-prompt`, `es-maps-new-prompt`): 109 of 143 kept with both (76 %). Spanish Diccionario 90–93 % (86 % before). Translations are good for common terms; odd ones remain («acción siguiente mejor» for «next best action»), shown as a reading aid only.
+
+**Consequences.** (+) English notes give maps and dictionaries as full as Spanish ones, each name still written in the note. (+) A Spanish question finds and merges the English concepts. (−) The Spanish name is the model's, not checked against anything; it is shown smaller and in italics. (−) Other languages get only the general rule (no direct note); measure before relying on them. Revisit if the English share of the library grows enough to make plain-hybrid ranking matter (ADR-006, ADR-014).
+
+## ADR-043 — The LLM is switched off and on from Ajustes; the app stops only an Ollama it started
+
+**Date:** 2026-10-20 · **State:** Accepted
+
+**Context.** The user asked to close the Ollama session from the page. The LLM holds most of the GPU (ADR-013/014); while it runs, indexing falls back to CPU and search skips the reranker. Until now it was started by `biblio start` (ADR-021) and stopped only when `start` exited, or by hand. Ollama may also be running on its own (the Windows tray app, `scripts/serve-llm.ps1`), and Ollama has no shutdown API.
+
+**Options.**
+1. Kill every `ollama` process. Frees everything, but closes a program the app did not open (the tray app, another tool's server).
+2. Only unload the model (`POST /api/generate` with `keep_alive: 0`). Frees the GPU in every case, but leaves the app's own server running, and the next question loads the model again.
+3. Stop the process when the app started it, unload the model otherwise (chosen).
+
+**Decision.** `launcher.LLMSwitch` keeps the `LLMServer` that `biblio start` (or the page) started. «Apagar el modelo» stops that process; with an Ollama opened outside the app it unloads the model and says Ollama stays open. «Encender el modelo» starts `ollama serve` with the settings of `scripts/serve-llm.ps1` (ADR-015) and waits until its API answers; the app then owns it and stops it on exit, as before. `biblio serve` gets a switch too (it can start one; it stops only what it started). Routes `/api/llm/stop` and `/api/llm/start` answer this PC only (like Reset, ADR-040) and are refused while something is being generated; `/api/status` tells the page what it can do (`llm_control`). The request stays on loopback (rule 1).
+
+**Consequences.** (+) The GPU can be given back to indexing and the reranker without a terminal. (+) No program the app did not open is ever closed. (−) With an outside Ollama, «Apagar» only empties memory: the server keeps answering, so the status still says the model is on and the next question reloads it (the page says so).
+
+## ADR-044 — Tables of contents are not results; BM25 weighs the heading path at 0.5
+
+**Date:** 2026-10-20 · **State:** Accepted
+
+**Context.** The user asked for heuristics to search big notes better. Analysis of the 21 questions plain hybrid misses (`eval/questions.jsonl`, 64 questions): what ranks above the right section is almost always another note covering the same subject (137 hits), rarely another section of the same note (5) or a table of contents (3); in 30 of 64 questions one note fills 3+ of the top 8; oversized chunks barely appear (3 of 512 top-8 hits). Two mechanisms favour big notes: (1) 2,172 sections are tables of contents («Índice», «Tabla de contenidos»), each listing every heading of its note, so they match the terms those headings use; (2) the FTS5 `breadcrumb` column holds the note's title in every chunk, so a query word in a big note's title raises all its sections equally. The evaluation set has no question on a note over 60 fragments (125 such notes): the user is writing some (`eval/review/big-notes-candidates.md`, gitignored).
+
+**Options.**
+1. Drop tables of contents from results by their heading only (chosen). A rule on the text (mostly anchor links) also caught introductions merged with their index by the chunker, which hold real content: rejected.
+2. Weigh the heading path in BM25 (`bm25(chunks_fts, w, 1.0)`). Measured at w = 0.1, 0.25, 0.5 (chosen), 1 (before), 2, 4.
+3. Split the title from the section headings into their own FTS columns. Needs a schema change and an FTS rebuild; deferred until the big-note questions exist, since option 2 already captures most of the effect.
+4. Cap hits per note in the search results. Rejected for the tutor by ADR-038's evidence; grouping by note in the search page stays a separate UI proposal.
+
+**Decision.** `retrieve.navigation.SkipNavigation` wraps the first stage (engine and `biblio eval`), asks for `navigation_margin` more hits and drops sections whose own heading names a table of contents; so tables of contents are neither results nor reranker candidates. `BM25Retriever` ranks with `bm25(chunks_fts, bm25_heading_weight, 1.0)`, set to 0.5. Both live in `[retrieval]` (`skip_navigation`, `navigation_margin`, `bm25_heading_weight`).
+
+**Evidence** (`eval/results/runs.jsonl`). Skipping tables of contents alone (`before-h12-*` → `h2-skipnav-*`): BM25 8 questions better, hybrid 2, rerank 0, none worse. Heading weight on top (`h1-w*-*`): raising it lowered hybrid R@8 (2.0: 0.635, 4.0: 0.643 vs 0.647); lowering it raised it (0.5: 0.663, 0.25: 0.663, 0.1: 0.674 but synthesis R@8 0.542 → 0.517); 0.5 is the value that improves without lowering any type. Final (`after-adr044-*`): hybrid R@1 0.255 → 0.286, R@8 0.647 → 0.663, MRR 0.458 → 0.481, exact-term R@1 0.048 → 0.095, lookup R@8 0.788 → 0.818; 12 questions better, none worse (q017 from 16th to 6th). Hybrid-rerank unchanged (R@8 0.769; one question 9th → 10th). The conversation planner's mode (`--plan`, ADR-038) was not re-run (the LLM was off); its question head is plain hybrid, which improved.
+
+**Consequences.** (+) Better first places when the LLM holds the GPU and search runs without the reranker. (+) No reindex: both act at query time. (−) A question about a note's index itself («¿qué secciones tiene la guía X?») no longer finds it; the reader shows the outline. (−) The gains are a few questions on a 64-question set; revisit with the big-note questions, and consider option 3 then.
+
+## ADR-045 — «Solo ubicar» grouped by note; a search inside a note in the reader
+
+**Date:** 2026-10-20 · **State:** Accepted
+
+**Context.** Steps H3 and H4 of the plan for big notes (ADR-044). In 30 of the 64 evaluation questions one note fills three or more of the top 8; a live query («frames y slots…») had one 143-fragment note in 14 of 24 hits. Once a big note is open, finding the right one of its 100+ sections is left to scrolling.
+
+**Options.**
+1. Group by note on the page from the same top 8. Shows fewer notes (about 6), not more.
+2. Group by note on the server from `k × group_depth` hits and show `k` notes (chosen). The ranking itself does not change; the page shows deeper hits for notes it would have hidden.
+3. Show only each note's best section, the rest folded. Measured: the right section, when it is a note's second or third, gets hidden.
+4. Cap hits per note for the tutor too. Rejected by ADR-038's evidence (synthesis recall fell).
+
+**Decision.** `/api/search` with `group: true` asks for `k × group_depth` hits (3; capped at 50), groups them by note in the order of each note's best hit (`retrieve.grouping.group_by_note`) and returns at most `k` notes, each hit tagged with its group. «Solo ubicar» shows one line per note, its next two sections beneath it in a compact form, and the rest folded («N secciones más en esta nota»); results stored before keep their flat view. The tutor and the other features are untouched. In the reader, «Buscar en esta nota» (`/api/notes/search`) runs the same search limited to that note (`scope` accepts a `.md` path; reranker and the table-of-contents filter apply), is not kept in the history, stays below the top bar while the note scrolls, and a click jumps to the section below the results.
+
+**Evidence** (`eval/results/grouping.jsonl`, `eval/questions.jsonl`, k = 8, depth 3). Plain hybrid: distinct notes on screen 5.9 → 8.0; right note shown 0.734 → 0.766; right section in view 0.688 → 0.719 (best section only: 0.672, which is why two more are in view). Hybrid-rerank: 6.0 → 7.9 notes; right note 0.812 = 0.812; right section 0.781 = 0.781 (best only: 0.703). About 12 lines on screen instead of 8.
+
+**Consequences.** (+) More notes per search with no loss of the right section; a big note no longer crowds the others out. (+) A big note can be searched from inside. (−) Each «Solo ubicar» reads three times the hits (a few ms; the reranker reads the same candidates). (−) The search inside a note is not measured by the evaluation set; the big-note questions (ADR-044, step 0) can be run with that note as the scope.
 

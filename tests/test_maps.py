@@ -454,3 +454,66 @@ def test_mastery_follows_the_practice_of_each_concepts_sections(
     assert mastery["nodes"][node["id"]]["state"] in ("partial", "weak")
     assert _get(server, "/api/maps/history/999/mastery")[0] == 404
     store.close()
+
+
+# --- notes in English (ADR-042) -----------------------------------------------------------------
+
+BURNOUT = (
+    "The 2024 Gallup report estimates that employee burnout costs the global economy USD 8.8 "
+    "trillion. Direct replacement cost is between 50% and 200% of the salary. Team disruption "
+    "follows when a high-performer leaves."
+)
+
+
+def test_english_notes_keep_their_names_with_a_spanish_one_beside_them() -> None:
+    """Regression: told to write names «as in the text», the 4B model translated a whole English
+    section («costo de reemplazo»), every name failed the check and the map came out empty."""
+    reply = json.dumps(
+        {
+            "tema": "burnout",
+            "conceptos": [
+                {"nombre": "replacement cost", "es": "costo de reemplazo"},
+                {"nombre": "team disruption", "es": "Team disruption"},  # no translation: none
+                {"nombre": "costo de reemplazo", "es": ""},  # translated: not in the text
+                "burnout",  # a plain name is still read
+            ],
+            "relaciones": [{"de": "burnout", "a": "replacement cost", "tipo": "causa"}],
+        }
+    )
+    ex = parse_extraction(reply, fragment(text=BURNOUT), 8)
+    assert ex is not None
+    assert ex.concepts == ("replacement cost", "team disruption", "burnout")
+    assert ex.translations == (("replacement cost", "costo de reemplazo"),)
+    assert ex.topic_names == ("burnout",)
+    # a topic name the fragment does not write is ignored
+    other = parse_extraction(json.dumps({"tema": "agotamiento", "conceptos": []}), fragment(), 8)
+    assert other is not None and other.topic_names == ()
+
+
+def test_the_topic_as_an_english_note_names_it_is_the_centre(config: Config) -> None:
+    extractions = [
+        Extraction(
+            1,
+            ("burnout", "replacement cost", "team disruption"),
+            (("burnout", "replacement cost", "causa"), ("burnout", "team disruption", "causa")),
+            (("replacement cost", "costo de reemplazo"),),
+            ("burnout",),
+        ),
+        # a Spanish note writing the Spanish name is the same concept
+        Extraction(2, ("costo de reemplazo", "rotación"), (), (), ()),
+    ]
+    cmap = build_map("agotamiento laboral", extractions, None, _cfg(config))
+    root = cmap.nodes[0]
+    assert root.label == "agotamiento laboral" and root.sources == (1,)  # «burnout» is the centre
+    nodes = {n.label: n for n in cmap.nodes}
+    assert "burnout" not in nodes
+    cost = nodes["replacement cost"]
+    assert (cost.translation, cost.sources, cost.parent) == ("costo de reemplazo", (1, 2), "root")
+    assert any("replacement cost (costo de reemplazo)" in line for line in map_outline(cmap))
+
+
+def test_english_text_is_told_apart_from_spanish() -> None:
+    from biblio.maps.build import in_english
+
+    assert in_english(BURNOUT)
+    assert not in_english(TEXT)

@@ -213,3 +213,36 @@ def test_build_keep_review_and_export(server: tuple[str, int, Engine]) -> None:
 
     assert _call(server, "POST", "/api/dictionary/delete", {"id": did})[0] == 200
     assert _call(server, "GET", f"/api/dictionary/{did}")[0] == 404
+
+
+def test_an_english_note_keeps_its_term_with_the_spanish_one() -> None:
+    """ADR-042: the term and the quote as the note writes them, the Spanish term beside them."""
+    text = "Direct replacement cost is between 50% and 200% of the departed employee's salary."
+    frag = Fragment(1, "hr/burnout.md", ("Burnout", "Costs"), text, 1, 3)
+    reply = json.dumps(
+        {
+            "conceptos": [
+                {
+                    "termino": "direct replacement cost",
+                    "traduccion": "costo de reemplazo directo",
+                    "definicion": "Lo que cuesta sustituir a quien se va.",
+                    "cita": "is between 50% and 200% of the departed employee's salary",
+                },
+                {
+                    "termino": "costo de reemplazo",  # translated: not in the note
+                    "traduccion": "",
+                    "definicion": "x",
+                    "cita": "entre el 50% y el 200% del salario",
+                },
+            ]
+        }
+    )
+    entries = parse_entries(reply, frag, 6, 300)
+    assert entries is not None and len(entries) == 1
+    assert (entries[0].term, entries[0].translation) == (
+        "direct replacement cost",
+        "costo de reemplazo directo",
+    )
+    md = to_markdown("Burnout", entries, [frag], "2026-10-20")
+    assert "**direct replacement cost** (costo de reemplazo directo):" in md
+    assert "costo de reemplazo directo" in to_anki("Burnout", entries, [frag])

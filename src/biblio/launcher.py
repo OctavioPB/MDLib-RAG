@@ -14,8 +14,12 @@ import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from biblio.offline import loopback_port_open, require_loopback
+
+if TYPE_CHECKING:
+    from biblio.config import Config
 
 SERVE_LLM_SCRIPT = Path("scripts") / "serve-llm.ps1"
 _ENV_LINE_RE = re.compile(r'^\s*\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"\s*$')
@@ -138,3 +142,75 @@ def wait_for_port(
             return False
         sleep(0.5)
     return False
+
+
+# --- switching the LLM off and on from the app (ADR-043) ----------------------------------------
+
+
+def unload_model(base_url: str, model: str, timeout_s: float) -> bool:
+    """Ask Ollama to drop `model` from memory now (`keep_alive: 0`): the GPU is freed while a
+    server the app did not start keeps running. False if the server did not agree."""
+    import httpx
+
+    require_loopback(base_url)
+    root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        with httpx.Client(timeout=timeout_s, trust_env=False) as http:
+            reply = http.post(f"{root}/api/generate", json={"model": model, "keep_alive": 0})
+    except httpx.HTTPError:
+        return False
+    return reply.status_code == 200
+
+
+class LLMSwitch:
+    """The tutor's LLM, switched off and on from «Ajustes» (ADR-043). It stops only an Ollama it
+    started itself (here or in `biblio start`); one opened outside the app (the tray app, the
+    script) only has its model unloaded, which frees the same memory."""
+
+    def __init__(self, config: Config, server: LLMServer | None = None) -> None:
+        self.config = config
+        self.server = server
+
+    @property
+    def owned(self) -> bool:
+        return self.server is not None and self.server.process.poll() is None
+
+    def can_start(self) -> bool:
+        return find_ollama(self.config.launcher.ollama_path) is not None
+
+    def stop(self) -> str:
+        """ "stopped" (the app's server closed) or "unloaded" (the model dropped from memory)."""
+        if self.owned:
+            assert self.server is not None
+            self.server.stop()
+            self.server = None
+            return "stopped"
+        llm = self.config.llm
+        if unload_model(llm.base_url, llm.model, self.config.launcher.llm_start_timeout_s):
+            return "unloaded"
+        raise RuntimeError("Ollama no respondió; no se pudo apagar el modelo.")
+
+    def start(self) -> None:
+        """Start `ollama serve` with the settings of `scripts/serve-llm.ps1` (ADR-015) and wait
+        until its API answers; raises with a message for the page if it cannot."""
+        exe = find_ollama(self.config.launcher.ollama_path)
+        if exe is None:
+            raise RuntimeError("Ollama no está instalado en este PC.")
+        llm, timeout = self.config.llm, self.config.launcher.llm_start_timeout_s
+        env = llm_server_env(self.config.root / SERVE_LLM_SCRIPT)
+        log = self.config.paths.index_db.parent / "ollama.log"
+        server = LLMServer.start(exe, env, log)
+        alive = lambda: server.process.poll() is None  # noqa: E731
+        if not wait_for_port(llm.base_url, timeout, llm.probe_timeout_s, alive):
+            server.stop()
+            raise RuntimeError(f"El modelo no arrancó; mira {log}.")
+        deadline = time.monotonic() + timeout  # the port opens a moment before the API answers
+        while served_models(llm.base_url) is None and time.monotonic() < deadline:
+            time.sleep(0.5)
+        self.server = server
+
+    def close(self) -> None:
+        """When the app exits: stop the server only if the app started it."""
+        if self.owned:
+            assert self.server is not None
+            self.server.stop()

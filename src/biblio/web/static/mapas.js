@@ -37,8 +37,15 @@ const svgEl = (tag, attrs = {}) => {
 
 function nodeSize(node) {
   const font = node.level === 0 ? 17 : node.level === 1 ? 15 : 13;
-  const width = Math.min(260, Math.max(90, node.label.length * font * 0.56 + 28));
-  return { width, height: node.level === 0 ? 52 : node.level === 1 ? 44 : 36, font };
+  const longest = Math.max(node.label.length, (node.translation || "").length * 0.85);
+  const width = Math.min(260, Math.max(90, longest * font * 0.56 + 28));
+  const extra = node.translation ? 14 : 0; // the Spanish name on a second line (ADR-042)
+  return { width, height: (node.level === 0 ? 52 : node.level === 1 ? 44 : 36) + extra, font };
+}
+
+/** A concept's name with its Spanish name, for lists and accessible names (ADR-042). */
+function mapNodeName(node) {
+  return node.translation ? `${node.label} (${node.translation})` : node.label;
 }
 
 /** Arrowheads for the Novak map and the diagrams; inside the viewport so a saved SVG keeps them. */
@@ -243,12 +250,17 @@ function drawMap() {
       transform: `translate(${n.x},${n.y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${n.label}, ${n.sources.length} ${n.sources.length === 1 ? "fuente" : "fuentes"}. Flechas para moverlo.`,
+      "aria-label": `${mapNodeName(n)}, ${n.sources.length} ${n.sources.length === 1 ? "fuente" : "fuentes"}. Flechas para moverlo.`,
     });
     g.append(svgEl("rect", { x: -width / 2, y: -height / 2, width, height, rx: novak ? 10 : height / 2 }));
-    const text = svgEl("text", { y: 1, "font-size": font, "dominant-baseline": "middle", "text-anchor": "middle" });
+    const text = svgEl("text", { y: n.translation ? -6 : 1, "font-size": font, "dominant-baseline": "middle", "text-anchor": "middle" });
     text.textContent = n.label.length > 34 ? `${n.label.slice(0, 33)}…` : n.label;
     g.append(text);
+    if (n.translation) {
+      const tr = svgEl("text", { y: 10, "font-size": font - 3, "dominant-baseline": "middle", "text-anchor": "middle", class: "map-node-tr" });
+      tr.textContent = n.translation.length > 38 ? `${n.translation.slice(0, 37)}…` : n.translation;
+      g.append(tr);
+    }
     // a click selects, a drag moves the node (decided on release: see bindNodeDragging)
     g.addEventListener("pointerdown", (event) => startNodeDrag(event, n));
     g.addEventListener("keydown", (event) => {
@@ -592,13 +604,13 @@ function renderMapOutline() {
   const list = el("ul");
   for (const n1 of map.nodes.filter((n) => n.level === 1)) {
     const li = el("li");
-    li.append(pickButton(n1.label, n1.id), document.createTextNode(` ${cites(n1)}${relation("root", n1.id)}`));
+    li.append(pickButton(mapNodeName(n1), n1.id), document.createTextNode(` ${cites(n1)}${relation("root", n1.id)}`));
     const kids = map.nodes.filter((n) => n.parent === n1.id);
     if (kids.length) {
       const sub = el("ul");
       for (const n2 of kids) {
         const item = el("li");
-        item.append(pickButton(n2.label, n2.id), document.createTextNode(` ${cites(n2)}${relation(n1.id, n2.id)}`));
+        item.append(pickButton(mapNodeName(n2), n2.id), document.createTextNode(` ${cites(n2)}${relation(n1.id, n2.id)}`));
         sub.append(item);
       }
       li.append(sub);
@@ -627,7 +639,7 @@ function pickButton(label, id) {
 /** The Novak map as Mermaid text, written in the page from the map it shows (ADR-036). */
 function novakMermaid(map) {
   const quoted = (text) => `"${text.replace(/"/g, "#quot;")}"`;
-  const lines = ["flowchart TD", ...map.nodes.map((n) => `  ${n.id}[${quoted(n.label)}]`)];
+  const lines = ["flowchart TD", ...map.nodes.map((n) => `  ${n.id}[${quoted(mapNodeName(n))}]`)];
   for (const e of map.edges) {
     const arrow = e.kind === "cross" ? "-.->" : "-->";
     lines.push(`  ${e.source} ${arrow}${e.label ? `|${quoted(e.label)}|` : ""} ${e.target}`);
@@ -727,6 +739,7 @@ function renderPanel() {
   view.hidden = !node;
   if (!node) return;
   const parts = [el("span", "eyebrow", node.level === 0 ? "Tema" : "Concepto"), el("h2", null, node.label)];
+  if (node.translation) parts.push(el("p", "map-translation", `En español: ${node.translation}`));
   const related = entry.map.edges.filter((e) => e.label && (e.source === node.id || e.target === node.id));
   if (related.length) {
     parts.push(el("h3", null, entry.kind === "novak" ? "Proposiciones" : "Relaciones"));

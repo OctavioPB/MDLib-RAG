@@ -19,6 +19,7 @@ function bindSettingsPanel() {
   });
   bindLibraryLocation();
   bindAppReset();
+  $("llm-toggle").addEventListener("click", settingsLlmToggle);
 }
 
 // --- where the library is (ADR-039): shown on this PC only ----------------------------------
@@ -34,6 +35,8 @@ async function loadLibraryLocation() {
   }
   $("libloc").hidden = !data.local || !data.path;
   $("app-reset").hidden = !data.local; // this PC only (ADR-040)
+  $("settings-llm").hidden = !data.local; // this PC only (ADR-043)
+  if (data.local) settingsLlmLoad();
   $("settings-devices").hidden = $("lan-connect").hidden;
   $("libloc-path").textContent = data.path || "";
 }
@@ -240,3 +243,72 @@ function bindAppReset() {
 }
 
 bindSettingsPanel();
+
+// --- the language model, switched off and on (ADR-043): this PC only ----------------------------
+
+const llmSwitch = { control: null, busy: false };
+
+async function settingsLlmLoad() {
+  try {
+    llmSwitch.control = (await (await fetch("/api/status")).json()).llm_control;
+  } catch {
+    llmSwitch.control = null;
+  }
+  settingsLlmRender();
+}
+
+function settingsLlmRender() {
+  const c = llmSwitch.control;
+  const toggle = $("llm-toggle");
+  $("settings-llm").classList.toggle("is-on", Boolean(c && c.running));
+  if (!c || !c.available) {
+    $("llm-state-text").textContent = c && c.running ? "Encendido" : "Apagado";
+    toggle.hidden = true;
+    $("llm-help").textContent = "Esta sesión no controla el modelo: ábrela con Biblioteca.cmd o biblio start.";
+    return;
+  }
+  if (c.running) {
+    $("llm-state-text").textContent = c.owned ? "Encendido" : "Encendido (Ollama abierto fuera de la app)";
+    toggle.hidden = false;
+    toggle.textContent = "Apagar el modelo";
+    $("llm-help").textContent = "Libera la memoria de la GPU. Sin el modelo puedes buscar en tus notas, pero no conversar, crear mapas ni practicar.";
+  } else {
+    $("llm-state-text").textContent = "Apagado";
+    toggle.hidden = !c.can_start;
+    toggle.textContent = "Encender el modelo";
+    $("llm-help").textContent = c.can_start
+      ? "Tarda unos segundos. Con el modelo encendido, la búsqueda deja la GPU al modelo."
+      : "Ollama no está instalado en este PC.";
+  }
+  toggle.disabled = llmSwitch.busy;
+}
+
+async function settingsLlmToggle() {
+  const c = llmSwitch.control;
+  if (!c || llmSwitch.busy) return;
+  const on = !c.running;
+  llmSwitch.busy = true;
+  const result = $("llm-result");
+  result.hidden = false;
+  result.classList.remove("error");
+  result.textContent = on ? "Encendiendo el modelo…" : "Apagando el modelo…";
+  settingsLlmRender();
+  try {
+    const response = await postJSON(on ? "/api/llm/start" : "/api/llm/stop", {});
+    if (!response.ok) throw new Error(await errorText(response));
+    const data = await response.json();
+    llmSwitch.control = data.control;
+    result.textContent = {
+      started: "Modelo encendido.",
+      stopped: "Modelo apagado: la memoria de la GPU quedó libre.",
+      unloaded: "El modelo salió de la memoria y la GPU quedó libre. Ollama se abrió fuera de la app y sigue abierto: volverá a cargar el modelo con la próxima pregunta.",
+    }[data.result] || "Listo.";
+  } catch (error) {
+    result.classList.add("error");
+    result.textContent = error.message;
+  } finally {
+    llmSwitch.busy = false;
+    settingsLlmRender();
+    loadStatus(); // the status in the top bar
+  }
+}

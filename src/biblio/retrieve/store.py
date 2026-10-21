@@ -90,7 +90,14 @@ def scope_prefix(folder: str) -> str:
 
 
 def scope_chunk_ids_json(conn: sqlite3.Connection, folder: str) -> str:
-    """Ids of every chunk under `folder`, as a JSON array for `json_each` (ADR-019)."""
+    """Ids of every chunk under `folder`, as a JSON array for `json_each` (ADR-019); a path ending
+    in `.md` is one note (search inside a note, ADR-045)."""
+    if folder.endswith(".md"):
+        rows = conn.execute(
+            "SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id WHERE d.path = ?",
+            (folder,),
+        )
+        return json.dumps([row[0] for row in rows])
     prefix = scope_prefix(folder)
     rows = conn.execute(
         "SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id "

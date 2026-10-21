@@ -197,6 +197,8 @@ async function openNote(path, line) {
     reader.conversationId = null;
     $("reader-panel-list").replaceChildren();
     $("reader-panel").hidden = true;
+    readerFindClear();
+    $("reader-find-input").value = "";
     $("reader-title").textContent = "Abriendo…";
     $("reader-body").replaceChildren();
     const response = await fetch(`/api/notes/view?path=${encodeURIComponent(path)}`);
@@ -226,6 +228,59 @@ function renderNote() {
   // the note's own title is the page header already
   if (blocks[0] && blocks[0].type === "heading" && blocks[0].level === 1) blocks.shift();
   $("reader-body").replaceChildren(...blocks.map(readerBlock));
+  $("reader-find-wrap").hidden = false;
+}
+
+// --- search inside the note (ADR-045): its sections ranked, a click jumps to one ---------------
+
+function readerFindClear() {
+  $("reader-find-results").replaceChildren();
+  $("reader-find-results").hidden = true;
+}
+
+async function readerFind(event) {
+  event.preventDefault();
+  const query = $("reader-find-input").value.trim();
+  if (!query || !reader.path) return;
+  const box = $("reader-find-results");
+  box.hidden = false;
+  box.replaceChildren(el("p", "small muted", "Buscando en la nota…"));
+  try {
+    const response = await postJSON("/api/notes/search", { path: reader.path, query });
+    if (!response.ok) throw new Error(await errorText(response));
+    const data = await response.json();
+    const head = el("div", "reader-find-head");
+    head.append(el("span", "small muted", data.hits.length
+      ? `${data.hits.length} ${data.hits.length === 1 ? "sección" : "secciones"} de esta nota, de la más a la menos relevante`
+      : "Nada en esta nota trata de eso."));
+    const close = el("button", "btn-icon-plain", "✕");
+    close.type = "button";
+    close.setAttribute("aria-label", "Cerrar los resultados");
+    close.addEventListener("click", readerFindClear);
+    head.append(close);
+    const list = el("ol", "reader-find-list");
+    for (const hit of data.hits) {
+      const item = el("li");
+      const go = el("button", "reader-find-item");
+      go.type = "button";
+      go.append(el("strong", null, hit.sections.join(" › ") || hit.guide), el("span", null, `líneas ${hit.lines[0]}–${hit.lines[1]} · ${hit.excerpt.replace(/[*_`#>]+/g, "")}`));
+      go.addEventListener("click", () => {
+        for (const other of list.querySelectorAll(".reader-find-item")) other.classList.toggle("active", other === go);
+        scrollToLine(hit.lines[0]);
+        // the section lands below the search bar, not under its results
+        const target = $("reader-body").querySelector(".flash");
+        const below = $("reader-find-wrap").getBoundingClientRect().bottom + 12;
+        if (target && target.getBoundingClientRect().top < below) {
+          window.scrollBy(0, target.getBoundingClientRect().top - below);
+        }
+      });
+      item.append(go);
+      list.append(item);
+    }
+    box.replaceChildren(head, list);
+  } catch (error) {
+    box.replaceChildren(el("p", "error", error.message));
+  }
 }
 
 function renderReadMark() {
@@ -506,6 +561,10 @@ function bindReader() {
     });
   }
   $("reader-panel-close").addEventListener("click", () => ($("reader-panel").hidden = true));
+  $("reader-find").addEventListener("submit", readerFind);
+  $("reader-find-input").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") readerFindClear();
+  });
   $("reader-back").addEventListener("click", () => history.back());
   $("reader-read").addEventListener("click", async () => {
     const read = !reader.view.read;

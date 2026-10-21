@@ -454,7 +454,7 @@ def fishbone_mermaid(fishbone: Fishbone) -> str:
 
 def novak_mermaid(cmap: ConceptMap) -> str:
     lines = ["flowchart TD"]
-    lines += [f"  {n.id}[{_quoted(n.label)}]" for n in cmap.nodes]
+    lines += [f"  {n.id}[{_quoted(n.shown)}]" for n in cmap.nodes]
     for e in cmap.edges:
         arrow = "-.->" if e.kind == "cross" else "-->"
         label = f"|{_quoted(e.label)}|" if e.label else ""

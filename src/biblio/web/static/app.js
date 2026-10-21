@@ -481,30 +481,69 @@ function scopeLabel(scope) {
   return scope ? ` · en ${scope}` : "";
 }
 
+/** One search result: the section, its guide and lines, «Leer» and «Abrir». `compact` for a note's
+ *  other sections under its best one (ADR-045). */
+function resultRow(turn, hit, index, compact = false) {
+  const li = el("li", compact ? "result result-sub" : "result");
+  if (app.selection && app.selection.turn === turn.id && app.selection.index === index) {
+    li.classList.add("selected");
+  }
+  const main = el("button", "result-main");
+  main.type = "button";
+  main.append(el("strong", null, hit.sections.at(-1) || hit.guide));
+  main.append(el("span", null, compact ? `líneas ${hit.lines[0]}–${hit.lines[1]}` : `${hit.guide} · líneas ${hit.lines[0]}–${hit.lines[1]}`));
+  main.addEventListener("click", () => selectSource(turn, index));
+  li.append(main);
+  const read = readLink(hit.doc_path, hit.lines[0], null);
+  read.setAttribute("aria-label", `Leer ${hit.guide} aquí`);
+  li.append(read);
+  if (hit.open_url && !compact) {
+    const open = el("a", null, "Abrir");
+    open.href = hit.open_url;
+    open.setAttribute("aria-label", `Abrir ${hit.guide} en Obsidian`);
+    li.append(open);
+  }
+  return li;
+}
+
+/** [[hit, index into turn.hits], …] per note, in the server's order; null for flat results. */
+function resultGroups(turn) {
+  if (!turn.hits.length || turn.hits[0].group === undefined) return null;
+  const groups = [];
+  turn.hits.forEach((hit, index) => {
+    if (!groups[hit.group]) groups[hit.group] = [];
+    groups[hit.group].push([hit, index]);
+  });
+  return groups.filter(Boolean);
+}
+
 function resultsNode(turn) {
   const list = el("ul", "results");
-  turn.hits.forEach((hit, index) => {
-    const li = el("li", "result");
-    if (app.selection && app.selection.turn === turn.id && app.selection.index === index) {
-      li.classList.add("selected");
+  const groups = resultGroups(turn);
+  if (!groups) {
+    turn.hits.forEach((hit, index) => list.append(resultRow(turn, hit, index)));
+    return list;
+  }
+  // one line per note, its next two sections beneath, the rest folded (ADR-045)
+  for (const group of groups) {
+    const [[lead, leadIndex], ...rest] = group;
+    const note = resultRow(turn, lead, leadIndex);
+    note.classList.add("result-note");
+    const item = el("li", "result-group");
+    const inner = el("ul", "result-subs");
+    inner.append(note);
+    for (const [hit, index] of rest.slice(0, 2)) inner.append(resultRow(turn, hit, index, true));
+    item.append(inner);
+    if (rest.length > 2) {
+      const more = el("details", "result-more");
+      more.append(el("summary", null, `${rest.length - 2} ${rest.length - 2 === 1 ? "sección más" : "secciones más"} en esta nota`));
+      const extra = el("ul", "result-subs");
+      for (const [hit, index] of rest.slice(2)) extra.append(resultRow(turn, hit, index, true));
+      more.append(extra);
+      item.append(more);
     }
-    const main = el("button", "result-main");
-    main.type = "button";
-    main.append(el("strong", null, hit.sections.at(-1) || hit.guide));
-    main.append(el("span", null, `${hit.guide} · líneas ${hit.lines[0]}–${hit.lines[1]}`));
-    main.addEventListener("click", () => selectSource(turn, index));
-    li.append(main);
-    const read = readLink(hit.doc_path, hit.lines[0], null);
-    read.setAttribute("aria-label", `Leer ${hit.guide} aquí`);
-    li.append(read);
-    if (hit.open_url) {
-      const open = el("a", null, "Abrir");
-      open.href = hit.open_url;
-      open.setAttribute("aria-label", `Abrir ${hit.guide} en Obsidian`);
-      li.append(open);
-    }
-    list.append(li);
-  });
+    list.append(item);
+  }
   return list;
 }
 
@@ -582,7 +621,9 @@ function turnNode(turn) {
   } else if (!explain) {
     if (turn.status === "pending") meta.append(document.createTextNode("Buscando…"));
     else {
-      meta.append(document.createTextNode(`${turn.hits.length} secciones · ${(turn.ms / 1000).toFixed(1)} s${scopeLabel(turn.scope)}`));
+      const groups = resultGroups(turn);
+      const found = groups ? `${groups.length} ${groups.length === 1 ? "nota" : "notas"} · ${turn.hits.length} secciones` : `${turn.hits.length} secciones`;
+      meta.append(document.createTextNode(`${found} · ${(turn.ms / 1000).toFixed(1)} s${scopeLabel(turn.scope)}`));
       reply.append(turn.hits.length ? resultsNode(turn) : el("p", "muted", "No encontré nada sobre esto."));
     }
   } else if (turn.offtopic) {
@@ -676,6 +717,7 @@ async function runFind(turn) {
     k: Number(app.settings.k),
     precision: app.settings.precision,
     scope: turn.scope || null,
+    group: true, // one line per note (ADR-045)
     conversation_id: app.conversationId,
   });
   if (!response.ok) throw new Error(await errorText(response));

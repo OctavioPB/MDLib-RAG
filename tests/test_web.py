@@ -692,3 +692,60 @@ def test_the_vendored_fonts_are_served_and_nothing_else(server: tuple[str, int])
         assert status == 200 and headers.get("content-type") == "font/woff2", name
     for bad in ("LICENSE-Fraunces.txt", "../app.css", "..%2Fapp.css", "x/y.woff2", "nope.woff2"):
         assert request(server, "GET", f"/static/vendor/fonts/{bad}")[0] == 404, bad
+
+
+def test_the_llm_is_switched_off_and_on_from_this_pc_only(
+    server: tuple[str, int], engine: Engine
+) -> None:
+    """ADR-043: «Ajustes › Modelo de lenguaje». The page learns what it can do from /api/status."""
+    calls: list[str] = []
+
+    class FakeSwitch:
+        owned = True
+
+        def can_start(self) -> bool:
+            return True
+
+        def stop(self) -> str:
+            calls.append("stop")
+            return "stopped"
+
+        def start(self) -> None:
+            calls.append("start")
+
+    status = json.loads(request(server, "GET", "/api/status")[2])
+    assert status["llm_control"]["available"] is False
+    assert request(server, "POST", "/api/llm/stop", {})[0] == 503  # nothing to control
+    engine.llm_switch = FakeSwitch()  # type: ignore[assignment]
+    code, _, raw = request(server, "POST", "/api/llm/stop", {})
+    assert code == 200 and json.loads(raw)["result"] == "stopped" and calls == ["stop"]
+    assert json.loads(request(server, "GET", "/api/status")[2])["llm_control"]["owned"] is True
+    engine._generating.acquire()  # something is being generated: refused
+    try:
+        assert request(server, "POST", "/api/llm/stop", {})[0] == 409
+    finally:
+        engine._generating.release()
+    assert calls == ["stop"]
+
+
+def test_search_grouped_by_note_and_inside_one_note(server: tuple[str, int]) -> None:
+    """ADR-045: «Solo ubicar» asks for one line per note; the reader searches inside one note."""
+    query = {"query": "teorema de Bayes", "precision": "fast", "k": 2}
+    data = json.loads(request(server, "POST", "/api/search", {**query, "group": True})[2])
+    groups = [h["group"] for h in data["hits"]]
+    assert groups == sorted(groups) and set(groups) <= {0, 1}  # at most k notes, in order
+    for number in set(groups):
+        paths = {h["doc_path"] for h in data["hits"] if h["group"] == number}
+        assert len(paths) == 1  # one note per group
+    flat = json.loads(request(server, "POST", "/api/search", query)[2])
+    assert "group" not in flat["hits"][0] and len(flat["hits"]) <= 2
+
+    before = len(json.loads(request(server, "GET", "/api/conversations")[2])["conversations"])
+    note = data["hits"][0]["doc_path"]
+    code, _, raw = request(server, "POST", "/api/notes/search", {"path": note, "query": "Bayes"})
+    inside = json.loads(raw)
+    assert code == 200 and inside["hits"] and {h["doc_path"] for h in inside["hits"]} == {note}
+    after = len(json.loads(request(server, "GET", "/api/conversations")[2])["conversations"])
+    assert after == before  # a search inside a note is not kept in the history
+    bad = {"path": "no/existe.md", "query": "Bayes"}
+    assert request(server, "POST", "/api/notes/search", bad)[0] == 400

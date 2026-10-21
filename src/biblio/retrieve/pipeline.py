@@ -13,6 +13,7 @@ from biblio.index.embedder import Embedder, load_query_embedder
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
+from biblio.retrieve.navigation import SkipNavigation
 from biblio.retrieve.rerank import (
     Reranker,
     RerankingRetriever,
@@ -41,13 +42,16 @@ def build_retriever(
         check_query_embedder(conn, config)
 
     base: Retriever
+    r = config.retrieval
     if base_mode == "bm25":
-        base = BM25Retriever(conn)
+        base = BM25Retriever(conn, heading_weight=r.bm25_heading_weight)
     elif base_mode == "dense":
         base = DenseRetriever(conn, embedder_factory(config))
     else:
         dense = DenseRetriever(conn, embedder_factory(config))
-        base = HybridRetriever(dense, BM25Retriever(conn), config.retrieval)
+        base = HybridRetriever(dense, BM25Retriever(conn, heading_weight=r.bm25_heading_weight), r)
+    if r.skip_navigation:  # before reranking: no candidate slot is spent on an index (ADR-044)
+        base = SkipNavigation(base, r.navigation_margin)
 
     if rerank:
         plan = plan_resolver(config)

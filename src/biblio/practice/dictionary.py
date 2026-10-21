@@ -16,7 +16,7 @@ from biblio.config import DictionaryConfig
 from biblio.generate.ask import load_prompt
 from biblio.generate.context import Fragment
 from biblio.generate.llm import LLMClient
-from biblio.maps.build import fold
+from biblio.maps.build import fold, in_english
 from biblio.practice.feynman import contains
 from biblio.practice.quiz import _complete, _json_object
 
@@ -32,6 +32,9 @@ class Entry:
     text: str  # the definition, what the function does, what the formula computes
     detail: str  # the quote (concept), the signature (function) or the LaTeX (formula)
     sources: tuple[int, ...]  # Fragment.number of every fragment it was found in
+    translation: str = (
+        ""  # the term in Spanish, when the note writes it in another language (ADR-042)
+    )
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,9 @@ def parse_entries(
             and _named_in(fragment.text, term)
             and contains(fragment.text, quote)
         ):
-            out.append(Entry("concept", term, text, quote, source))
+            spanish = _clean(item.get("traduccion"), _MAX_TERM) or ""
+            translation = spanish if fold(spanish) != fold(term) else ""
+            out.append(Entry("concept", term, text, quote, source, translation))
     functions = data.get("funciones")
     code = squash(fragment.text)
     for item in (functions if isinstance(functions, list) else [])[: per_list * 2]:
@@ -155,6 +160,8 @@ def extract_entries(
         section=fragment.text[: cfg.max_fragment_chars],
         max_entries=cfg.entries_per_fragment,
     )
+    if in_english(fragment.text):  # names and quotes copied in English, not translated (ADR-042)
+        user += "\n\n" + load_prompt("dictionary_english").format()
     system = load_prompt("dictionary_system")
     for _ in range(2):  # one retry, then the fragment is skipped
         reply = _complete(llm, system, user, cfg.extract_max_tokens)
@@ -208,7 +215,8 @@ def to_markdown(
         for e in sorted(chosen, key=lambda e: fold(e.term)):
             cites = "".join(f"[{n}]" for n in e.sources)
             if kind == "concept":
-                lines += [f"**{e.term}**: {e.text} {cites}", f"> «{e.detail}»", ""]
+                name = f"**{e.term}** ({e.translation})" if e.translation else f"**{e.term}**"
+                lines += [f"{name}: {e.text} {cites}", f"> «{e.detail}»", ""]
             elif kind == "function":
                 lines += [f"**`{e.term}`**: {e.text} {cites}", "```", e.detail, "```", ""]
             else:
@@ -233,7 +241,8 @@ def to_anki(title: str, entries: Sequence[Entry], fragments: Sequence[Fragment])
     for e in entries:
         where = "; ".join(by_number[n].citation for n in e.sources if n in by_number)
         if e.kind == "concept":
-            front, back = e.term, f"{e.text}<br><i>«{e.detail}»</i>"
+            front = f"{e.term}<br><small>{e.translation}</small>" if e.translation else e.term
+            back = f"{e.text}<br><i>«{e.detail}»</i>"
         elif e.kind == "function":
             front, back = f"<code>{e.detail}</code>", e.text
         else:

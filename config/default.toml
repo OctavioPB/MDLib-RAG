@@ -39,6 +39,10 @@ rrf_k = 60
 rerank_candidates = 40       # first-stage hits the reranker reads on the GPU (ADR-014)
 final_k = 8
 latency_p95_target_ms = 3000
+skip_navigation = true       # «Índice» / «Tabla de contenidos» sections are never results (ADR-044)
+navigation_margin = 5        # extra hits asked for to replace the dropped ones
+group_depth = 3              # «Solo ubicar» groups by note: asks for k × this many hits (ADR-045)
+bm25_heading_weight = 0.5    # BM25: heading path (title › sections) vs text; 0.5 measured best (ADR-044)
 
 [reranker]
 model = "BAAI/bge-reranker-v2-m3"

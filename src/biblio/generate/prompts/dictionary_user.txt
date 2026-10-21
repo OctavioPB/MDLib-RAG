@@ -8,4 +8,4 @@ Fragmento de «{citation}»:
 Escribe hasta {max_entries} entradas por lista.
 
 Formato:
-{{"conceptos": [{{"termino": "...", "definicion": "...", "cita": "..."}}], "funciones": [{{"nombre": "...", "firma": "...", "descripcion": "..."}}], "formulas": [{{"formula": "...", "nombre": "...", "descripcion": "..."}}]}}
+{{"conceptos": [{{"termino": "...", "traduccion": "", "definicion": "...", "cita": "..."}}], "funciones": [{{"nombre": "...", "firma": "...", "descripcion": "..."}}], "formulas": [{{"formula": "...", "nombre": "...", "descripcion": "..."}}]}}

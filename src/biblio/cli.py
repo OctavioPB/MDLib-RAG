@@ -1173,12 +1173,18 @@ def serve(
     ] = None,
 ) -> None:
     """Open the local web UI (loopback only, ADR-016, ADR-019; --lan: ADR-035). Ctrl+C stops it."""
+    from biblio.launcher import LLMSwitch
+
     config = _config(ctx)
     server, engine = _open_web(config, port or config.web.port, _lan_wanted(config, lan))
+    engine.llm_switch = switch = LLMSwitch(config)  # «Ajustes» can stop and start it (ADR-043)
     host, bound = config.web.host, server.server_address[1]
     console.print(f"[bold]Biblioteca[/bold] → http://{host}:{bound}  [dim](Ctrl+C to stop)[/dim]")
     _print_lan(server)
-    _serve_until_stopped(server, engine)
+    try:
+        _serve_until_stopped(server, engine)
+    finally:
+        switch.close()  # only an LLM server started from the page
 
 
 def _lan_wanted(config: Config, flag: bool | None) -> bool:
@@ -1438,6 +1444,7 @@ def start(
     import webbrowser
 
     from biblio.index.embedder import resolve_index_device
+    from biblio.launcher import LLMSwitch
     from biblio.offline import loopback_port_open
 
     config = _config(ctx)
@@ -1454,9 +1461,10 @@ def start(
     root = config.paths.library
     assert root is not None
     _start_index(config, root, yes)  # before the LLM: the GPU is free now (ADR-012)
-    llm = None if no_llm else _start_llm(config, yes)
+    switch = LLMSwitch(config, None if no_llm else _start_llm(config, yes))
     try:
         server, engine = _open_web(config, port, _lan_wanted(config, lan))
+        engine.llm_switch = switch  # «Ajustes» can stop and start it (ADR-043)
         if config.launcher.watch:
             watcher = _make_watcher(
                 config, root, resolve_index_device(config), lambda: engine.config
@@ -1477,9 +1485,9 @@ def start(
             webbrowser.open(url)
         _serve_until_stopped(server, engine)
     finally:
-        if llm is not None:
+        if switch.owned:  # the one started here, or from the page
             console.print("Stopping the LLM server…")
-            llm.stop()
+        switch.close()
 
 
 @ask_eval_app.command("sheet")
