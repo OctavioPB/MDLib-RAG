@@ -1,0 +1,9 @@
+Tema: {topic}
+
+Fragmentos:
+{fragments}
+
+Lista hasta {max_terms} términos relacionados con el tema que estos fragmentos mencionan sin explicarlos.
+
+Formato:
+{{"terminos": [{{"termino": "...", "cita": "...", "fragmento": 1}}]}}

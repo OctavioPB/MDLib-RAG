@@ -4,15 +4,15 @@
 "use strict";
 
 const PLAN_STATES = {
-  unread: "Por leer",
-  read: "Leída",
-  practiced: "Practicada",
-  mastered: "Dominada",
+  unread: tx("Por leer"),
+  read: tx("Leída"),
+  practiced: tx("Practicada"),
+  mastered: tx("Dominada"),
 };
 
 const plan = { view: null, plans: [], busy: false, pendingGap: null };
 
-const GUIAS_SCREENS = { home: "guias-home", plan: "guias-plan", write: "guias-write" };
+const GUIAS_SCREENS = { home: "guias-home", plan: "guias-plan", write: "guias-write", spotter: "guias-spotter" };
 
 function showGuiasScreen(name) {
   for (const [screen, id] of Object.entries(GUIAS_SCREENS)) $(id).hidden = name !== screen;
@@ -38,16 +38,16 @@ async function renderGuiasHome() {
   hero.hidden = !current;
   if (!current) return;
   const done = current.counts.practiced + current.counts.mastered;
-  $("guias-next-eyebrow").textContent = `Tu plan · ${current.folder}`;
+  $("guias-next-eyebrow").textContent = tx("Tu plan · {0}", current.folder);
   const open = $("guias-next-open");
   if (current.next) {
-    $("guias-next-title").textContent = `${current.next.why === "review" ? "Repasa" : "Sigue con"}: ${current.next.title}`;
-    $("guias-next-summary").textContent = `${done} de ${current.total} guías practicadas · ${current.counts.mastered} dominadas.`;
+    $("guias-next-title").textContent = `${current.next.why === "review" ? tx("Repasa") : tx("Sigue con")}: ${current.next.title}`;
+    $("guias-next-summary").textContent = tx("{0} de {1} guías practicadas · {2} dominadas.", done, current.total, current.counts.mastered);
     open.hidden = !current.next.open_url;
     open.href = current.next.open_url || "#";
   } else {
-    $("guias-next-title").textContent = "Dominaste todo el plan";
-    $("guias-next-summary").textContent = `Las ${current.total} guías de ${current.folder}.`;
+    $("guias-next-title").textContent = tx("Dominaste todo el plan");
+    $("guias-next-summary").textContent = tx("Las {0} guías de {1}.", current.total, current.folder);
     open.hidden = true;
   }
   hero.classList.toggle("calm", !current.next);
@@ -70,7 +70,8 @@ async function renderGaps() {
 function gapWhy(gap) {
   const last = gap.events[0];
   if (!last) return "";
-  if (last.source === "map") return `Mapa de «${last.text}»: ${last.detail || "pocos conceptos"}`;
+  if (last.source === "map") return tx("Mapa de «{0}»: {1}", last.text, last.detail || tx("pocos conceptos"));
+  if (last.source === "spotter") return tx("Gap Spotter sobre «{0}»: {1}", last.text, last.detail); // ADR-047
   return `«${last.text}»`;
 }
 
@@ -78,11 +79,11 @@ function gapRow(gap) {
   const li = el("li", "plan-row");
   const main = el("div", "plan-main");
   const meta = el("div", "plan-meta");
-  if (gap.status === "draft") meta.append(el("span", "state-pill state-read", "En borrador"));
-  meta.append(el("span", "small muted", gap.count > 1 ? `${gap.count} veces` : "1 vez"));
+  if (gap.status === "draft") meta.append(el("span", "state-pill state-read", tx("En borrador")));
+  meta.append(el("span", "small muted", gap.count > 1 ? tx("{0} veces", gap.count) : tx("1 vez")));
   main.append(meta, el("strong", null, gap.topic), el("span", "small muted", gapWhy(gap)));
   const actions = el("div", "plan-actions");
-  const write = el("button", "btn-soft", gap.status === "draft" && gap.draft ? "Seguir el borrador" : "Escribir guía");
+  const write = el("button", "btn-soft", gap.status === "draft" && gap.draft ? tx("Seguir el borrador") : tx("Escribir guía"));
   write.type = "button";
   write.addEventListener("click", () => {
     if (gap.status === "draft" && gap.draft) {
@@ -99,11 +100,11 @@ function gapRow(gap) {
     const response = await postJSON("/api/gaps/status", { id: gap.id, status: value });
     if (response.ok) renderGaps();
   };
-  const done = el("button", "btn", "Resuelto");
+  const done = el("button", "btn", tx("Resuelto"));
   done.type = "button";
-  done.title = "Ya tienes una guía sobre esto en tu biblioteca";
+  done.title = tx("Ya tienes una guía sobre esto en tu biblioteca");
   done.addEventListener("click", () => status("resolved"));
-  const dismiss = el("button", "btn", "Descartar");
+  const dismiss = el("button", "btn", tx("Descartar"));
   dismiss.type = "button";
   dismiss.addEventListener("click", () => status("dismissed"));
   actions.append(write, done, dismiss);
@@ -127,7 +128,7 @@ async function loadPlanFolders() {
       ...data.folders.map((f) => {
         const option = document.createElement("option");
         option.value = f.path;
-        option.label = `${f.documents} ${f.documents === 1 ? "guía" : "guías"}`;
+        option.label = `${f.documents} ${f.documents === 1 ? tx("guía") : tx("guías")}`;
         return option;
       }),
     );
@@ -143,7 +144,7 @@ function renderSavedPlans() {
       const chip = el("button", "plan-chip");
       chip.type = "button";
       chip.setAttribute("aria-current", String(Boolean(plan.view && plan.view.folder === p.folder)));
-      chip.append(el("strong", null, p.folder), el("span", null, `${p.counts.practiced + p.counts.mastered}/${p.total} practicadas`));
+      chip.append(el("strong", null, p.folder), el("span", null, tx("{0}/{1} practicadas", p.counts.practiced + p.counts.mastered, p.total)));
       chip.addEventListener("click", () => openPlan(p.folder));
       return chip;
     }),
@@ -185,11 +186,11 @@ async function generatePlan(folder) {
   }
   plan.busy = true;
   $("plan-create").disabled = true;
-  setPlanStatus("Leyendo las guías de la carpeta…");
+  setPlanStatus(tx("Leyendo las guías de la carpeta…"));
   try {
     await streamEvents("/api/plans/generate", { folder }, (name, data) => {
       if (name === "progress") {
-        setPlanStatus(data.total > 1 ? `Ordenando ${data.done} de ${data.total} · ${data.label}` : "Ordenando las guías…");
+        setPlanStatus(data.total > 1 ? tx("Ordenando {0} de {1} · {2}", data.done, data.total, data.label) : tx("Ordenando las guías…"));
       } else if (name === "plan") {
         plan.view = data;
         store.set("biblio.plan", folder);
@@ -226,22 +227,22 @@ function renderPlan() {
   const box = $("plan-view");
   const view = plan.view;
   if (!view) {
-    box.replaceChildren(el("p", "muted", plan.plans.length ? "Elige uno de tus planes o crea otro." : "Escribe una carpeta de tu temario y propongo el orden en que estudiar sus guías (~10 s; más en carpetas grandes)."));
+    box.replaceChildren(el("p", "muted", plan.plans.length ? tx("Elige uno de tus planes o crea otro.") : tx("Escribe una carpeta de tu temario y propongo el orden en que estudiar sus guías (~10 s; más en carpetas grandes).")));
     return;
   }
   const head = el("div", "plan-head");
   const title = el("div");
-  title.append(el("h2", null, view.folder), el("span", "small muted", `${view.items.length} guías · orden propuesto por el modelo; puedes moverlas`));
+  title.append(el("h2", null, view.folder), el("span", "small muted", tx("{0} guías · orden propuesto por el modelo; puedes moverlas", view.items.length)));
   const actions = el("div", "row");
-  const again = el("button", "btn", "Proponer otro orden");
+  const again = el("button", "btn", tx("Proponer otro orden"));
   again.type = "button";
   again.addEventListener("click", () => {
-    if (confirm("Se reemplazará el orden actual, también tus cambios. Lo que leíste y practicaste se mantiene. ¿Continuar?")) generatePlan(view.folder);
+    if (confirm(tx("Se reemplazará el orden actual, también tus cambios. Lo que leíste y practicaste se mantiene. ¿Continuar?"))) generatePlan(view.folder);
   });
-  const remove = el("button", "btn danger-text", "Borrar plan");
+  const remove = el("button", "btn danger-text", tx("Borrar plan"));
   remove.type = "button";
   remove.addEventListener("click", async () => {
-    if (!confirm(`¿Borrar el plan de «${view.folder}»? Tus lecturas y tu práctica no se borran.`)) return;
+    if (!confirm(tx("¿Borrar el plan de «{0}»? Tus lecturas y tu práctica no se borran.", view.folder))) return;
     await postJSON("/api/plans/delete", { folder: view.folder });
     store.set("biblio.plan", null);
     openPlan(null);
@@ -260,7 +261,7 @@ function renderPlan() {
   let module = null;
   let list = null;
   view.items.forEach((item, index) => {
-    const group = item.new ? "Nuevas en la carpeta" : item.module;
+    const group = item.new ? tx("Nuevas en la carpeta") : item.module;
     if (group !== module || !list) {
       module = group;
       if (group) nodes.push(el("h3", "plan-module", group));
@@ -279,14 +280,14 @@ function planRow(view, item, index) {
   const main = el("div", "plan-main");
   const meta = el("div", "plan-meta");
   meta.append(el("span", `state-pill state-${item.state}`, PLAN_STATES[item.state]));
-  if (isNext) meta.append(el("span", "plan-next-tag", view.next.why === "review" ? "Repasa esta" : "Sigue aquí"));
-  if (item.new) meta.append(el("span", "badge warn", "Nueva"));
-  else if (!item.placed) meta.append(el("span", "small muted", "sin ordenar por el modelo"));
+  if (isNext) meta.append(el("span", "plan-next-tag", view.next.why === "review" ? tx("Repasa esta") : tx("Sigue aquí")));
+  if (item.new) meta.append(el("span", "badge warn", tx("Nueva")));
+  else if (!item.placed) meta.append(el("span", "small muted", tx("sin ordenar por el modelo")));
   main.append(meta, el("strong", null, item.title));
   if (item.reason) main.append(el("span", "small muted", item.reason));
   if (item.practiced) {
-    const recall = item.recall === null ? "" : ` · la recuerdas en un ${Math.round(item.recall * 100)} %`;
-    main.append(el("span", "small", `${item.practiced} de ${item.sections} secciones practicadas${recall}`));
+    const recall = item.recall === null ? "" : tx(" · la recuerdas en un {0} %", Math.round(item.recall * 100));
+    main.append(el("span", "small", tx("{0} de {1} secciones practicadas{2}", item.practiced, item.sections, recall)));
   }
   li.append(main);
 
@@ -295,11 +296,11 @@ function planRow(view, item, index) {
   if (item.open_url) {
     const open = el("a", "btn", "Obsidian");
     open.href = item.open_url;
-    open.title = "Abrir en Obsidian";
+    open.title = tx("Abrir en Obsidian");
     actions.append(open);
   }
   if (item.state === "unread" || item.state === "read") {
-    const read = el("button", "btn", item.state === "read" ? "No leída" : "Marcar leída");
+    const read = el("button", "btn", item.state === "read" ? tx("No leída") : tx("Marcar leída"));
     read.type = "button";
     read.addEventListener("click", async () => {
       const response = await postJSON("/api/plans/read", { doc_path: item.doc_path, read: item.state !== "read" });
@@ -307,16 +308,16 @@ function planRow(view, item, index) {
     });
     actions.append(read);
   }
-  const practise = el("button", "btn-soft", "Practicar");
+  const practise = el("button", "btn-soft", tx("Practicar"));
   practise.type = "button";
   practise.addEventListener("click", () => {
     app.pendingPractice = { scope: { kind: "guide", value: item.doc_path, label: item.title }, count: 10 };
     location.hash = "#/practicar";
   });
-  const explain = el("a", "btn-soft", "Explícamelo");
+  const explain = el("a", "btn-soft", tx("Explícamelo"));
   explain.href = `#/practicar?explicar=${encodeURIComponent(item.title)}`;
   actions.append(practise, explain);
-  for (const [delta, label, name] of [[-1, "↑", "Subir"], [1, "↓", "Bajar"]]) {
+  for (const [delta, label, name] of [[-1, "↑", tx("Subir")], [1, "↓", tx("Bajar")]]) {
     const move = el("button", "btn plan-move", label);
     move.type = "button";
     move.setAttribute("aria-label", `${name} ${item.title}`);
@@ -340,7 +341,7 @@ async function movePlanItem(index, delta) {
   }
   await openPlan(view.folder);
   const rows = $("plan-view").querySelectorAll(".plan-move");
-  const target = [...rows].find((b) => b.getAttribute("aria-label") === `${delta < 0 ? "Subir" : "Bajar"} ${moved.title}`);
+  const target = [...rows].find((b) => b.getAttribute("aria-label") === `${delta < 0 ? tx("Subir") : tx("Bajar")} ${moved.title}`);
   if (target && !target.disabled) target.focus();
 }
 
@@ -356,7 +357,7 @@ function bindPlan() {
     event.preventDefault();
     const folder = $("plan-folder").value.trim().replace(/^\/+|\/+$/g, "");
     if (!folder) {
-      showError("plan-error", "Escribe una carpeta de tu biblioteca.");
+      showError("plan-error", tx("Escribe una carpeta de tu biblioteca."));
       return;
     }
     const known = plan.plans.find((p) => p.folder === folder);
@@ -377,5 +378,5 @@ pageHooks.guias = () => {
   guiasHook();
   if (/^#\/guias\/[a-z0-9-]+$/.test(location.hash)) showGuiasScreen("write"); // a draft's link
   else if (!$("guias-plan").hidden && plan.view) openPlan(plan.view.folder); // states may have moved
-  else if ($("guias-plan").hidden && $("guias-write").hidden) showGuiasScreen("home");
+  else if ($("guias-plan").hidden && $("guias-write").hidden && $("guias-spotter").hidden) showGuiasScreen("home");
 };

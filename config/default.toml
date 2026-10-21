@@ -178,6 +178,26 @@ max_entries = 80             # per list (concepts, functions, formulas) and dict
 definition_max_chars = 400
 history_limit = 50
 
+[spotter]                    # «Gap Spotter» in Guías (ADR-047); runs kept in [practice].db
+sections = 16                # the topic's sections read for unexplained terms (4 per model call)
+max_fragment_chars = 1800
+batch = 4                    # sections per «mentioned without explaining» call
+terms_per_batch = 4          # asked of the model per call
+unexplained_max = 8          # unexplained terms judged, at most
+syllabus_size = 16           # subtopics the model proposes (12 basic ones were all covered on a well-studied topic)
+judge_hits = 4               # sections of the whole library the model reads to judge one subtopic
+guides_min = 5
+guides_max = 10
+questions_per_guide = 3
+name_max_chars = 80
+quote_max_chars = 300
+quote_run_words = 6          # a coverage quote counts when this many consecutive words are in a section
+extract_max_tokens = 600
+syllabus_max_tokens = 1200
+judge_max_tokens = 300
+guides_max_tokens = 3000          # 1600 cut the JSON of 5 guides in the middle (live run, ADR-047)
+history_limit = 30
+
 [maps]
 fragments = 10               # retrieved sections read for one map (~3 s each with the LLM, ADR-022)
 max_fragment_chars = 6000    # longer sections (big tables) are cut to this before extraction

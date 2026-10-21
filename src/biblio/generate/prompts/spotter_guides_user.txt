@@ -1,0 +1,12 @@
+Tema: {topic}
+
+Subtemas pendientes en las notas del usuario:
+{gaps}
+
+Notas que el usuario ya tiene sobre el tema:
+{notes}
+
+Propón de {low} a {high} guías que cubran estos subtemas, con {questions} preguntas cada una.
+
+Formato:
+{{"guias": [{{"titulo": "...", "por_que": "...", "subtemas": [1, 2], "preguntas": ["..."], "notas": [3]}}]}}

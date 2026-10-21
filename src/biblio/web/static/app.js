@@ -46,7 +46,7 @@ async function postJSON(path, body, signal) {
 
 async function errorText(response) {
   try {
-    return (await response.json()).error || response.statusText;
+    return txServer((await response.json()).error || response.statusText); // ADR-046
   } catch {
     return response.statusText;
   }
@@ -210,7 +210,7 @@ async function streamEvents(path, body, onEvent, signal) {
     buffer.text += decoder.decode(value, { stream: true });
     for (const [name, data] of sseEvents(buffer)) {
       if (name === "error") {
-        const error = new Error(data.error);
+        const error = new Error(txServer(data.error));
         error.data = data; // e.g. the conversation the failed message was stored in
         throw error;
       }
@@ -237,7 +237,7 @@ const app = {
 };
 
 // answer levels (ADR-032); chosen per message, the last one restored with a conversation
-const LEVEL_LABELS = { beginner: "Principiante", intermediate: "Intermedio", advanced: "Avanzado" };
+const LEVEL_LABELS = { beginner: tx("Principiante"), intermediate: tx("Intermedio"), advanced: tx("Avanzado") };
 
 function setLevel(level) {
   if (!LEVEL_LABELS[level]) return;
@@ -295,14 +295,14 @@ async function loadStatus() {
   try {
     const status = await (await fetch("/api/status")).json();
     app.llmRunning = status.llm_running;
-    const notes = status.documents.toLocaleString("es");
-    pill.textContent = status.llm_running ? `Lista · ${notes} notas` : `Modelo apagado · ${notes} notas`;
+    const notes = status.documents.toLocaleString(i18nLocale());
+    pill.textContent = status.llm_running ? tx("Lista · {0} notas", notes) : tx("Modelo apagado · {0} notas", notes);
     pill.classList.toggle("off", !status.llm_running);
     pill.title = status.llm_running
-      ? `Modelo: ${status.llm_model} · búsqueda ${status.mode}`
-      : "Sin modelo de lenguaje solo se puede ubicar. Inícialo con scripts/serve-llm.ps1.";
+      ? tx("Modelo: {0} · búsqueda {1}", status.llm_model, status.mode)
+      : tx("Sin modelo de lenguaje solo se puede ubicar. Inícialo con scripts/serve-llm.ps1.");
   } catch {
-    pill.textContent = "Sin conexión con el servidor";
+    pill.textContent = tx("Sin conexión con el servidor");
     pill.classList.add("off");
   }
 }
@@ -315,30 +315,30 @@ async function reindexLibrary() {
   button.disabled = true;
   button.classList.add("spinning");
   pill.classList.remove("off");
-  pill.textContent = "Revisando tu biblioteca…";
+  pill.textContent = tx("Revisando tu biblioteca…");
   let device = "";
   try {
     await streamEvents("/api/reindex", {}, (name, data) => {
       if (name === "start") {
-        device = data.device === "cpu" ? " · en CPU" : "";
-        pill.textContent = `Revisando ${data.files.toLocaleString("es")} notas…`;
+        device = data.device === "cpu" ? tx(" · en CPU") : "";
+        pill.textContent = tx("Revisando {0} notas…", data.files.toLocaleString(i18nLocale()));
       } else if (name === "progress") {
-        const chunks = data.chunks ? ` · ${data.chunks} fragmentos nuevos` : "";
-        pill.textContent = `Actualizando ${data.files.toLocaleString("es")} de ${data.total.toLocaleString("es")}${chunks}${device}`;
+        const chunks = data.chunks ? tx(" · {0} fragmentos nuevos", data.chunks) : "";
+        pill.textContent = tx("Actualizando {0} de {1}{2}{3}", data.files.toLocaleString(i18nLocale()), data.total.toLocaleString(i18nLocale()), chunks, device);
       } else if (name === "done") {
         const changes = [
           data.added && `${data.added} ${data.added === 1 ? "nueva" : "nuevas"}`,
           data.updated && `${data.updated} ${data.updated === 1 ? "modificada" : "modificadas"}`,
           data.deleted && `${data.deleted} ${data.deleted === 1 ? "eliminada" : "eliminadas"}`,
         ].filter(Boolean);
-        pill.textContent = changes.length ? `${changes.join(" · ")} · ${data.seconds} s` : "Tu biblioteca ya estaba al día";
-        if (data.failed.length) pill.title = `No se pudieron leer: ${data.failed.join(", ")}`;
+        pill.textContent = changes.length ? `${changes.join(" · ")} · ${data.seconds} s` : tx("Tu biblioteca ya estaba al día");
+        if (data.failed.length) pill.title = tx("No se pudieron leer: {0}", data.failed.join(", "));
       }
     });
     loadFolders();
     setTimeout(loadStatus, 6000); // leave the summary visible for a moment
   } catch (error) {
-    pill.textContent = "No se pudo actualizar";
+    pill.textContent = tx("No se pudo actualizar");
     pill.classList.add("off");
     pill.title = error.message;
     setTimeout(loadStatus, 8000);
@@ -360,7 +360,7 @@ async function loadFolders() {
 function renderScopeOptions() {
   const select = $("set-scope");
   const top = app.folders.filter((f) => !f.path.includes("/"));
-  const options = [el("option", null, "Toda la biblioteca")];
+  const options = [el("option", null, tx("Toda la biblioteca"))];
   options[0].value = "";
   const scope = app.settings.scope;
   if (scope && !top.some((f) => f.path === scope)) top.unshift({ path: scope, documents: null });
@@ -400,7 +400,7 @@ function parseCommands(raw) {
         })
         .sort((a, b) => b.path.length - a.path.length)[0];
       if (!match) {
-        result.error = "No encuentro esa carpeta. Escribe su ruta desde la raíz, por ejemplo «/en Data Science».";
+        result.error = tx("No encuentro esa carpeta. Escribe su ruta desde la raíz, por ejemplo «/en Data Science».");
         return { ...result, text: "" };
       }
       result.scope = match.path;
@@ -419,10 +419,10 @@ function citeButton(turn, number, known) {
   if (!known.has(number)) {
     button.classList.add("invalid");
     button.disabled = true;
-    button.title = "Cita a un fragmento que no existe";
+    button.title = tx("Cita a un fragmento que no existe");
     return button;
   }
-  button.setAttribute("aria-label", `Ver fuente ${number}`);
+  button.setAttribute("aria-label", tx("Ver fuente {0}", number));
   const selected = app.selection && app.selection.turn === turn.id;
   const index = turn.fragments.findIndex((f) => f.number === number);
   button.setAttribute("aria-pressed", String(Boolean(selected && app.selection.index === index)));
@@ -447,14 +447,14 @@ function answerNode(turn) {
 function gapNote(gap) {
   const box = el("p", "gap-note");
   if (gap.undone) {
-    box.append(el("span", "muted", "No se apuntó como tema pendiente."));
+    box.append(el("span", "muted", tx("No se apuntó como tema pendiente.")));
     return box;
   }
-  const times = gap.count > 1 ? ` · preguntado ${gap.count} veces` : "";
-  box.append(el("span", null, `Apuntado como tema pendiente: «${gap.topic}»${times}. `));
-  const guides = el("a", null, "Ver en Guías");
+  const times = gap.count > 1 ? tx(" · preguntado {0} veces", gap.count) : "";
+  box.append(el("span", null, tx("Apuntado como tema pendiente: «{0}»{1}. ", gap.topic, times)));
+  const guides = el("a", null, tx("Ver en Guías"));
   guides.href = "#/guias";
-  const undo = el("button", "link-button", "Deshacer");
+  const undo = el("button", "link-button", tx("Deshacer"));
   undo.type = "button";
   undo.addEventListener("click", async () => {
     const response = await postJSON("/api/gaps/undo", { event_id: gap.event_id });
@@ -469,11 +469,11 @@ function gapNote(gap) {
 function flagsNode(done) {
   const flags = el("div", "flags");
   const add = (kind, text) => flags.append(el("span", `flag ${kind}`, text));
-  if (done.abstained) add("warn", "Tus notas no contienen la respuesta.");
-  else if (done.grounded) add("ok", "Cada cita apunta a un fragmento real.");
-  else add("bad", "Respuesta sin citas válidas: no la des por buena sin revisar las fuentes.");
-  if (done.invalid.length) add("bad", `Cita fragmentos que no existen: ${done.invalid.join(", ")}`);
-  if (done.placeholders) add("bad", `${done.placeholders} citas sin número.`);
+  if (done.abstained) add("warn", tx("Tus notas no contienen la respuesta."));
+  else if (done.grounded) add("ok", tx("Cada cita apunta a un fragmento real."));
+  else add("bad", tx("Respuesta sin citas válidas: no la des por buena sin revisar las fuentes."));
+  if (done.invalid.length) add("bad", tx("Cita fragmentos que no existen: {0}", done.invalid.join(", ")));
+  if (done.placeholders) add("bad", tx("{0} citas sin número.", done.placeholders));
   return flags;
 }
 
@@ -491,16 +491,16 @@ function resultRow(turn, hit, index, compact = false) {
   const main = el("button", "result-main");
   main.type = "button";
   main.append(el("strong", null, hit.sections.at(-1) || hit.guide));
-  main.append(el("span", null, compact ? `líneas ${hit.lines[0]}–${hit.lines[1]}` : `${hit.guide} · líneas ${hit.lines[0]}–${hit.lines[1]}`));
+  main.append(el("span", null, compact ? tx("líneas {0}–{1}", hit.lines[0], hit.lines[1]) : tx("{0} · líneas {1}–{2}", hit.guide, hit.lines[0], hit.lines[1])));
   main.addEventListener("click", () => selectSource(turn, index));
   li.append(main);
   const read = readLink(hit.doc_path, hit.lines[0], null);
-  read.setAttribute("aria-label", `Leer ${hit.guide} aquí`);
+  read.setAttribute("aria-label", tx("Leer {0} aquí", hit.guide));
   li.append(read);
   if (hit.open_url && !compact) {
-    const open = el("a", null, "Abrir");
+    const open = el("a", null, tx("Abrir"));
     open.href = hit.open_url;
-    open.setAttribute("aria-label", `Abrir ${hit.guide} en Obsidian`);
+    open.setAttribute("aria-label", tx("Abrir {0} en Obsidian", hit.guide));
     li.append(open);
   }
   return li;
@@ -536,7 +536,7 @@ function resultsNode(turn) {
     item.append(inner);
     if (rest.length > 2) {
       const more = el("details", "result-more");
-      more.append(el("summary", null, `${rest.length - 2} ${rest.length - 2 === 1 ? "sección más" : "secciones más"} en esta nota`));
+      more.append(el("summary", null, tx("{0} {1} en esta nota", rest.length - 2, rest.length - 2 === 1 ? tx("sección más") : tx("secciones más"))));
       const extra = el("ul", "result-subs");
       for (const [hit, index] of rest.slice(2)) extra.append(resultRow(turn, hit, index, true));
       more.append(extra);
@@ -549,19 +549,19 @@ function resultsNode(turn) {
 
 function followupsNode(turn) {
   const row = el("div", "followups");
-  const where = el("button", "chip", "¿Dónde más aparece?");
+  const where = el("button", "chip", tx("¿Dónde más aparece?"));
   where.type = "button";
   where.addEventListener("click", () => send(turn.question, { mode: "find", scope: turn.scope }));
-  const practice = el("a", "chip", "Practicar este tema");
+  const practice = el("a", "chip", tx("Practicar este tema"));
   practice.href = `#/practicar?tema=${encodeURIComponent(turn.question)}`;
-  const copy = el("button", "chip", "Copiar");
+  const copy = el("button", "chip", tx("Copiar"));
   copy.type = "button";
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(turn.answer);
-      copy.textContent = "Copiado";
+      copy.textContent = tx("Copiado");
     } catch {
-      copy.textContent = "No se pudo copiar";
+      copy.textContent = tx("No se pudo copiar");
     }
   });
   row.append(where, practice, copy);
@@ -573,25 +573,25 @@ function planNode(turn) {
   const plan = turn.plan;
   const box = el("details", "plan-note");
   const same = plan.question.trim().toLowerCase() === turn.question.trim().toLowerCase();
-  box.append(el("summary", null, same ? "Cómo lo busqué" : `Entendí: «${plan.question}»`));
+  box.append(el("summary", null, same ? tx("Cómo lo busqué") : tx("Entendí: «{0}»", plan.question)));
   const searches = [plan.question, ...plan.searches];
-  box.append(el("p", "small muted", `Búsquedas: ${searches.join(" · ")}${plan.relate ? " · relacionando áreas" : ""}`));
+  box.append(el("p", "small muted", tx("Búsquedas: {0}{1}", searches.join(" · "), plan.relate ? tx(" · relacionando áreas") : "")));
   return box;
 }
 
 function offtopicNode(turn) {
   const box = el("div", "offtopic");
-  const topic = turn.offtopic.frame ? ` distinto de «${turn.offtopic.frame}»` : "";
-  box.append(el("p", null, `Esto parece otro tema${topic}. Para no mezclarlos, conviene abrir una conversación nueva.`));
+  const topic = turn.offtopic.frame ? tx(" distinto de «{0}»", turn.offtopic.frame) : "";
+  box.append(el("p", null, tx("Esto parece otro tema{0}. Para no mezclarlos, conviene abrir una conversación nueva.", topic)));
   const row = el("div", "row");
-  const fresh = el("button", "btn-primary", "Nueva conversación con esta pregunta");
+  const fresh = el("button", "btn-primary", tx("Nueva conversación con esta pregunta"));
   fresh.type = "button";
   fresh.addEventListener("click", () => {
     app.thread = app.thread.filter((t) => t !== turn);
     startNewConversation();
     send(turn.question, { mode: turn.mode, scope: turn.scope });
   });
-  const here = el("button", "btn", "Responder aquí");
+  const here = el("button", "btn", tx("Responder aquí"));
   here.type = "button";
   here.addEventListener("click", () => {
     app.thread = app.thread.filter((t) => t !== turn);
@@ -613,32 +613,32 @@ function turnNode(turn) {
   const meta = el("div", "reply-meta");
   const explain = turn.mode === "explain";
   const levelLabel = explain && turn.level ? ` · ${LEVEL_LABELS[turn.level] || turn.level}` : "";
-  meta.append(el("span", `tag ${explain ? "explain" : ""}`, explain ? `Explicación${levelLabel}` : "Ubicación"));
+  meta.append(el("span", `tag ${explain ? "explain" : ""}`, explain ? tx("Explicación{0}", levelLabel) : tx("Ubicación")));
   reply.append(meta);
 
   if (turn.status === "error") {
     reply.append(el("p", "error", turn.error));
   } else if (!explain) {
-    if (turn.status === "pending") meta.append(document.createTextNode("Buscando…"));
+    if (turn.status === "pending") meta.append(document.createTextNode(tx("Buscando…")));
     else {
       const groups = resultGroups(turn);
-      const found = groups ? `${groups.length} ${groups.length === 1 ? "nota" : "notas"} · ${turn.hits.length} secciones` : `${turn.hits.length} secciones`;
+      const found = groups ? tx("{0} {1} · {2} secciones", groups.length, groups.length === 1 ? tx("nota") : tx("notas"), turn.hits.length) : tx("{0} secciones", turn.hits.length);
       meta.append(document.createTextNode(`${found} · ${(turn.ms / 1000).toFixed(1)} s${scopeLabel(turn.scope)}`));
-      reply.append(turn.hits.length ? resultsNode(turn) : el("p", "muted", "No encontré nada sobre esto."));
+      reply.append(turn.hits.length ? resultsNode(turn) : el("p", "muted", tx("No encontré nada sobre esto.")));
     }
   } else if (turn.offtopic) {
     reply.append(offtopicNode(turn));
   } else {
     const n = (turn.fragments || []).length;
-    if (!turn.fragments) meta.append(document.createTextNode(turn.planning ? "Entendiendo tu pregunta…" : "Buscando en tus notas…"));
-    else if (!turn.done) meta.append(document.createTextNode(`Redactando con ${n} fragmentos…`));
+    if (!turn.fragments) meta.append(document.createTextNode(turn.planning ? tx("Entendiendo tu pregunta…") : tx("Buscando en tus notas…")));
+    else if (!turn.done) meta.append(document.createTextNode(tx("Redactando con {0} fragmentos…", n)));
     else {
-      const strategy = turn.strategy === "map-reduce" ? " · por guía (experimental)" : "";
-      meta.append(document.createTextNode(`Basada en ${n} fragmentos · ${turn.done.seconds} s${scopeLabel(turn.scope)}${strategy}`));
+      const strategy = turn.strategy === "map-reduce" ? tx(" · por guía (experimental)") : "";
+      meta.append(document.createTextNode(tx("Basada en {0} fragmentos · {1} s{2}{3}", n, turn.done.seconds, scopeLabel(turn.scope), strategy)));
     }
     if (turn.plan) reply.append(planNode(turn));
     if (turn.plan && turn.plan.relation === "nuevo") {
-      reply.append(el("p", "small muted", "Respondida fuera del tema de la conversación; para seguir con este tema, abre una conversación nueva."));
+      reply.append(el("p", "small muted", tx("Respondida fuera del tema de la conversación; para seguir con este tema, abre una conversación nueva.")));
     }
     if (turn.answer) reply.append(answerNode(turn));
     if (turn.done) {
@@ -686,12 +686,12 @@ function showSource() {
   $("source-empty").hidden = Boolean(item);
   $("source-view").hidden = !item;
   if (!item) return;
-  const label = turn.mode === "explain" ? "Fuente" : "Resultado";
+  const label = turn.mode === "explain" ? tx("Fuente") : tx("Resultado");
   const number = turn.mode === "explain" ? item.number : app.selection.index + 1;
   $("source-count").textContent = `${label} ${number} de ${items.length}`;
   $("source-section").textContent = item.sections.at(-1) || item.guide;
   const trail = [item.guide, ...item.sections.slice(0, -1)].join(" › ");
-  $("source-guide").textContent = `${trail} · líneas ${item.lines[0]}–${item.lines[1]}`;
+  $("source-guide").textContent = tx("{0} · líneas {1}–{2}", trail, item.lines[0], item.lines[1]);
   $("source-text").textContent = item.text;
   $("source-text").scrollTop = 0;
   $("source-open").hidden = !item.open_url;
@@ -732,7 +732,7 @@ async function runExplain(turn) {
   if (!app.llmRunning) {
     await loadStatus();
     if (!app.llmRunning) {
-      throw new Error("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1, o usa «Solo ubicar».");
+      throw new Error(tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1, o usa «Solo ubicar»."));
     }
   }
   turn.answer = "";
@@ -815,6 +815,7 @@ function formatWhen(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  if (I18N.lang === "en") return `${d.toLocaleDateString("en", { month: "short", day: "numeric" })}, ${time}`;
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]}, ${time}`;
 }
 
@@ -898,7 +899,7 @@ async function loadHistory() {
     button.type = "button";
     button.dataset.id = String(c.id);
     button.append(el("strong", null, c.title));
-    const count = `${c.turns} ${c.turns === 1 ? "mensaje" : "mensajes"}`;
+    const count = `${c.turns} ${c.turns === 1 ? tx("mensaje") : tx("mensajes")}`;
     button.append(el("span", null, `${formatWhen(c.updated)} · ${count}`));
     if (c.snippet) button.append(el("span", "history-snippet", c.snippet));
     button.addEventListener("click", () => openConversation(c.id));
@@ -909,8 +910,8 @@ async function loadHistory() {
   $("history-list").replaceChildren(...items);
   $("history-empty").hidden = items.length > 0;
   $("history-empty").textContent = query
-    ? "Ninguna conversación contiene esas palabras."
-    : "Tus conversaciones aparecerán aquí.";
+    ? tx("Ninguna conversación contiene esas palabras.")
+    : tx("Tus conversaciones aparecerán aquí.");
   markActiveConversation();
   renderConversationBar();
 }
@@ -1038,13 +1039,13 @@ function bindHistory() {
       link.download = data.filename;
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-      conversationStatus(`Exportada a ${data.path}`);
+      conversationStatus(tx("Exportada a {0}", data.path));
     } catch (error) {
       conversationStatus(error.message);
     }
   });
   $("conversation-delete").addEventListener("click", async () => {
-    if (!confirm(`¿Borrar «${app.title}»? No se puede deshacer.`)) return;
+    if (!confirm(tx("¿Borrar «{0}»? No se puede deshacer.", app.title))) return;
     try {
       await postConversation("/api/conversations/delete", { id: app.conversationId });
       startNewConversation();

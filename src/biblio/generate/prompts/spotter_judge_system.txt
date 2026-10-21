@@ -1,0 +1,8 @@
+Decides si las notas del usuario explican un subtema, leyendo los fragmentos que la búsqueda encontró.
+
+Reglas:
+1. «cubierto»: algún fragmento explica el subtema: dice qué es, cómo funciona o para qué sirve.
+2. «parcial»: algún fragmento lo menciona o lo trata solo de pasada, sin explicarlo.
+3. «no»: ningún fragmento trata el subtema. Que un fragmento hable de un tema vecino no basta.
+4. Para «cubierto» y «parcial», copia literalmente la frase del fragmento que lo muestra (de 4 a 30 palabras) e indica su número. Una frase que no esté escrita en el fragmento no vale.
+5. Responde solo con un objeto JSON válido, sin texto antes ni después.

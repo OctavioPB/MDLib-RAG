@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
   <script src="/static/theme.js"></script>
   <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/i18n-en.js" defer></script>
+  <script src="/static/i18n.js" defer></script>
   <script src="/static/app.js" defer></script>
   <script src="/static/guias.js" defer></script>
   <script src="/static/practicar.js" defer></script>
@@ -19,6 +21,7 @@
   <script src="/static/devices.js" defer></script>
   <script src="/static/settings.js" defer></script>
   <script src="/static/mapas.js" defer></script>
+  <script src="/static/spotter.js" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -203,6 +206,12 @@
             <span class="hub-tile-text">Elige una carpeta de tu temario y te propongo por dónde empezar y cómo seguir.</span>
             <span class="hub-tile-go">Elegir carpeta →</span>
           </button>
+          <button id="tile-spotter" class="hub-tile" type="button">
+            <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m20 20-4.8-4.8"></path><path d="M8 10.5h1.5M11.5 10.5H13" stroke-dasharray="1 2"></path></svg>
+            <strong>Gap Spotter</strong>
+            <span class="hub-tile-text">Dime un tema: busco en tus notas los subtemas que no explican y te propongo de 5 a 10 guías para completarlo.</span>
+            <span class="hub-tile-go">Buscar huecos →</span>
+          </button>
           <button id="tile-write" class="hub-tile" type="button">
             <svg aria-hidden="true" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="m13 7 4 4"></path></svg>
             <strong>Escribir una guía</strong>
@@ -216,6 +225,38 @@
         <p class="small muted">Lo que preguntaste y tus notas no tenían, y los mapas que salieron pobres.</p>
         <ul id="gap-list" class="plan-list"></ul>
       </section>
+    </div>
+
+    <div id="guias-spotter" class="practice-sub spotter-screen guias-pad" hidden>
+      <button class="back-link" type="button" data-guias-back>← Guías</button>
+      <section class="practice-card spotter-card" aria-labelledby="spotter-title">
+        <h1 id="spotter-title">Gap Spotter</h1>
+        <p class="muted">Escribe un tema. Leo lo que tus notas dicen de él, busco los subtemas que no explican y te propongo guías para completarlo. Tarda uno o dos minutos.</p>
+        <form id="spotter-form" class="feynman-form" autocomplete="off">
+          <input id="spotter-topic" type="text" maxlength="200" placeholder="Tema, p. ej. regresión logística"
+            aria-label="Tema que quieres completar">
+          <button id="spotter-go" class="btn-primary" type="submit">Buscar huecos</button>
+        </form>
+        <div class="row spotter-history-row">
+          <label for="spotter-history" class="small muted">Búsquedas anteriores</label>
+          <select id="spotter-history"><option value="">Elige una…</option></select>
+          <button id="spotter-delete" class="btn-ghost danger" type="button" hidden>Borrar esta búsqueda</button>
+        </div>
+        <p id="spotter-error" class="error" hidden></p>
+        <p id="spotter-status" class="small muted" role="status"></p>
+      </section>
+      <div id="spotter-result" class="spotter-result" hidden>
+        <section class="practice-card" aria-labelledby="spotter-found-title">
+          <h2 id="spotter-found-title">Lo que encontré</h2>
+          <p id="spotter-summary"></p>
+          <p class="small muted">«Mencionado sin explicar» sale de tus notas: aparece con la frase donde se menciona. «Propuesto por el modelo» sale de un temario que propone el modelo; revísalo. «No encontré» no prueba que falte: la búsqueda puede no haber dado con una sección.</p>
+          <div id="spotter-coverage" class="spotter-coverage"></div>
+        </section>
+        <section class="spotter-guides-wrap" aria-labelledby="spotter-guides-title">
+          <h2 id="spotter-guides-title">Guías sugeridas</h2>
+          <ol id="spotter-guides" class="spotter-guides"></ol>
+        </section>
+      </div>
     </div>
 
     <div id="guias-plan" class="practice-sub plan-screen guias-pad" hidden>
@@ -685,6 +726,12 @@
         <label title="Como el sistema"><input type="radio" name="theme" value="system" aria-label="Tema del sistema"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg>Sistema</span></label>
         <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg>Oscuro</span></label>
       </div>
+      <h4 id="settings-lang" class="settings-sub">Idioma</h4>
+      <div class="segmented settings-lang" role="radiogroup" aria-labelledby="settings-lang">
+        <label lang="es"><input type="radio" name="lang" value="es"><span>Español</span></label>
+        <label lang="en"><input type="radio" name="lang" value="en"><span>English</span></label>
+      </div>
+      <p class="small muted">Cambia los controles y textos de la app. Las respuestas, los mapas y los cuestionarios se generan en español.</p>
     </section>
     <section class="settings-group" aria-labelledby="settings-library">
       <h3 id="settings-library">Biblioteca</h3>

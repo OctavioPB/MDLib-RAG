@@ -31,11 +31,11 @@ function libraryNoteItem(note, showPath) {
   link.href = readerHref(note.path);
   li.append(link);
   if (note.read) {
-    const mark = el("span", "library-read", "✓ leída");
-    mark.title = "Marcada como leída";
+    const mark = el("span", "library-read", tx("✓ leída"));
+    mark.title = tx("Marcada como leída");
     li.append(mark);
   }
-  if (showPath) li.append(el("span", "library-path", note.path.split("/").slice(0, -1).join(" › ") || "Raíz"));
+  if (showPath) li.append(el("span", "library-path", note.path.split("/").slice(0, -1).join(" › ") || tx("Raíz")));
   return li;
 }
 
@@ -69,7 +69,7 @@ function libraryLevel(folder) {
 function renderLibrary() {
   const query = libraryFold($("library-filter").value.trim());
   const tree = $("library-tree");
-  $("library-count").textContent = `${library.notes.length} notas en tu biblioteca`;
+  $("library-count").textContent = tx("{0} notas en tu biblioteca", library.notes.length);
   renderLibraryRecent(!query);
   if (!query) {
     $("library-empty").hidden = true;
@@ -91,7 +91,7 @@ function renderLibrary() {
   const list = el("ul", "library-list library-results");
   list.append(...found.slice(0, 200).map((n) => libraryNoteItem(n, true)));
   const nodes = [list];
-  if (found.length > 200) nodes.push(el("p", "small muted", `Y ${found.length - 200} más: escribe algo más concreto.`));
+  if (found.length > 200) nodes.push(el("p", "small muted", tx("Y {0} más: escribe algo más concreto.", found.length - 200)));
   tree.replaceChildren(...nodes);
 }
 
@@ -107,7 +107,7 @@ async function loadLibrary() {
     const data = await (await fetch("/api/notes")).json();
     library.notes = data.notes;
   } catch {
-    $("library-count").textContent = "No se pudo leer la lista de notas.";
+    $("library-count").textContent = tx("No se pudo leer la lista de notas.");
     return;
   }
   const signature = library.notes.map((n) => `${n.path}${n.read ? "+" : ""}`).join("|");

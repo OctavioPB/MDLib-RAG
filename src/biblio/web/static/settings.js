@@ -20,6 +20,14 @@ function bindSettingsPanel() {
   bindLibraryLocation();
   bindAppReset();
   $("llm-toggle").addEventListener("click", settingsLlmToggle);
+  // the interface's language (ADR-046): kept in this browser; the page reloads in it
+  for (const radio of document.querySelectorAll('input[name="lang"]')) {
+    radio.checked = radio.value === I18N.lang;
+    radio.addEventListener("change", () => {
+      store.set("biblio.lang", radio.value);
+      location.reload();
+    });
+  }
 }
 
 // --- where the library is (ADR-039): shown on this PC only ----------------------------------
@@ -67,14 +75,14 @@ async function liblocBrowse(path) {
   }
   const head = el("div", "libloc-browser-head");
   if (data.parent !== null) {
-    const up = el("button", "btn-ghost", "↑ Subir");
+    const up = el("button", "btn-ghost", tx("↑ Subir"));
     up.type = "button";
     up.addEventListener("click", () => liblocBrowse(data.parent));
     head.append(up);
   }
-  head.append(el("strong", null, data.path || "Unidades"));
+  head.append(el("strong", null, data.path || tx("Unidades")));
   if (data.path) {
-    const use = el("button", "btn-primary", "Usar esta carpeta");
+    const use = el("button", "btn-primary", tx("Usar esta carpeta"));
     use.type = "button";
     use.addEventListener("click", () => {
       $("libloc-input").value = data.path;
@@ -96,8 +104,8 @@ async function liblocBrowse(path) {
     list.append(li);
   }
   const parts = [head, list];
-  if (!data.folders.length) parts.push(el("p", "small muted", "No hay carpetas dentro."));
-  if (data.truncated) parts.push(el("p", "small muted", "Hay más carpetas: escribe la ruta para llegar a ellas."));
+  if (!data.folders.length) parts.push(el("p", "small muted", tx("No hay carpetas dentro.")));
+  if (data.truncated) parts.push(el("p", "small muted", tx("Hay más carpetas: escribe la ruta para llegar a ellas.")));
   box.replaceChildren(...parts);
 }
 
@@ -110,7 +118,7 @@ async function liblocCheck() {
   const box = $("libloc-result");
   if (!path || libloc.busy) return;
   box.hidden = false;
-  box.replaceChildren(el("p", "muted", "Comprobando las notas de esa carpeta…"));
+  box.replaceChildren(el("p", "muted", tx("Comprobando las notas de esa carpeta…")));
   let data;
   try {
     const response = await postJSON("/api/library/check", { path });
@@ -125,16 +133,16 @@ async function liblocCheck() {
   if (data.plan === "invalid") {
     parts.push(el("p", "error", `${data.path}: ${data.reason}`));
   } else if (data.plan === "same") {
-    parts.push(el("p", null, "Esa carpeta ya es tu biblioteca."));
+    parts.push(el("p", null, tx("Esa carpeta ya es tu biblioteca.")));
   } else {
     const relocate = data.plan === "relocate";
     parts.push(el("p", null, relocate
-      ? `La misma biblioteca en otro sitio: ${data.matching} de ${data.notes} notas coinciden con el índice. Se reutiliza: solo se procesan las notas que cambiaron, unos segundos.`
-      : `Otra biblioteca: ${data.notes} notas, ${data.matching} de ellas ya en el índice. Hay que indexarla entera: ~${liblocMinutes(data.minutes_gpu)} en la GPU, o ~${liblocMinutes(data.minutes_cpu)} en CPU mientras el modelo de lenguaje esté encendido${app.llmRunning ? " (lo está ahora)" : ""}.`));
+      ? tx("La misma biblioteca en otro sitio: {0} de {1} notas coinciden con el índice. Se reutiliza: solo se procesan las notas que cambiaron, unos segundos.", data.matching, data.notes)
+      : tx("Otra biblioteca: {0} notas, {1} de ellas ya en el índice. Hay que indexarla entera: ~{2} en la GPU, o ~{3} en CPU mientras el modelo de lenguaje esté encendido{4}.", data.notes, data.matching, liblocMinutes(data.minutes_gpu), liblocMinutes(data.minutes_cpu), app.llmRunning ? tx(" (lo está ahora)") : "")));
     if (!relocate) {
-      parts.push(el("p", "small muted", "Tu biblioteca actual sigue funcionando hasta que termine. El historial de práctica, los mapas, los diccionarios y los planes se refieren a notas de la biblioteca anterior."));
+      parts.push(el("p", "small muted", tx("Tu biblioteca actual sigue funcionando hasta que termine. El historial de práctica, los mapas, los diccionarios y los planes se refieren a notas de la biblioteca anterior.")));
     }
-    const go = el("button", "btn-primary", relocate ? "Cambiar a esta carpeta" : "Indexar y cambiar");
+    const go = el("button", "btn-primary", relocate ? tx("Cambiar a esta carpeta") : tx("Indexar y cambiar"));
     go.type = "button";
     go.addEventListener("click", () => liblocApply(data.path));
     parts.push(go);
@@ -146,26 +154,26 @@ async function liblocApply(path) {
   if (libloc.busy) return;
   libloc.busy = true;
   const box = $("libloc-result");
-  const status = el("p", null, "Preparando…");
+  const status = el("p", null, tx("Preparando…"));
   box.replaceChildren(status);
   try {
     await streamEvents("/api/library/set", { path }, (name, data) => {
       if (name === "start") {
-        status.textContent = `${data.full ? "Indexando" : "Revisando"} ${data.files.toLocaleString("es")} notas${data.device === "cpu" ? " en CPU" : ""}…`;
+        status.textContent = tx("{0} {1} notas{2}…", data.full ? tx("Indexando") : tx("Revisando"), data.files.toLocaleString(i18nLocale()), data.device === "cpu" ? tx(" en CPU") : "");
       } else if (name === "progress") {
-        status.textContent = `${data.files.toLocaleString("es")} de ${data.total.toLocaleString("es")} notas · ${data.chunks.toLocaleString("es")} fragmentos nuevos`;
+        status.textContent = tx("{0} de {1} notas · {2} fragmentos nuevos", data.files.toLocaleString(i18nLocale()), data.total.toLocaleString(i18nLocale()), data.chunks.toLocaleString(i18nLocale()));
       } else if (name === "done") {
-        status.textContent = `Índice listo: ${data.documents.toLocaleString("es")} notas (${data.added} nuevas, ${data.updated} cambiadas, ${data.deleted} quitadas) en ${data.seconds} s.`;
+        status.textContent = tx("Índice listo: {0} notas ({1} nuevas, {2} cambiadas, {3} quitadas) en {4} s.", data.documents.toLocaleString(i18nLocale()), data.added, data.updated, data.deleted, data.seconds);
       } else if (name === "library") {
         $("libloc-path").textContent = data.path;
-        box.append(el("p", "ok", `Tu biblioteca ahora es ${data.path}.`));
+        box.append(el("p", "ok", tx("Tu biblioteca ahora es {0}.", data.path)));
       }
     });
     library.signature = ""; // the Biblioteca page lists the new notes next time it is shown
     if (currentPage() === "biblioteca") loadLibrary();
     loadStatus();
   } catch (error) {
-    box.append(el("p", "error", `No se cambió la biblioteca: ${error.message}`));
+    box.append(el("p", "error", tx("No se cambió la biblioteca: {0}", error.message)));
   } finally {
     libloc.busy = false;
   }
@@ -184,10 +192,10 @@ function bindLibraryLocation() {
 // --- «Reset»: the app's memory, never the library (ADR-040) --------------------------------------
 
 const RESET_LABELS = {
-  conversations: ["conversación", "conversaciones"],
-  maps: ["mapa o diagrama", "mapas y diagramas"],
-  practice: ["pregunta de práctica (con sus repasos)", "preguntas de práctica (con sus repasos)"],
-  drafts: ["archivo de guías y exportaciones", "archivos de guías y exportaciones"],
+  conversations: [tx("conversación"), tx("conversaciones")],
+  maps: [tx("mapa o diagrama"), tx("mapas y diagramas")],
+  practice: [tx("pregunta de práctica (con sus repasos)"), tx("preguntas de práctica (con sus repasos)")],
+  drafts: [tx("archivo de guías y exportaciones"), tx("archivos de guías y exportaciones")],
 };
 
 async function openResetDialog() {
@@ -195,7 +203,7 @@ async function openResetDialog() {
   $("reset-error").hidden = true;
   $("reset-confirm").disabled = false;
   $("reset-confirm").hidden = false;
-  $("reset-cancel").textContent = "Cancelar";
+  $("reset-cancel").textContent = tx("Cancelar");
   $("reset-body").hidden = false;
   try {
     const response = await fetch("/api/reset");
@@ -203,8 +211,8 @@ async function openResetDialog() {
     const items = (await response.json()).items;
     $("reset-items").replaceChildren(...items.map((i) => {
       const [one, many] = RESET_LABELS[i.key];
-      return el("li", null, `${i.count.toLocaleString("es")} ${i.count === 1 ? one : many}`);
-    }), el("li", null, "planes de estudio, notas marcadas como leídas, temas pendientes y diccionarios"));
+      return el("li", null, `${i.count.toLocaleString(i18nLocale())} ${i.count === 1 ? one : many}`);
+    }), el("li", null, tx("planes de estudio, notas marcadas como leídas, temas pendientes y diccionarios")));
   } catch (error) {
     $("reset-items").replaceChildren(el("li", "error", error.message));
   }
@@ -221,13 +229,13 @@ async function confirmReset() {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith("biblio.") && key !== "biblio.theme") localStorage.removeItem(key); // keep the look
     }
-    $("reset-title").textContent = "Listo";
+    $("reset-title").textContent = tx("Listo");
     $("reset-body").replaceChildren(
-      el("p", null, "La app empieza de cero. Tu biblioteca y su índice siguen igual."),
-      el("p", "small muted", `La memoria anterior quedó en ${data.backup}.`),
+      el("p", null, tx("La app empieza de cero. Tu biblioteca y su índice siguen igual.")),
+      el("p", "small muted", tx("La memoria anterior quedó en {0}.", data.backup)),
     );
     $("reset-confirm").hidden = true;
-    $("reset-cancel").textContent = "Empezar";
+    $("reset-cancel").textContent = tx("Empezar");
     $("reset-cancel").onclick = () => { location.hash = "#/conversar"; location.reload(); };
   } catch (error) {
     $("reset-error").textContent = error.message;
@@ -262,23 +270,23 @@ function settingsLlmRender() {
   const toggle = $("llm-toggle");
   $("settings-llm").classList.toggle("is-on", Boolean(c && c.running));
   if (!c || !c.available) {
-    $("llm-state-text").textContent = c && c.running ? "Encendido" : "Apagado";
+    $("llm-state-text").textContent = c && c.running ? tx("Encendido") : tx("Apagado");
     toggle.hidden = true;
-    $("llm-help").textContent = "Esta sesión no controla el modelo: ábrela con Biblioteca.cmd o biblio start.";
+    $("llm-help").textContent = tx("Esta sesión no controla el modelo: ábrela con Biblioteca.cmd o biblio start.");
     return;
   }
   if (c.running) {
-    $("llm-state-text").textContent = c.owned ? "Encendido" : "Encendido (Ollama abierto fuera de la app)";
+    $("llm-state-text").textContent = c.owned ? tx("Encendido") : tx("Encendido (Ollama abierto fuera de la app)");
     toggle.hidden = false;
-    toggle.textContent = "Apagar el modelo";
-    $("llm-help").textContent = "Libera la memoria de la GPU. Sin el modelo puedes buscar en tus notas, pero no conversar, crear mapas ni practicar.";
+    toggle.textContent = tx("Apagar el modelo");
+    $("llm-help").textContent = tx("Libera la memoria de la GPU. Sin el modelo puedes buscar en tus notas, pero no conversar, crear mapas ni practicar.");
   } else {
-    $("llm-state-text").textContent = "Apagado";
+    $("llm-state-text").textContent = tx("Apagado");
     toggle.hidden = !c.can_start;
-    toggle.textContent = "Encender el modelo";
+    toggle.textContent = tx("Encender el modelo");
     $("llm-help").textContent = c.can_start
-      ? "Tarda unos segundos. Con el modelo encendido, la búsqueda deja la GPU al modelo."
-      : "Ollama no está instalado en este PC.";
+      ? tx("Tarda unos segundos. Con el modelo encendido, la búsqueda deja la GPU al modelo.")
+      : tx("Ollama no está instalado en este PC.");
   }
   toggle.disabled = llmSwitch.busy;
 }
@@ -291,7 +299,7 @@ async function settingsLlmToggle() {
   const result = $("llm-result");
   result.hidden = false;
   result.classList.remove("error");
-  result.textContent = on ? "Encendiendo el modelo…" : "Apagando el modelo…";
+  result.textContent = on ? tx("Encendiendo el modelo…") : tx("Apagando el modelo…");
   settingsLlmRender();
   try {
     const response = await postJSON(on ? "/api/llm/start" : "/api/llm/stop", {});
@@ -299,10 +307,10 @@ async function settingsLlmToggle() {
     const data = await response.json();
     llmSwitch.control = data.control;
     result.textContent = {
-      started: "Modelo encendido.",
-      stopped: "Modelo apagado: la memoria de la GPU quedó libre.",
-      unloaded: "El modelo salió de la memoria y la GPU quedó libre. Ollama se abrió fuera de la app y sigue abierto: volverá a cargar el modelo con la próxima pregunta.",
-    }[data.result] || "Listo.";
+      started: tx("Modelo encendido."),
+      stopped: tx("Modelo apagado: la memoria de la GPU quedó libre."),
+      unloaded: tx("El modelo salió de la memoria y la GPU quedó libre. Ollama se abrió fuera de la app y sigue abierto: volverá a cargar el modelo con la próxima pregunta."),
+    }[data.result] || tx("Listo.");
   } catch (error) {
     result.classList.add("error");
     result.textContent = error.message;

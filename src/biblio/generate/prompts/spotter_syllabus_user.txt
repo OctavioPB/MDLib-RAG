@@ -1,0 +1,9 @@
+Tema: {topic}
+
+Secciones que el usuario tiene en sus notas sobre este tema:
+{headings}
+
+Propón {size} subtemas para un estudio completo del tema.
+
+Formato:
+{{"subtemas": [{{"nombre": "...", "descripcion": "..."}}]}}

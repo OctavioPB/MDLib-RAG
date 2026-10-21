@@ -217,6 +217,28 @@ class DictionaryConfig:
 
 
 @dataclass(frozen=True)
+class SpotterConfig:  # «Gap Spotter» in Guías (ADR-047)
+    sections: int
+    max_fragment_chars: int
+    batch: int
+    terms_per_batch: int
+    unexplained_max: int
+    syllabus_size: int
+    judge_hits: int
+    guides_min: int
+    guides_max: int
+    questions_per_guide: int
+    name_max_chars: int
+    quote_max_chars: int
+    quote_run_words: int
+    extract_max_tokens: int
+    syllabus_max_tokens: int
+    judge_max_tokens: int
+    guides_max_tokens: int
+    history_limit: int
+
+
+@dataclass(frozen=True)
 class MapsConfig:
     fragments: int
     max_fragment_chars: int
@@ -314,6 +336,7 @@ class Config:
     reader: ReaderConfig
     tutor: TutorConfig
     dictionary: DictionaryConfig
+    spotter: SpotterConfig
     maps: MapsConfig
     diagrams: DiagramsConfig
     thread: ThreadConfig
@@ -341,6 +364,7 @@ _SECTIONS: dict[str, type[Any]] = {
     "reader": ReaderConfig,
     "tutor": TutorConfig,
     "dictionary": DictionaryConfig,
+    "spotter": SpotterConfig,
     "maps": MapsConfig,
     "diagrams": DiagramsConfig,
     "thread": ThreadConfig,

@@ -131,6 +131,7 @@ from biblio.study.plan import (
     next_guide,
     plan_folder,
 )
+from biblio.study.spotter import UNEXPLAINED, Coverage, GuideCard, spot_gaps
 from biblio.web.drafts import draft_path, outline_path
 
 _EXCERPT_CHARS = 320
@@ -1536,6 +1537,80 @@ class Engine:
             )
         return fragments, total
 
+    # --- «Gap Spotter» (ADR-047) -----------------------------------------------------------------
+
+    def spot_gaps(self, topic: str) -> Generator[Event, None, None]:
+        """Events: ("start", {fragments}), ("step", {stage, done, total, coverage}) as the run goes,
+        then ("done", {id, coverage, guides}). Raises ValueError before any event when the notes
+        have nothing on the topic."""
+        self._claim_generation()
+        try:
+            cfg = self.config.spotter
+            with self.lock:
+                hits = self._base().search(topic, cfg.sections * 2)
+            fragments = numbered_fragments(hits, cfg.sections, cfg.max_fragment_chars)
+            if not fragments:
+                raise ValueError(
+                    "No encontré secciones sobre ese tema en tus notas: no hay nada que completar."
+                )
+            yield (
+                "start",
+                {"topic": topic, "fragments": [fragment_json(f, self) for f in fragments]},
+            )
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+
+            def search(name: str) -> list[Fragment]:
+                with self.lock:
+                    found = self._base().search(name, cfg.judge_hits * 2)
+                return numbered_fragments(found, cfg.judge_hits, cfg.max_fragment_chars)
+
+            llm = self._llm_factory(self.config)
+            coverage: tuple[Coverage, ...] = ()
+            cards: tuple[GuideCard, ...] = ()
+            try:
+                turns = lambda: self._llm_lock  # noqa: E731  (generation and grading take turns)
+                for step in spot_gaps(llm, cfg, topic, fragments, search, turns):
+                    coverage, cards = step.coverage, step.guides
+                    yield (
+                        "step",
+                        {
+                            "stage": step.stage,
+                            "done": step.done,
+                            "total": step.total,
+                            "coverage": [_coverage_json(c, fragments, self) for c in coverage],
+                        },
+                    )
+            finally:
+                llm.close()
+            result = {
+                "coverage": [_coverage_json(c, fragments, self) for c in coverage],
+                "guides": _guides_json(cards, coverage, fragments, self),
+                "fragments": [fragment_json(f, self) for f in fragments],
+            }
+            run_id = self.practice.add_spotter_run(topic, result)
+            yield "done", {"id": run_id, **result}
+        finally:
+            self._generating.release()
+
+    def spotter_runs(self) -> list[dict[str, Any]]:
+        return self.practice.spotter_runs(self.config.spotter.history_limit)
+
+    def spotter_run(self, run_id: int) -> dict[str, Any] | None:
+        return self.practice.spotter_run(run_id)
+
+    def delete_spotter_run(self, run_id: int) -> bool:
+        return self.practice.delete_spotter_run(run_id)
+
+    def note_spotter_guide(self, run_id: int, index: int) -> dict[str, Any] | None:
+        """«Apuntar en Temas pendientes»: a suggested guide becomes a pending topic in Guías."""
+        run = self.practice.spotter_run(run_id)
+        if run is None or not 0 <= index < len(run["guides"]):
+            raise LookupError("unknown run or guide")
+        guide = run["guides"][index]
+        detail = " · ".join(g["name"] for g in guide["gaps"])
+        return self._record_gap(guide["title"], "spotter", run["topic"], detail)
+
     def build_dictionary(self, kind: str, value: str) -> Generator[Event, None, None]:
         """Events: ("start", {fragments}), ("entries", …) after each fragment with the entries so
         far, then ("done", {id}). Raises ValueError before any event when nothing is found."""
@@ -1888,6 +1963,74 @@ def _place(doc_path: str, heading_path: tuple[str, ...]) -> dict[str, Any]:
         "guide": heading_path[0] if heading_path else doc_path,
         "sections": list(heading_path[1:]),
     }
+
+
+def _coverage_json(c: Coverage, fragments: Sequence[Fragment], engine: Engine) -> dict[str, Any]:
+    """One subtopic: where the candidate came from, the verdict and its evidence (ADR-047)."""
+    out: dict[str, Any] = {
+        "name": c.candidate.name,
+        "about": c.candidate.about,
+        "source": c.candidate.source,
+        "verdict": c.verdict,
+    }
+    if c.candidate.source == UNEXPLAINED and c.candidate.mention is not None:
+        number, quote = c.candidate.mention
+        where = next((f for f in fragments if f.number == number), None)
+        if where is not None:
+            out["mention"] = {
+                **_place(where.doc_path, where.heading_path),
+                "quote": quote,
+                "citation": where.citation,
+                "lines": [where.start_line, where.end_line],
+            }
+    if c.evidence is not None:
+        e = c.evidence
+        out["evidence"] = {
+            **_place(e.doc_path, e.heading_path),
+            "quote": c.quote,
+            "citation": e.citation,
+            "lines": [e.start_line, e.end_line],
+            "open_url": engine.open_url(e.doc_path),
+        }
+    return out
+
+
+def _guides_json(
+    cards: Sequence[GuideCard],
+    coverage: Sequence[Coverage],
+    fragments: Sequence[Fragment],
+    engine: Engine,
+) -> list[dict[str, Any]]:
+    gaps = [c for c in coverage if c.verdict != "covered"]
+    by_number = {f.number: f for f in fragments}
+    out = []
+    for card in cards:
+        notes = [by_number[n] for n in card.notes if n in by_number]
+        out.append(
+            {
+                "title": card.title,
+                "why": card.why,
+                "gaps": [
+                    {
+                        "name": gaps[i].candidate.name,
+                        "source": gaps[i].candidate.source,
+                        "verdict": gaps[i].verdict,
+                        "about": gaps[i].candidate.about,
+                    }
+                    for i in card.gaps
+                ],
+                "questions": list(card.questions),
+                "notes": [
+                    {
+                        **_place(f.doc_path, f.heading_path),
+                        "citation": f.citation,
+                        "lines": [f.start_line, f.end_line],
+                    }
+                    for f in notes
+                ],
+            }
+        )
+    return out
 
 
 def hit_json(hit: Hit, engine: Engine) -> dict[str, Any]:

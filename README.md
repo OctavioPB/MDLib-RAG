@@ -247,6 +247,14 @@ number of notes in each, and a box that finds a note by title or folder as you t
 capitals do not matter). The notes you read last are listed first; notes marked as read show
 «✓ leída». Any of them opens in the reader.
 
+**Gap Spotter** (ADR-047), in Guías: type a topic and, in a minute or two, see which of its subtopics
+your notes explain («cubierto», with the quote that shows it), treat «a medias», or lack («falta»), and
+5 to 10 suggested guides to fill the holes (title, subtopics, questions to answer, related notes).
+Subtopics come from two marked sources: terms your notes mention without explaining (with the
+sentence), and a syllabus proposed by the model (review it). A guide can be copied as Markdown or noted
+in «Temas pendientes»; it is not written by the model, since your notes have no evidence for it. Runs
+are kept in `data/practice.db` and erased by Reset.
+
 **Moving the library** (ADR-039): on the PC, Ajustes › Biblioteca shows «Ubicación: …» with
 **Cambiar**. Paste the folder or find it with **Examinar**, then **Comprobar**: if most notes match
 the index (the same vault moved or synced elsewhere), the index is reused and the change takes
@@ -394,7 +402,10 @@ processed (about a second when nothing changed). It embeds on the GPU when free 
 the LLM server runs, and refuses politely if another index run is in progress.
 
 **Apariencia** in Ajustes switches between a light theme, a dark one, or following your system
-(the default); the choice is remembered in the browser. The look follows the OPB style (navy and gold,
+(the default); the choice is remembered in the browser. **Idioma** (ADR-046) switches the interface
+between Spanish and English: every control, message and label, with dates and numbers in that
+language. Answers, maps, quizzes, dictionaries and plans are still generated in Spanish, and your
+notes are never translated. Each browser keeps its own choice. The look follows the OPB style (navy and gold,
 Fraunces and Plus Jakarta Sans); the fonts ship with the app under the SIL Open Font License (ADR-041).
 
 The server listens only on `127.0.0.1`, rejects requests addressed to any other host name, and loads

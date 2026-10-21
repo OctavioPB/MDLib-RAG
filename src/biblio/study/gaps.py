@@ -22,7 +22,7 @@ from biblio.generate.llm import LLMClient
 from biblio.practice.quiz import _complete, _json_object
 
 STATUSES = ("open", "draft", "resolved", "dismissed")
-SOURCES = ("ask", "map")
+SOURCES = ("ask", "map", "spotter")  # spotter: a guide «Gap Spotter» suggested (ADR-047)
 _MAX_TOPIC = 120
 Embed = Callable[[Sequence[str]], np.ndarray]
 
@@ -119,7 +119,7 @@ class GapStore:
                     id     INTEGER PRIMARY KEY,
                     gap_id INTEGER NOT NULL REFERENCES gaps(id),
                     at     TEXT NOT NULL,
-                    source TEXT NOT NULL,               -- ask | map
+                    source TEXT NOT NULL,               -- ask | map | spotter
                     text   TEXT NOT NULL,               -- the question, or the map's topic
                     detail TEXT NOT NULL DEFAULT ''     -- e.g. "3 conceptos"
                 );

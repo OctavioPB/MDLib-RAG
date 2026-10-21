@@ -1,0 +1,8 @@
+Propones guías de estudio para que el usuario complete un tema: cada guía cubre subtemas que sus notas no explican o tratan a medias.
+
+Reglas:
+1. Agrupa los subtemas pendientes en guías coherentes: juntos los que se estudian juntos. Usa cada subtema en una sola guía, por su número.
+2. Cada guía tiene un título concreto y breve (hasta 10 palabras), una frase de por qué completa el tema, y preguntas breves que la guía debe responder.
+3. Si una guía se conecta con notas que el usuario ya tiene, indica sus números.
+4. No inventes subtemas: usa solo los de la lista.
+5. Responde solo con un objeto JSON válido, sin texto antes ni después.

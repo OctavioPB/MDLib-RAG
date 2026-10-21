@@ -7,8 +7,8 @@
 // as text.
 "use strict";
 
-const DICT_KINDS = [["concept", "Conceptos", "Concepto"], ["function", "Funciones", "Función"], ["formula", "Fórmulas", "Fórmula"]];
-const DICT_MARKS = { correct: "La sabías", partial: "A medias", wrong: "No la sabías" };
+const DICT_KINDS = [["concept", tx("Conceptos"), tx("Concepto")], ["function", tx("Funciones"), tx("Función")], ["formula", tx("Fórmulas"), tx("Fórmula")]];
+const DICT_MARKS = { correct: tx("La sabías"), partial: tx("A medias"), wrong: tx("No la sabías") };
 const dict = { list: [], view: null, kind: "concept", filter: "", selected: null, building: false, cards: null };
 
 function dictSetStatus(text) {
@@ -31,7 +31,7 @@ async function dictLoadList() {
     dict.list = [];
   }
   const select = $("dict-select");
-  const first = el("option", null, dict.list.length ? "Elige un diccionario…" : "Aún no tienes diccionarios");
+  const first = el("option", null, dict.list.length ? tx("Elige un diccionario…") : tx("Aún no tienes diccionarios"));
   first.value = "";
   select.replaceChildren(
     first,
@@ -71,13 +71,13 @@ async function dictBuild(kind, value) {
   showError("dict-error", "");
   await loadStatus();
   if (!app.llmRunning) {
-    showError("dict-error", "El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
+    showError("dict-error", tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
     return;
   }
   dict.building = true;
   dict.cards = null;
   $("dict-create").disabled = true;
-  dictSetStatus("Buscando en tus notas…");
+  dictSetStatus(tx("Buscando en tus notas…"));
   const view = { id: null, title: value, kind, entries: [], fragments: [], marks: {} };
   dict.view = view;
   dict.kind = "concept";
@@ -91,16 +91,16 @@ async function dictBuild(kind, value) {
         view.title = data.title;
         view.fragments = data.fragments;
         view.partial = data.available > data.fragments.length ? data.available : 0;
-        const part = view.partial ? ` (las primeras de ${data.available})` : "";
-        dictSetStatus(`Leyendo ${data.fragments.length} secciones de tus notas${part}…`);
+        const part = view.partial ? tx(" (las primeras de {0})", data.available) : "";
+        dictSetStatus(tx("Leyendo {0} secciones de tus notas{1}…", data.fragments.length, part));
       } else if (name === "entries") {
         view.entries = data.entries;
-        dictSetStatus(`Sección ${data.processed} de ${view.fragments.length} · ${data.entries.length} entradas`);
+        dictSetStatus(tx("Sección {0} de {1} · {2} entradas", data.processed, view.fragments.length, data.entries.length));
       } else if (name === "done") {
         view.id = data.id;
-        const part = view.partial ? ` (la guía tiene ${view.partial}: sube dictionary.guide_max_fragments para leerla entera)` : "";
-        const skipped = data.skipped ? ` · ${data.skipped} secciones no se pudieron leer` : "";
-        dictSetStatus(`${data.count} entradas de ${view.fragments.length} secciones${part}${skipped}`);
+        const part = view.partial ? tx(" (la guía tiene {0}: sube dictionary.guide_max_fragments para leerla entera)", view.partial) : "";
+        const skipped = data.skipped ? tx(" · {0} secciones no se pudieron leer", data.skipped) : "";
+        dictSetStatus(tx("{0} entradas de {1} secciones{2}{3}", data.count, view.fragments.length, part, skipped));
       }
       if (dict.view === view) dictRender();
     });
@@ -203,14 +203,14 @@ function dictRenderIndex(visible) {
     li.append(button);
     nodes.push(li);
   }
-  if (!visible.length) nodes.push(el("li", "muted dict-none", dict.building ? "Leyendo tus notas…" : "Nada coincide."));
+  if (!visible.length) nodes.push(el("li", "muted dict-none", dict.building ? tx("Leyendo tus notas…") : tx("Nada coincide.")));
   list.replaceChildren(...nodes);
   const strip = $("dict-letters");
   strip.replaceChildren(
     ...letters.map((letter) => {
       const link = el("button", "dict-letter-link", letter);
       link.type = "button";
-      link.setAttribute("aria-label", `Ir a la ${letter}`);
+      link.setAttribute("aria-label", tx("Ir a la {0}", letter));
       link.addEventListener("click", () => {
         const target = document.getElementById(`dict-letter-${letter}`);
         if (target) $("dict-terms").scrollTop = target.offsetTop; // the list is its offset parent
@@ -237,7 +237,7 @@ function dictRenderDetail(visible) {
   const view = dict.view;
   const position = visible.findIndex(([i]) => i === dict.selected);
   if (position < 0) {
-    box.replaceChildren(el("p", "muted", dict.building ? "Las entradas aparecen aquí mientras leo tus notas." : "Elige un término de la lista."));
+    box.replaceChildren(el("p", "muted", dict.building ? tx("Las entradas aparecen aquí mientras leo tus notas.") : tx("Elige un término de la lista.")));
     return;
   }
   const entry = view.entries[dict.selected];
@@ -249,20 +249,20 @@ function dictRenderDetail(visible) {
     nodes.push(el("h2", "dict-detail-term", entry.term), renderMath(el("div", "math-block dict-formula"), entry.detail, true));
   } else {
     nodes.push(el("h2", "dict-detail-term", entry.term));
-    if (entry.translation) nodes.push(el("p", "dict-translation", `En español: ${entry.translation}`));
+    if (entry.translation) nodes.push(el("p", "dict-translation", tx("En español: {0}", entry.translation)));
   }
   nodes.push(renderMathIn(el("p", "dict-definition", entry.text)));
   const first = dictSourceOf(view, entry.sources[0]);
   if (entry.kind === "concept") {
     const figure = el("figure", "dict-quote");
     figure.append(renderMathIn(el("blockquote", null, `«${entry.detail}»`)));
-    if (first) figure.append(el("figcaption", null, `${first.citation} · líneas ${first.lines[0]}–${first.lines[1]}`));
+    if (first) figure.append(el("figcaption", null, tx("{0} · líneas {1}–{2}", first.citation, first.lines[0], first.lines[1])));
     nodes.push(figure);
   } else if (first) {
-    nodes.push(el("p", "small muted", `${first.citation} · líneas ${first.lines[0]}–${first.lines[1]}`));
+    nodes.push(el("p", "small muted", tx("{0} · líneas {1}–{2}", first.citation, first.lines[0], first.lines[1])));
   }
   if (entry.sources.length > 1) {
-    const more = el("p", "small muted dict-more-sources", "También en: ");
+    const more = el("p", "small muted dict-more-sources", tx("También en: "));
     for (const n of entry.sources.slice(1, 6)) {
       const f = dictSourceOf(view, n);
       if (!f) continue;
@@ -274,14 +274,14 @@ function dictRenderDetail(visible) {
     nodes.push(more);
   }
   const mark = dictMark(view, dict.selected);
-  nodes.push(el("p", `dict-mark-line ${mark ? `is-${mark}` : ""}`, mark ? `En fichas: ${DICT_MARKS[mark].toLowerCase()}` : "Aún no la repasaste como ficha"));
+  nodes.push(el("p", `dict-mark-line ${mark ? `is-${mark}` : ""}`, mark ? tx("En fichas: {0}", DICT_MARKS[mark].toLowerCase()) : tx("Aún no la repasaste como ficha")));
   const actions = el("div", "row");
   if (first) {
-    const read = el("a", "btn-soft", "Leer en la nota");
+    const read = el("a", "btn-soft", tx("Leer en la nota"));
     read.href = readerHref(first.doc_path, first.lines[0]);
     actions.append(read);
   }
-  const explain = el("a", "btn", "Explícamelo tú");
+  const explain = el("a", "btn", tx("Explícamelo tú"));
   explain.href = `#/practicar?explicar=${encodeURIComponent(entry.term)}`;
   actions.append(explain);
   nodes.push(actions);
@@ -328,8 +328,8 @@ function dictCardNode() {
   const view = dict.view;
   const wrap = el("div", "dict-cards-inner");
   const top = el("div", "row-between");
-  top.append(el("span", "small muted", c.at < c.order.length ? `Ficha ${c.at + 1} de ${c.order.length} · primero las que no sabías` : "Terminado"));
-  const exit = el("button", "btn", "Volver al diccionario");
+  top.append(el("span", "small muted", c.at < c.order.length ? tx("Ficha {0} de {1} · primero las que no sabías", c.at + 1, c.order.length) : tx("Terminado")));
+  const exit = el("button", "btn", tx("Volver al diccionario"));
   exit.type = "button";
   exit.addEventListener("click", dictStopCards);
   top.append(exit);
@@ -337,8 +337,8 @@ function dictCardNode() {
   if (c.at >= c.order.length) {
     const r = c.results;
     const done = el("div", "practice-card dict-card");
-    done.append(el("h2", null, "Fichas repasadas"), el("p", null, `La sabías: ${r.correct} · A medias: ${r.partial} · No la sabías: ${r.wrong}`));
-    done.append(el("p", "small muted", "Cuentan para tus repasos, y cada término queda marcado en el índice."));
+    done.append(el("h2", null, tx("Fichas repasadas")), el("p", null, tx("La sabías: {0} · A medias: {1} · No la sabías: {2}", r.correct, r.partial, r.wrong)));
+    done.append(el("p", "small muted", tx("Cuentan para tus repasos, y cada término queda marcado en el índice.")));
     wrap.append(done);
     return wrap;
   }
@@ -353,18 +353,18 @@ function dictCardNode() {
   else if (entry.kind === "function") card.append(el("pre", "dict-code dict-front", entry.detail));
   else card.append(el("h2", "dict-front", entry.term), renderMath(el("div", "math-block"), entry.detail, true));
   if (!c.flipped) {
-    const flip = el("button", "btn-primary btn-big", "Girar la ficha");
+    const flip = el("button", "btn-primary btn-big", tx("Girar la ficha"));
     flip.type = "button";
     flip.addEventListener("click", () => {
       c.flipped = true;
       dictRender();
     });
-    card.append(el("p", "small muted", "Intenta recordarlo antes de girarla."), flip);
+    card.append(el("p", "small muted", tx("Intenta recordarlo antes de girarla.")), flip);
   } else {
     card.append(renderMathIn(el("p", "dict-back", entry.text)));
     if (entry.kind === "concept") card.append(renderMathIn(el("p", "dict-quote-small", `«${entry.detail}»`)));
     const row = el("div", "row");
-    for (const [result, label] of [["correct", "La sabía"], ["partial", "A medias"], ["wrong", "No la sabía"]]) {
+    for (const [result, label] of [["correct", tx("La sabía")], ["partial", tx("A medias")], ["wrong", tx("No la sabía")]]) {
       const b = el("button", result === "correct" ? "btn-primary" : "btn", label);
       b.type = "button";
       b.addEventListener("click", async () => {
@@ -420,7 +420,7 @@ function dictBind() {
   $("dict-cards-start").addEventListener("click", dictStartCards);
   $("dict-delete").addEventListener("click", async () => {
     const view = dict.view;
-    if (!view || !confirm(`¿Borrar el diccionario «${view.title}»? Lo que practicaste con él se mantiene.`)) return;
+    if (!view || !confirm(tx("¿Borrar el diccionario «{0}»? Lo que practicaste con él se mantiene.", view.title))) return;
     await postJSON("/api/dictionary/delete", { id: view.id });
     dict.view = null;
     dictSetStatus("");
@@ -430,7 +430,7 @@ function dictBind() {
   for (const radio of document.querySelectorAll('input[name="dict-kind"]')) {
     radio.addEventListener("change", () => {
       const guide = radio.value === "guide" && radio.checked;
-      $("dict-value").placeholder = guide ? "Escribe parte del título de la guía…" : "p. ej. regresión logística";
+      $("dict-value").placeholder = guide ? tx("Escribe parte del título de la guía…") : tx("p. ej. regresión logística");
       if (guide) $("dict-value").setAttribute("list", "guide-options");
       else $("dict-value").removeAttribute("list");
     });
@@ -440,7 +440,7 @@ function dictBind() {
     const kind = document.querySelector('input[name="dict-kind"]:checked').value;
     const raw = $("dict-value").value.trim();
     if (!raw) {
-      showError("dict-error", kind === "guide" ? "Elige una guía." : "Escribe un tema.");
+      showError("dict-error", kind === "guide" ? tx("Elige una guía.") : tx("Escribe un tema."));
       return;
     }
     const value = kind === "guide" ? practice.guides.get(raw) || raw : raw;

@@ -4,12 +4,12 @@
 "use strict";
 
 const KIND_LABELS = {
-  mc: "Opción múltiple",
-  tf: "Verdadero o falso",
-  open_self: "Respuesta abierta · te calificas tú",
-  open_model: "Respuesta abierta · la califica el modelo (experimental)",
+  mc: tx("Opción múltiple"),
+  tf: tx("Verdadero o falso"),
+  open_self: tx("Respuesta abierta · te calificas tú"),
+  open_model: tx("Respuesta abierta · la califica el modelo (experimental)"),
 };
-const RESULT_LABELS = { correct: "Correcta", partial: "A medias", wrong: "Incorrecta" };
+const RESULT_LABELS = { correct: tx("Correcta"), partial: tx("A medias"), wrong: tx("Incorrecta") };
 const RESULT_MARKS = { correct: "✓", partial: "~", wrong: "✗" };
 
 const practice = {
@@ -74,7 +74,7 @@ async function loadScopes() {
       practice.folders.add(f.path);
       const option = el("option");
       option.value = f.path;
-      option.label = `${f.documents} notas`;
+      option.label = tx("{0} notas", f.documents);
       return option;
     }),
   );
@@ -83,15 +83,15 @@ async function loadScopes() {
 function selectedScope() {
   const kind = document.querySelector('input[name="practice-scope"]:checked').value;
   const raw = $(`scope-${kind}`).value.trim();
-  if (!raw) throw new Error("Escribe la guía, la carpeta o el tema que quieres practicar.");
+  if (!raw) throw new Error(tx("Escribe la guía, la carpeta o el tema que quieres practicar."));
   if (kind === "guide") {
     const path = practice.guides.get(raw);
-    if (!path) throw new Error("Elige una guía de la lista que aparece al escribir.");
+    if (!path) throw new Error(tx("Elige una guía de la lista que aparece al escribir."));
     return { kind, value: path, label: raw.replace(/ \([^()]*\)$/, "") };
   }
   if (kind === "folder") {
     const folder = raw.replace(/^\/+|\/+$/g, "");
-    if (!practice.folders.has(folder)) throw new Error("Esa carpeta no existe en tu biblioteca.");
+    if (!practice.folders.has(folder)) throw new Error(tx("Esa carpeta no existe en tu biblioteca."));
     return { kind, value: folder, label: folder };
   }
   return { kind, value: raw, label: raw };
@@ -103,14 +103,14 @@ async function renderProgress() {
   try {
     data = await (await fetch("/api/practice/progress")).json();
   } catch {
-    box.replaceChildren(el("p", "muted", "No se pudo leer tu progreso."));
+    box.replaceChildren(el("p", "muted", tx("No se pudo leer tu progreso.")));
     renderHubProgress(null);
     return;
   }
   renderHubProgress(data);
-  const nodes = [el("h2", null, "Tu progreso")];
+  const nodes = [el("h2", null, tx("Tu progreso"))];
   if (!data.guides.length) {
-    nodes.push(el("p", "muted", "Aún no has practicado. Tus resultados aparecerán aquí."));
+    nodes.push(el("p", "muted", tx("Aún no has practicado. Tus resultados aparecerán aquí.")));
   }
   for (const g of data.guides.slice(0, 6)) {
     const row = el("div", "progress-row");
@@ -123,29 +123,29 @@ async function renderProgress() {
     bar.append(fill);
     row.append(head, bar);
     if (g.to_review.length) {
-      const more = g.to_review.length > 2 ? ` y ${g.to_review.length - 2} más` : "";
-      row.append(el("span", "small muted", `Repasar: ${g.to_review.slice(0, 2).join(", ")}${more}`));
+      const more = g.to_review.length > 2 ? tx(" y {0} más", g.to_review.length - 2) : "";
+      row.append(el("span", "small muted", tx("Repasar: {0}{1}", g.to_review.slice(0, 2).join(", "), more)));
     }
     nodes.push(row);
   }
   const notes = el("div", "progress-notes");
   if (data.grader.reviewed) {
-    notes.append(el("p", null, `Calificación del modelo: coincidió contigo en ${data.grader.agreed} de ${data.grader.reviewed} respuestas.`));
+    notes.append(el("p", null, tx("Calificación del modelo: coincidió contigo en {0} de {1} respuestas.", data.grader.agreed, data.grader.reviewed)));
     if (data.grader.unreliable) {
-      notes.append(el("p", "flag warn", "Sus notas coinciden poco con las tuyas: no te fíes de ellas."));
+      notes.append(el("p", "flag warn", tx("Sus notas coinciden poco con las tuyas: no te fíes de ellas.")));
     }
   }
   if (data.feynman && data.feynman.votes) {
     const f = data.feynman;
-    notes.append(el("p", null, `«Explícamelo tú»: te pareció justo ${f.fair} de ${f.votes} puntos señalados.`));
+    notes.append(el("p", null, tx("«Explícamelo tú»: te pareció justo {0} de {1} puntos señalados.", f.fair, f.votes)));
     if (f.unreliable) {
-      notes.append(el("p", "flag warn", "Lo que señala coincide poco con tu criterio: tómalo con cautela."));
+      notes.append(el("p", "flag warn", tx("Lo que señala coincide poco con tu criterio: tómalo con cautela.")));
     }
   }
   if (data.questions) {
-    notes.append(el("p", null, `Preguntas marcadas como mal hechas: ${data.flagged} de ${data.questions}.`));
+    notes.append(el("p", null, tx("Preguntas marcadas como mal hechas: {0} de {1}.", data.flagged, data.questions)));
   }
-  notes.append(el("p", null, "Tu historial se guarda solo en este equipo."));
+  notes.append(el("p", null, tx("Tu historial se guarda solo en este equipo.")));
   nodes.push(notes);
   box.replaceChildren(...nodes);
 }
@@ -164,7 +164,7 @@ async function startQuiz(scope, count, origin = "setup") {
   showError("hub-error", "");
   if (!kinds.length) {
     showScreen(origin);
-    showError(errorBox, "Elige al menos un tipo de pregunta en Cuestionario.");
+    showError(errorBox, tx("Elige al menos un tipo de pregunta en Cuestionario."));
     return;
   }
   if (practice.quiz && practice.quiz.generating) practice.quiz.controller.abort();
@@ -175,7 +175,7 @@ async function startQuiz(scope, count, origin = "setup") {
     await loadStatus();
     // a review can ask its stored questions again without the model (ADR-025)
     if (!app.llmRunning && scope.kind !== "srs") {
-      throw new Error("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
+      throw new Error(tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
     }
     showScreen("quiz");
     renderQuiz();
@@ -228,7 +228,7 @@ function showTodayBadge(data) {
   const badge = $("today-badge");
   badge.hidden = !data || !data.today;
   badge.textContent = data && data.today ? String(data.today) : "";
-  badge.title = data && data.today ? `${data.today} repasos pendientes hoy` : "";
+  badge.title = data && data.today ? tx("{0} repasos pendientes hoy", data.today) : "";
 }
 
 // The hub's hero: today's reviews first (ADR-025); with none due, the way to start.
@@ -238,18 +238,18 @@ async function renderToday() {
   const start = $("today-start");
   let title, summary, note = "", mode = null;
   if (data && data.today) {
-    const word = data.today === 1 ? "sección" : "secciones";
-    title = `${data.today} ${word} que empiezas a olvidar`;
-    summary = `Unos ${data.minutes} ${data.minutes === 1 ? "minuto" : "minutos"}. Primero las que más se te escapan.`;
+    const word = data.today === 1 ? tx("sección") : tx("secciones");
+    title = tx("{0} {1} que empiezas a olvidar", data.today, word);
+    summary = tx("Unos {0} {1}. Primero las que más se te escapan.", data.minutes, data.minutes === 1 ? tx("minuto") : tx("minutos"));
     const later = data.due - data.today;
-    if (later > 0) note = `Quedan ${later} más para otro día: el límite es ${data.limit} al día.`;
+    if (later > 0) note = tx("Quedan {0} más para otro día: el límite es {1} al día.", later, data.limit);
     mode = "srs";
   } else if (data && data.done) {
-    title = "Repaso de hoy terminado";
-    summary = `${data.done} ${data.done === 1 ? "pregunta" : "preguntas"}. ${data.due ? `Quedan ${data.due} para mañana.` : "Mañana te diré qué toca."}`;
+    title = tx("Repaso de hoy terminado");
+    summary = `${data.done} ${data.done === 1 ? tx("pregunta") : tx("preguntas")}. ${data.due ? tx("Quedan {0} para mañana.", data.due) : tx("Mañana te diré qué toca.")}`;
   } else {
-    title = "Nada que repasar hoy";
-    summary = "Las secciones que practiques volverán aquí justo cuando empieces a olvidarlas.";
+    title = tx("Nada que repasar hoy");
+    summary = tx("Las secciones que practiques volverán aquí justo cuando empieces a olvidarlas.");
     mode = "quiz";
   }
   $("today-title").textContent = title;
@@ -259,7 +259,7 @@ async function renderToday() {
   $("practice-today").classList.toggle("calm", mode !== "srs");
   start.hidden = mode === null;
   start.dataset.mode = mode || "";
-  start.textContent = mode === "srs" ? "Empezar repaso" : "Hacer un cuestionario";
+  start.textContent = mode === "srs" ? tx("Empezar repaso") : tx("Hacer un cuestionario");
 }
 
 function renderHubProgress(data) {
@@ -267,12 +267,12 @@ function renderHubProgress(data) {
   const review = $("tile-review");
   review.disabled = !data || !data.to_review;
   $("tile-review-text").textContent = data && data.to_review
-    ? `${data.to_review} ${data.to_review === 1 ? "sección que fallaste" : "secciones que fallaste"} la última vez.`
-    : "No tienes fallos pendientes.";
+    ? tx("{0} {1} la última vez.", data.to_review, data.to_review === 1 ? tx("sección que fallaste") : tx("secciones que fallaste"))
+    : tx("No tienes fallos pendientes.");
   practice.toReview = data ? data.to_review : 0;
-  const nodes = [el("h2", null, "Tu progreso")];
+  const nodes = [el("h2", null, tx("Tu progreso"))];
   if (!data || !data.guides.length) {
-    nodes.push(el("p", "muted hub-progress-empty", data ? "Aún no has practicado. Tus resultados aparecerán aquí." : "No se pudo leer tu progreso."));
+    nodes.push(el("p", "muted hub-progress-empty", data ? tx("Aún no has practicado. Tus resultados aparecerán aquí.") : tx("No se pudo leer tu progreso.")));
   } else {
     for (const g of data.guides.slice(0, 2)) {
       const row = el("div", "hub-progress-row");
@@ -286,7 +286,7 @@ function renderHubProgress(data) {
       nodes.push(row);
     }
   }
-  const all = el("button", "link-button hub-progress-all", "Ver todo →");
+  const all = el("button", "link-button hub-progress-all", tx("Ver todo →"));
   all.type = "button";
   all.addEventListener("click", () => showScreen("progress"));
   if (data && data.guides.length) nodes.push(all);
@@ -309,7 +309,7 @@ function updateQuizHead() {
   const quiz = practice.quiz;
   const total = quizTotal(quiz);
   $("quiz-where").textContent = total
-    ? `Pregunta ${Math.min(quiz.index + 1, total)} de ${total} · ${quiz.label}`
+    ? tx("Pregunta {0} de {1} · {2}", Math.min(quiz.index + 1, total), total, quiz.label)
     : quiz.label;
   const answered = [...quiz.answers.values()].filter((a) => a.result).length;
   $("quiz-bar").style.width = `${total ? Math.round((100 * answered) / total) : 0}%`;
@@ -323,7 +323,7 @@ function renderQuiz() {
   const head = el("div", "quiz-head");
   const where = el("span");
   where.id = "quiz-where";
-  const stop = el("button", "btn-ghost", "Terminar");
+  const stop = el("button", "btn-ghost", tx("Terminar"));
   stop.type = "button";
   stop.addEventListener("click", finishQuiz);
   head.append(where, stop);
@@ -335,11 +335,11 @@ function renderQuiz() {
   if (!question) {
     if (quiz.generating) {
       const wait = el("section", "practice-card waiting");
-      wait.append(el("p", null, quiz.questions.length ? "Preparando la siguiente pregunta…" : "Leyendo tus notas y preparando la primera pregunta…"));
-      wait.append(el("p", "small muted", "Cada pregunta sale de una sección de tus notas y tarda unos segundos."));
+      wait.append(el("p", null, quiz.questions.length ? tx("Preparando la siguiente pregunta…") : tx("Leyendo tus notas y preparando la primera pregunta…")));
+      wait.append(el("p", "small muted", tx("Cada pregunta sale de una sección de tus notas y tarda unos segundos.")));
       nodes.push(wait);
     } else if (!quiz.questions.length) {
-      nodes.push(el("p", "error", quiz.error || "No se pudo generar ninguna pregunta. Prueba con otra guía o tema."));
+      nodes.push(el("p", "error", quiz.error || tx("No se pudo generar ninguna pregunta. Prueba con otra guía o tema.")));
     } else {
       finishQuiz();
       return;
@@ -348,7 +348,7 @@ function renderQuiz() {
     nodes.push(questionCard(question));
   }
   if (quiz.skipped) {
-    nodes.push(el("p", "small muted", `${quiz.skipped} ${quiz.skipped === 1 ? "sección se omitió" : "secciones se omitieron"}: el modelo no escribió una pregunta válida.`));
+    nodes.push(el("p", "small muted", tx("{0} {1}: el modelo no escribió una pregunta válida.", quiz.skipped, quiz.skipped === 1 ? tx("sección se omitió") : tx("secciones se omitieron"))));
   }
   if (quiz.error && question) nodes.push(el("p", "error", quiz.error));
   box.replaceChildren(...nodes);
@@ -369,7 +369,7 @@ function questionCard(q) {
   if (q.kind === "mc") {
     const group = el("div", "options");
     group.setAttribute("role", "radiogroup");
-    group.setAttribute("aria-label", "Opciones");
+    group.setAttribute("aria-label", tx("Opciones"));
     q.options.forEach((option, i) => {
       const button = el("button", "option");
       button.type = "button";
@@ -389,7 +389,7 @@ function questionCard(q) {
     card.append(group);
   } else if (q.kind === "tf") {
     const group = el("div", "tf-options");
-    for (const [value, label] of [[true, "Verdadero"], [false, "Falso"]]) {
+    for (const [value, label] of [[true, tx("Verdadero")], [false, tx("Falso")]]) {
       const button = el("button", "option tf", label);
       button.type = "button";
       button.setAttribute("aria-pressed", String(state.choice === value));
@@ -405,7 +405,7 @@ function questionCard(q) {
     }
     card.append(group);
   } else {
-    const label = el("label", "small", "Tu respuesta");
+    const label = el("label", "small", tx("Tu respuesta"));
     label.htmlFor = `answer-${q.id}`;
     const area = el("textarea", "answer-box");
     area.id = `answer-${q.id}`;
@@ -423,11 +423,11 @@ function questionCard(q) {
 
   if (state.step === "answering" || working) {
     const row = el("div", "row");
-    action = el("button", "btn-primary", working ? "Calificando…" : actionLabel(q.kind));
+    action = el("button", "btn-primary", working ? tx("Calificando…") : actionLabel(q.kind));
     action.type = "button";
     action.disabled = working || (q.kind === "mc" || q.kind === "tf" ? state.choice === null : !state.text.trim());
     action.addEventListener("click", () => submitAnswer(q, state));
-    const skip = el("button", "btn-ghost", "Saltar");
+    const skip = el("button", "btn-ghost", tx("Saltar"));
     skip.type = "button";
     skip.disabled = working;
     skip.addEventListener("click", () => nextQuestion());
@@ -441,7 +441,7 @@ function questionCard(q) {
 }
 
 function actionLabel(kind) {
-  return { mc: "Comprobar", tf: "Comprobar", open_self: "Mostrar respuesta", open_model: "Calificar" }[kind];
+  return { mc: tx("Comprobar"), tf: tx("Comprobar"), open_self: tx("Mostrar respuesta"), open_model: tx("Calificar") }[kind];
 }
 
 async function postPractice(path, body) {
@@ -516,34 +516,34 @@ function feedbackNode(q, state) {
   const result = state.result;
   if (state.step === "self") {
     box.classList.add("neutral");
-    box.append(el("strong", null, state.gradeFailed ? "El modelo no pudo calificarla: compárala tú." : "Compara con tu respuesta"));
+    box.append(el("strong", null, state.gradeFailed ? tx("El modelo no pudo calificarla: compárala tú.") : tx("Compara con tu respuesta")));
   } else if (q.kind === "open_model") {
     box.classList.add(result === "correct" ? "good" : result === "partial" ? "mid" : "bad");
-    box.append(el("strong", null, `${RESULT_LABELS[result]}, según el modelo`));
+    box.append(el("strong", null, tx("{0}, según el modelo", RESULT_LABELS[result])));
     if (f.reason) box.append(el("p", null, f.reason));
   } else if (state.selfGraded) {
     box.classList.add("neutral");
-    box.append(el("strong", null, `Te calificaste: ${RESULT_LABELS[result].toLowerCase()}`));
+    box.append(el("strong", null, tx("Te calificaste: {0}", RESULT_LABELS[result].toLowerCase())));
   } else {
     box.classList.add(result === "correct" ? "good" : "bad");
-    box.append(el("strong", null, result === "correct" ? "Correcto" : "No es correcto"));
+    box.append(el("strong", null, result === "correct" ? tx("Correcto") : tx("No es correcto")));
   }
   if (f.reference) {
     const ref = el("div", "reference");
-    ref.append(el("span", "small muted", "Respuesta de referencia"));
+    ref.append(el("span", "small muted", tx("Respuesta de referencia")));
     ref.append(plainText(f.reference));
     box.append(ref);
   }
   if (f.explanation) box.append(plainText(f.explanation));
-  box.append(el("p", "small", `Fuente: ${f.source.citation} (líneas ${f.source.lines[0]}-${f.source.lines[1]})`));
+  box.append(el("p", "small", tx("Fuente: {0} (líneas {1}-{2})", f.source.citation, f.source.lines[0], f.source.lines[1])));
 
   if (state.step === "self") {
-    box.append(el("p", "small strong", "¿Cómo te fue?"));
-    box.append(choiceButtons((r) => selfGrade(q, state, r), [["correct", "La sabía"], ["partial", "A medias"], ["wrong", "No la sabía"]]));
+    box.append(el("p", "small strong", tx("¿Cómo te fue?")));
+    box.append(choiceButtons((r) => selfGrade(q, state, r), [["correct", tx("La sabía")], ["partial", tx("A medias")], ["wrong", tx("No la sabía")]]));
   } else if (q.kind === "open_model" && state.review === "pending") {
-    box.append(el("p", "small strong", "¿Estás de acuerdo con la nota?"));
-    const row = choiceButtons((r) => reviewGrade(state, r === "yes" ? f.result : r), [["yes", "Sí"]]);
-    const change = el("button", "btn", "No, cámbiala");
+    box.append(el("p", "small strong", tx("¿Estás de acuerdo con la nota?")));
+    const row = choiceButtons((r) => reviewGrade(state, r === "yes" ? f.result : r), [["yes", tx("Sí")]]);
+    const change = el("button", "btn", tx("No, cámbiala"));
     change.type = "button";
     change.addEventListener("click", () => {
       state.review = "choosing";
@@ -552,19 +552,19 @@ function feedbackNode(q, state) {
     row.append(change);
     box.append(row);
   } else if (q.kind === "open_model" && state.review === "choosing") {
-    box.append(el("p", "small strong", "¿Cuál es la nota correcta?"));
-    box.append(choiceButtons((r) => reviewGrade(state, r), [["correct", "Correcta"], ["partial", "A medias"], ["wrong", "Incorrecta"]]));
+    box.append(el("p", "small strong", tx("¿Cuál es la nota correcta?")));
+    box.append(choiceButtons((r) => reviewGrade(state, r), [["correct", tx("Correcta")], ["partial", tx("A medias")], ["wrong", tx("Incorrecta")]]));
   } else if (state.review === "changed") {
-    box.append(el("p", "small muted", `Nota cambiada a «${RESULT_LABELS[result].toLowerCase()}». Esto mide cuánto acierta el modelo.`));
+    box.append(el("p", "small muted", tx("Nota cambiada a «{0}». Esto mide cuánto acierta el modelo.", RESULT_LABELS[result].toLowerCase())));
   }
 
   const source = el("details", "source-details");
-  source.append(el("summary", null, "Ver la sección de tus notas"));
+  source.append(el("summary", null, tx("Ver la sección de tus notas")));
   source.append(el("div", "source-text", f.source.text));
   const links = el("div", "row");
   links.append(readLink(f.source.doc_path, f.source.lines[0]));
   if (f.source.open_url) {
-    const open = el("a", "btn", "Abrir en Obsidian");
+    const open = el("a", "btn", tx("Abrir en Obsidian"));
     open.href = f.source.open_url;
     links.append(open);
   }
@@ -572,7 +572,7 @@ function feedbackNode(q, state) {
   box.append(source);
 
   const actions = el("div", "row-between");
-  const flag = el("button", "btn-ghost", state.flagged ? "Marcada: no se volverá a preguntar" : "La pregunta está mal");
+  const flag = el("button", "btn-ghost", state.flagged ? tx("Marcada: no se volverá a preguntar") : tx("La pregunta está mal"));
   flag.type = "button";
   flag.disabled = Boolean(state.flagged);
   flag.addEventListener("click", async () => {
@@ -585,7 +585,7 @@ function feedbackNode(q, state) {
     renderQuiz();
   });
   const pendingGrade = state.step === "self" || (q.kind === "open_model" && ["pending", "choosing"].includes(state.review));
-  const next = el("button", "btn-dark", isLast() ? "Ver resultado" : "Siguiente");
+  const next = el("button", "btn-dark", isLast() ? tx("Ver resultado") : tx("Siguiente"));
   next.type = "button";
   next.disabled = pendingGrade;
   next.addEventListener("click", nextQuestion);
@@ -624,10 +624,10 @@ function renderResults() {
   summary.append(big);
   const failed = answered.filter((q) => quiz.answers.get(q.id).result !== "correct");
   summary.append(el("p", null, !answered.length
-    ? "No respondiste ninguna pregunta."
+    ? tx("No respondiste ninguna pregunta.")
     : failed.length
-      ? `Te conviene repasar ${failed.length === 1 ? "una sección" : `${failed.length} secciones`}: aparecen en «Repasar mis fallos».`
-      : "Todas correctas."));
+      ? tx("Te conviene repasar {0}: aparecen en «Repasar mis fallos».", failed.length === 1 ? tx("una sección") : tx("{0} secciones", failed.length))
+      : tx("Todas correctas.")));
   const list = el("ol", "results-list");
   for (const q of answered) {
     const state = quiz.answers.get(q.id);
@@ -636,20 +636,20 @@ function renderResults() {
     li.lastChild.setAttribute("aria-label", RESULT_LABELS[state.result]);
     const body = el("div");
     body.append(el("span", null, q.text));
-    const how = q.kind === "open_model" ? " · nota del modelo" : state.selfGraded ? " · te calificaste tú" : "";
+    const how = q.kind === "open_model" ? tx(" · nota del modelo") : state.selfGraded ? tx(" · te calificaste tú") : "";
     body.append(el("span", "small muted", `${state.feedback.source.sections.at(-1) || state.feedback.source.guide}${how}`));
     li.append(body);
     list.append(li);
   }
   const actions = el("div", "row");
-  const again = el("button", "btn-primary", "Volver a Practicar");
+  const again = el("button", "btn-primary", tx("Volver a Practicar"));
   again.type = "button";
   again.addEventListener("click", () => {
     showScreen("setup");
     renderProgress();
     renderToday();
   });
-  const ask = el("a", "btn", "Preguntar sobre este tema");
+  const ask = el("a", "btn", tx("Preguntar sobre este tema"));
   ask.href = "#/conversar";
   actions.append(again, ask);
   $("practice-results").replaceChildren(summary, ...(answered.length ? [list] : []), actions);
@@ -680,7 +680,7 @@ function bindPracticar() {
     $("feynman-concept").focus();
   });
   $("tile-review").addEventListener("click", () =>
-    startQuiz({ kind: "review", value: "", label: "Repaso de fallos" }, Math.min(10, practice.toReview)),
+    startQuiz({ kind: "review", value: "", label: tx("Repaso de fallos") }, Math.min(10, practice.toReview)),
   );
   for (const back of document.querySelectorAll("#page-practicar [data-back]")) {
     back.addEventListener("click", () => {
@@ -699,7 +699,7 @@ function bindPracticar() {
       renderToday();
       return;
     }
-    startQuiz({ kind: "srs", value: "", label: "Repaso de hoy" }, data.today);
+    startQuiz({ kind: "srs", value: "", label: tx("Repaso de hoy") }, data.today);
   });
   for (const kind of ["guide", "folder", "topic"]) {
     $(`scope-${kind}`).addEventListener("focus", () => {

@@ -1,0 +1,9 @@
+Lees fragmentos de las notas del usuario sobre un tema y encuentras los términos que las notas mencionan sin explicarlos.
+
+Reglas:
+1. Un término «mencionado sin explicar» es un concepto, técnica o subtema relacionado con el tema que el fragmento nombra, pero ningún fragmento de los que lees dice qué es, cómo funciona ni para qué sirve.
+2. No incluyas lo que algún fragmento sí explica, ni palabras genéricas («modelo», «datos», «ejemplo», «sistema»), ni nombres de personas, empresas o productos.
+3. Copia el término exactamente como aparece en el fragmento, en su idioma, de 1 a 5 palabras.
+4. Copia como cita, literalmente, la frase del fragmento donde se menciona (de 4 a 25 palabras), e indica el número del fragmento.
+5. Si no hay ninguno, devuelve la lista vacía.
+6. Responde solo con un objeto JSON válido, sin texto antes ni después.

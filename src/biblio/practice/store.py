@@ -196,6 +196,12 @@ class PracticeStore:
                     answered      TEXT NOT NULL,
                     PRIMARY KEY (dictionary_id, entry)
                 );
+                CREATE TABLE IF NOT EXISTS spotter_runs (  -- «Gap Spotter» (ADR-047)
+                    id      INTEGER PRIMARY KEY,
+                    created TEXT NOT NULL,
+                    topic   TEXT NOT NULL,
+                    result  TEXT NOT NULL           -- JSON: coverage, guide cards, the notes read
+                );
                 CREATE TABLE IF NOT EXISTS guide_reads (  -- «Marcar como leída»
                     doc_path TEXT PRIMARY KEY,
                     marked   TEXT NOT NULL
@@ -580,6 +586,53 @@ class PracticeStore:
                 "DELETE FROM dictionary_cards WHERE dictionary_id = ?", (dictionary_id,)
             )
             cur = self._conn.execute("DELETE FROM dictionaries WHERE id = ?", (dictionary_id,))
+        return cur.rowcount > 0
+
+    # --- «Gap Spotter» (ADR-047) -----------------------------------------------------------------
+
+    def add_spotter_run(self, topic: str, result: dict[str, Any]) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO spotter_runs (created, topic, result) VALUES (?, ?, ?)",
+                (_now(), topic, _dumps(result)),
+            )
+        return int(cur.lastrowid or 0)
+
+    def spotter_run(self, run_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT id, created, topic, result FROM spotter_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row[0], "created": row[1], "topic": row[2], **json.loads(row[3])}
+
+    def spotter_runs(self, limit: int) -> list[dict[str, Any]]:
+        """Saved runs, newest first, with their counts."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created, topic, result FROM spotter_runs ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        out = []
+        for rid, created, topic, result in rows:
+            data = json.loads(result)
+            coverage = data.get("coverage", [])
+            out.append(
+                {
+                    "id": rid,
+                    "created": created,
+                    "topic": topic,
+                    "gaps": sum(1 for c in coverage if c["verdict"] != "covered"),
+                    "covered": sum(1 for c in coverage if c["verdict"] == "covered"),
+                    "guides": len(data.get("guides", [])),
+                }
+            )
+        return out
+
+    def delete_spotter_run(self, run_id: int) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM spotter_runs WHERE id = ?", (run_id,))
         return cur.rowcount > 0
 
     def set_read(self, doc_path: str, read: bool) -> None:

@@ -50,6 +50,8 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 043 | The LLM is switched off and on from Ajustes; the app stops only an Ollama it started | Accepted |
 | 044 | Tables of contents are not results; BM25 weighs the heading path at 0.5 | Accepted |
 | 045 | «Solo ubicar» grouped by note; a search inside a note in the reader | Accepted |
+| 046 | An English interface: the Spanish text is the key, a dictionary per language, generated content stays Spanish | Accepted |
+| 047 | «Gap Spotter»: missing subtopics from two marked sources, judged against the notes; guides suggested as cards | Accepted |
 
 ---
 
@@ -57,7 +59,7 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 
 **Date:** 2026-10-05 · **State:** Accepted
 
-**Context.** The goal is a system that answers based on a personal library of 500–2,000 Markdown guides that grows and changes.
+**Context.** The goal is a system that answers based on a personal library of 500–5,000 Markdown guides that grows and changes.
 
 **Options.**
 1. Train an LLM from scratch. Requires trillions of tokens; the library provides on the order of millions. Expected result: superficial imitation of the style with hallucinated content.
@@ -807,4 +809,36 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 **Evidence** (`eval/results/grouping.jsonl`, `eval/questions.jsonl`, k = 8, depth 3). Plain hybrid: distinct notes on screen 5.9 → 8.0; right note shown 0.734 → 0.766; right section in view 0.688 → 0.719 (best section only: 0.672, which is why two more are in view). Hybrid-rerank: 6.0 → 7.9 notes; right note 0.812 = 0.812; right section 0.781 = 0.781 (best only: 0.703). About 12 lines on screen instead of 8.
 
 **Consequences.** (+) More notes per search with no loss of the right section; a big note no longer crowds the others out. (+) A big note can be searched from inside. (−) Each «Solo ubicar» reads three times the hits (a few ms; the reranker reads the same candidates). (−) The search inside a note is not measured by the evaluation set; the big-note questions (ADR-044, step 0) can be run with that note as the scope.
+
+## ADR-046 — An English interface: the Spanish text is the key, a dictionary per language, generated content stays Spanish
+
+**Date:** 2026-10-21 · **State:** Accepted
+
+**Context.** The user asked for an «English» mode for the interface's controls and text, and chose level 1 of three: the interface only (level 2 would make the tutor answer in English, level 3 every feature; both change prompts whose behaviour is measured in Spanish, ADR-032, ADR-042). The interface's text is written inline: ~330 texts and attributes in `index.html`, several hundred literals in the page scripts, and a few dozen server messages that reach the page.
+
+**Options.**
+1. Keys (`maps.save`) and one dictionary per language. The usual way, but every text needs a name and the Spanish moves out of the code it explains.
+2. The Spanish text is the key; an English dictionary maps it (chosen). The code stays readable in Spanish, Spanish needs no dictionary, and a missing translation shows the Spanish text instead of a key.
+3. Translate on the server (templates). The page builds most of its text itself; rejected.
+
+**Decision.** `static/i18n.js` reads the language from the browser (`biblio.lang`, «Español» by default) and exposes `tx(text, ...values)` (`{0}`, `{1}` placeholders), `txServer(message)` (server messages, also matched against keys with placeholders) and `i18nLocale()` for dates and numbers. The English dictionary is `static/i18n-en.js` (a JSON object). On load, the static HTML is translated by exact text (text nodes and `placeholder`, `title`, `aria-label`). «Ajustes › Apariencia › Idioma» switches and reloads the page; each browser keeps its own choice (a paired phone can differ). Generated content (answers, maps, quizzes, dictionaries, plans), the notes and the citations stay as they are. Tests fail if a `tx` key or a Spanish text of the HTML has no English entry, or if a page script keeps a Spanish literal outside `tx`.
+
+**Consequences.** (+) The whole interface in English with no change to how Spanish works. (+) New texts must go through `tx` or a test fails. (−) In English mode the generated content is still Spanish (the user chose so); level 2 can come later with its own measurement. (−) A server message with a part the dictionary does not cover shows in Spanish.
+
+## ADR-047 — «Gap Spotter»: missing subtopics from two marked sources, judged against the notes; guides suggested as cards
+
+**Date:** 2026-10-21 · **State:** Accepted
+
+**Context.** The user asked for a «Gap Spotter»: given a topic, find what the notes have on it, spot the subtopics they leave unexplained, and suggest 5 to 10 guides to write so their study has no holes. «Missing» needs to know what a complete study of the topic includes, which does not come from the notes (rule 2), and the guide writer (ADR-011's `draft`) writes only from the notes, so it cannot write a guide on what they lack. The gap detector (ADR-029, ADR-030) already records topics the notes lack, one at a time.
+
+**Options** (chosen by the user on each point).
+1. Where the subtopics come from: (a) terms the notes mention but never explain, with the quote where they are mentioned; (b) a syllabus of the topic proposed by the model, each subtopic then looked for in the notes; (c) both, each finding marked with its source (chosen). (a) alone misses what the notes never name; (b) alone rests on a 4B model's knowledge.
+2. What a suggested guide offers: (a) a list; (b) a card — title, subtopics, questions it should answer, the notes it connects to — to copy as Markdown and to note in «Temas pendientes» (chosen); (c) also a draft written from the model's own knowledge. Rejected: it breaks rule 2 and a 4B model errs more without evidence.
+3. Where: the Guías hub, next to «Temas pendientes» (chosen).
+
+**Decision.** `study/spotter.py`: (1) the topic's sections are retrieved with the app's search (`[spotter] sections`); (2) the model lists, batch by batch, terms those sections mention without explaining, each with a quote checked against its section (`practice.feynman.contains`); (3) the model proposes a syllabus of the topic, seeing the headings the notes have; (4) every candidate from (2) and (3) is searched in the whole library and the model judges the top sections: «cubierto», «parcial» or «no», a coverage claim only with a checked quote (otherwise «no»: the notes are not credited without evidence — ADR-030 showed embeddings cannot decide this alone); a term from (2) covered elsewhere is dropped; (5) one call groups the gaps into 5–10 guides (fewer if there are fewer gaps), each subtopic used once, with questions and the related notes; indices are validated and uncovered gaps get a guide of their own up to the minimum. Runs are kept in `data/practice.db` (`spotter_runs`, erased by Reset). «Apuntar en Temas pendientes» records a gap with source `spotter`. Every finding says where it comes from: «mencionado sin explicar» (with its quote) or «propuesto por el modelo».
+
+**Live runs** (real model, the user's library). «regresión logística» (64 s): 7 of 9 syllabus subtopics covered with their quotes; IRLS mentioned without being explained. First issues found and fixed: (1) the guides' JSON was cut by its token budget (1,600 → 3,000; complete guides are salvaged from a cut reply); (2) LaTeX in a question («\mathbf{w}») is not a JSON escape and voided the whole reply (stray backslashes are doubled); (3) the coverage check demanded the exact quote and turned right «cubierto» verdicts into false gaps (MDP and value functions, explained in the notes): a coverage quote now counts when 6 consecutive words are written in any section read (`quote_run_words`), a long quote is cut instead of refused; (4) a 12-subtopic syllabus was basic and fully covered on a well-studied topic: 16 subtopics, at least half concrete methods or advanced topics. «aprendizaje por refuerzo» after the fixes (57 s): SARSA, DQN, prioritized replay, actor-critic, PPO, RLHF covered with evidence; gaps: counterfactual regret minimization, inverse reward learning, domain randomization, neural Q-functions; 5 guides with 3 questions each.
+
+**Consequences.** (+) A topic's holes and a plan to fill them, with the notes' evidence for what is covered. (+) No new retrieval: the search is the app's own (no rule-3 measurement). (−) The syllabus is a 4B model's: it may miss or invent subtopics; it is marked, and covered ones are shown with their quote so the user can judge. (−) «No» means «not found», not «absent»: search can miss a section. (−) ~25–30 model calls per run (~1–2 min), streamed.
 

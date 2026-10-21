@@ -55,6 +55,9 @@ _STATIC_FILES = {
     "/static/dictionary.js": ("dictionary.js", "text/javascript; charset=utf-8"),
     "/static/devices.js": ("devices.js", "text/javascript; charset=utf-8"),
     "/static/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
+    "/static/i18n.js": ("i18n.js", "text/javascript; charset=utf-8"),  # ADR-046
+    "/static/spotter.js": ("spotter.js", "text/javascript; charset=utf-8"),  # ADR-047
+    "/static/i18n-en.js": ("i18n-en.js", "text/javascript; charset=utf-8"),
 }
 _MAX_BODY = 64 * 1024
 _PAIR_HINT = (
@@ -442,7 +445,7 @@ def make_handler(
             if self.path.split("?", 1)[0] == LAN_PAIR_PATH:
                 self._pair()
                 return
-            if self._lan_get() or self._library_get() or self._reset_get():
+            if self._lan_get() or self._library_get() or self._reset_get() or self._spotter_get():
                 return
             if self._conversations_get() or self._maps_get() or self._plans_get():
                 return
@@ -497,6 +500,9 @@ def make_handler(
                 return
             routes = {
                 "/api/search": self._search,
+                "/api/spotter": self._spotter,
+                "/api/spotter/delete": self._spotter_delete,
+                "/api/spotter/pending": self._spotter_pending,
                 "/api/notes/search": self._note_search,
                 "/api/ask": self._ask,
                 "/api/drafts/outline": self._draft_outline,
@@ -585,6 +591,47 @@ def make_handler(
             turn = NewTurn(query, "find", scope, "direct", "done", payload=data)  # ADR-023
             data["conversation_id"], _ = engine.conversations.add_turn(conversation, turn)
             self._send_json(data)
+
+        # --- «Gap Spotter» (ADR-047) ---------------------------------------------------------
+
+        def _spotter(self, payload: dict[str, Any]) -> None:
+            topic = self._text_field(payload, "topic")
+            if topic is not None:
+                self._stream(lambda: engine.spot_gaps(topic))
+
+        def _spotter_delete(self, payload: dict[str, Any]) -> None:
+            run = self._id_field(payload, "id")
+            if run is not None:
+                self._send_json({"ok": True}) if engine.delete_spotter_run(
+                    run
+                ) else self._not_found()
+
+        def _spotter_pending(self, payload: dict[str, Any]) -> None:
+            run, index = self._id_field(payload, "id"), payload.get("guide")
+            if run is None:
+                return
+            if not isinstance(index, int) or isinstance(index, bool):
+                self._send_json({"error": "'guide' must be an integer"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                gap = engine.note_spotter_guide(run, index)
+            except LookupError:
+                self._not_found()
+                return
+            self._send_json({"gap": gap})
+
+        def _spotter_get(self) -> bool:
+            """GET /api/spotter/history and /api/spotter/<id>; False if not this route."""
+            path = urlsplit(self.path).path
+            if path == "/api/spotter/history":
+                self._send_json({"runs": engine.spotter_runs()})
+                return True
+            if not path.startswith("/api/spotter/"):
+                return False
+            raw = path.removeprefix("/api/spotter/")
+            run = engine.spotter_run(int(raw)) if raw.isdigit() else None
+            self._send_json(run) if run is not None else self._not_found()
+            return True
 
         def _note_search(self, payload: dict[str, Any]) -> None:
             """Search inside one note, from the reader (ADR-045); not kept in the history."""

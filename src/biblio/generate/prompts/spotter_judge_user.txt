@@ -1,0 +1,10 @@
+Subtema: {subtopic}
+Qué cubre: {about}
+
+Fragmentos de las notas:
+{fragments}
+
+¿Explican estos fragmentos el subtema?
+
+Formato:
+{{"veredicto": "cubierto | parcial | no", "fragmento": 1, "cita": "..."}}

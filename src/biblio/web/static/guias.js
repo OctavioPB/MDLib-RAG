@@ -25,7 +25,7 @@ function shortDate(iso) {
 async function requireLLM() {
   await loadStatus();
   if (!app.llmRunning) {
-    throw new Error("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
+    throw new Error(tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
   }
 }
 
@@ -44,13 +44,13 @@ async function loadDraftList() {
     button.type = "button";
     if (d.slug === guide.slug && guide.step !== "topic") button.setAttribute("aria-current", "true");
     button.append(el("strong", null, d.topic));
-    const detail = d.has_draft ? `${d.sections} secciones · ${d.sources} fuentes` : "Índice sin escribir";
+    const detail = d.has_draft ? tx("{0} secciones · {1} fuentes", d.sections, d.sources) : tx("Índice sin escribir");
     button.append(el("span", null, `${shortDate(d.updated)} · ${detail}`));
     button.addEventListener("click", () => openGuide(d.slug));
     li.append(button);
     return li;
   });
-  if (!items.length) items.push(el("li", "muted small", "Aún no tienes borradores."));
+  if (!items.length) items.push(el("li", "muted small", tx("Aún no tienes borradores.")));
   $("draft-list").replaceChildren(...items);
 }
 
@@ -94,7 +94,7 @@ async function propose(topic, liveId, statusId, errorId) {
   const live = $(liveId);
   live.textContent = "";
   live.hidden = false;
-  $(statusId).textContent = "Leyendo tus notas y proponiendo un índice…";
+  $(statusId).textContent = tx("Leyendo tus notas y proponiendo un índice…");
   $(statusId).hidden = false;
   try {
     await requireLLM();
@@ -115,7 +115,7 @@ async function propose(topic, liveId, statusId, errorId) {
       }
     });
     if (guide.step === "outline" && !guide.sections.length) {
-      throw new Error("El modelo no propuso ninguna sección. Prueba otra vez o cambia el tema.");
+      throw new Error(tx("El modelo no propuso ninguna sección. Prueba otra vez o cambia el tema."));
     }
   } catch (error) {
     showError(errorId, error.message);
@@ -143,8 +143,8 @@ function iconButton(label, icon, onClick, danger) {
 function renderOutline() {
   const siblings = guide.siblings.map((p) => p.split("/").pop());
   $("outline-siblings").textContent = siblings.length
-    ? `Este índice se propuso a partir de tus notas, imitando la estructura de ${siblings.join(" y ")}. Cambia los títulos, el orden o quita secciones antes de escribir.`
-    : "Cambia los títulos, el orden o quita secciones antes de escribir.";
+    ? tx("Este índice se propuso a partir de tus notas, imitando la estructura de {0}. Cambia los títulos, el orden o quita secciones antes de escribir.", siblings.join(" y "))
+    : tx("Cambia los títulos, el orden o quita secciones antes de escribir.");
   const rows = guide.sections.map((section, i) => {
     const li = el("li", "outline-row");
     li.append(el("span", "outline-n", String(i + 1)));
@@ -153,21 +153,21 @@ function renderOutline() {
     title.type = "text";
     title.value = section.title;
     title.maxLength = 200;
-    title.setAttribute("aria-label", `Título de la sección ${i + 1}`);
+    title.setAttribute("aria-label", tx("Título de la sección {0}", i + 1));
     title.addEventListener("input", () => (section.title = title.value));
     fields.append(title);
     const notes = el("textarea");
     notes.rows = 2;
     notes.maxLength = 1000;
     notes.value = section.notes || "";
-    notes.placeholder = "Notas para esta sección (opcional): qué debe cubrir, qué evitar…";
-    notes.setAttribute("aria-label", `Notas de la sección ${i + 1}`);
+    notes.placeholder = tx("Notas para esta sección (opcional): qué debe cubrir, qué evitar…");
+    notes.setAttribute("aria-label", tx("Notas de la sección {0}", i + 1));
     notes.hidden = !section.notes && !section.showNotes;
     notes.addEventListener("input", () => (section.notes = notes.value));
     fields.append(notes);
     li.append(fields);
     const actions = el("div", "outline-actions");
-    const notesButton = el("button", "btn-ghost", notes.hidden ? "Notas" : "Ocultar notas");
+    const notesButton = el("button", "btn-ghost", notes.hidden ? tx("Notas") : tx("Ocultar notas"));
     notesButton.type = "button";
     notesButton.addEventListener("click", () => {
       section.showNotes = notes.hidden;
@@ -175,9 +175,9 @@ function renderOutline() {
     });
     actions.append(
       notesButton,
-      iconButton(`Subir sección ${i + 1}`, "up", () => moveSection(i, -1)),
-      iconButton(`Bajar sección ${i + 1}`, "down", () => moveSection(i, 1)),
-      iconButton(`Quitar sección ${i + 1}`, "remove", () => {
+      iconButton(tx("Subir sección {0}", i + 1), "up", () => moveSection(i, -1)),
+      iconButton(tx("Bajar sección {0}", i + 1), "down", () => moveSection(i, 1)),
+      iconButton(tx("Quitar sección {0}", i + 1), "remove", () => {
         guide.sections.splice(i, 1);
         renderOutline();
       }, true),
@@ -187,7 +187,7 @@ function renderOutline() {
   });
   $("outline-list").replaceChildren(...rows);
   const n = guide.sections.filter((s) => s.title.trim()).length;
-  $("write-draft").textContent = `Escribir borrador (${n} ${n === 1 ? "sección" : "secciones"})`;
+  $("write-draft").textContent = tx("Escribir borrador ({0} {1})", n, n === 1 ? tx("sección") : tx("secciones"));
   $("write-draft").disabled = guide.busy || n === 0;
 }
 
@@ -196,7 +196,7 @@ function moveSection(i, delta) {
   if (j < 0 || j >= guide.sections.length) return;
   [guide.sections[i], guide.sections[j]] = [guide.sections[j], guide.sections[i]];
   renderOutline();
-  $("outline-list").children[j].querySelector(`[aria-label^="${delta < 0 ? "Subir" : "Bajar"}"]`)?.focus();
+  $("outline-list").children[j].querySelector(`[aria-label^="${delta < 0 ? tx("Subir") : tx("Bajar")}"]`)?.focus();
 }
 
 // --- step 3: writing and showing the draft -------------------------------------------------
@@ -225,19 +225,19 @@ async function writeDraft() {
         const s = guide.live[data.index];
         s.status = "done";
         s.body = data.body;
-        if (data.missing_evidence) s.flags.push(["warn", "Sin evidencia en tu biblioteca"]);
-        if (data.uncited) s.flags.push(["bad", "Sin citas: revísala"]);
-        if (data.invalid_citations.length) s.flags.push(["bad", "Citas inexistentes, marcadas [?]"]);
+        if (data.missing_evidence) s.flags.push(["warn", tx("Sin evidencia en tu biblioteca")]);
+        if (data.uncited) s.flags.push(["bad", tx("Sin citas: revísala")]);
+        if (data.invalid_citations.length) s.flags.push(["bad", tx("Citas inexistentes, marcadas [?]")]);
       } else if (name === "done") {
         guide.markdown = data.markdown;
         guide.sources = data.sources;
         guide.live = null;
-        $("draft-path").textContent = `Guardado en ${data.path}`;
+        $("draft-path").textContent = tx("Guardado en {0}", data.path);
       }
       renderDraft();
     });
   } catch (error) {
-    showError("draft-error", `${error.message} Lo escrito hasta ahora no se guardó.`);
+    showError("draft-error", tx("{0} Lo escrito hasta ahora no se guardó.", error.message));
     if (!guide.markdown) guide.step = "outline";
   } finally {
     guide.busy = false;
@@ -250,7 +250,7 @@ function sourceLink(n) {
   if (n === "?") return el("span", "cite invalid", "?");
   const link = el("a", "cite", n);
   link.href = `#fuente-${n}`;
-  link.setAttribute("aria-label", `Fuente ${n}`);
+  link.setAttribute("aria-label", tx("Fuente {0}", n));
   link.addEventListener("click", (event) => {
     event.preventDefault(); // keep the page's hash route
     const target = document.getElementById(`fuente-${n}`);
@@ -301,13 +301,13 @@ function sourceNode(source, detail) {
   li.id = `fuente-${source.number}`;
   li.append(el("span", "source-n", `${source.number}.`));
   const body = el("div");
-  body.append(el("span", null, detail ? `${detail.citation} (líneas ${detail.lines[0]}-${detail.lines[1]})` : source.line));
+  body.append(el("span", null, detail ? tx("{0} (líneas {1}-{2})", detail.citation, detail.lines[0], detail.lines[1]) : source.line));
   if (detail) {
     const more = el("details");
-    more.append(el("summary", null, "Ver el fragmento"));
+    more.append(el("summary", null, tx("Ver el fragmento")));
     more.append(el("div", "source-text", detail.text));
     if (detail.open_url) {
-      const open = el("a", "btn-soft", "Abrir en Obsidian");
+      const open = el("a", "btn-soft", tx("Abrir en Obsidian"));
       open.href = detail.open_url;
       more.append(open);
     }
@@ -324,8 +324,8 @@ function renderDraft() {
     const done = guide.live.filter((s) => s.status === "done").length;
     const writing = guide.live.findIndex((s) => s.status === "writing");
     $("draft-status").textContent = writing >= 0
-      ? `Escribiendo sección ${writing + 1} de ${guide.live.length}…`
-      : `${done} de ${guide.live.length} secciones`;
+      ? tx("Escribiendo sección {0} de {1}…", writing + 1, guide.live.length)
+      : tx("{0} de {1} secciones", done, guide.live.length);
     for (const s of guide.live) {
       const li = el("li", `progress-${s.status}`, s.title);
       if (s.status === "writing") li.setAttribute("aria-current", "step");
@@ -342,7 +342,7 @@ function renderDraft() {
   } else if (guide.markdown) {
     const parsed = parseDraft(guide.markdown);
     const details = new Map((guide.sources || []).map((s) => [s.number, s]));
-    $("draft-status").textContent = `${parsed.sections.length} secciones · ${parsed.sources.length} fuentes`;
+    $("draft-status").textContent = tx("{0} secciones · {1} fuentes", parsed.sections.length, parsed.sources.length);
     for (const s of parsed.sections) {
       const li = el("li", "progress-done", s.title);
       if (s.flags.length) li.classList.add("has-flags");
@@ -352,7 +352,7 @@ function renderDraft() {
       if (s.body) doc.push(textWithCitations(s.body));
     }
     if (parsed.sources.length) {
-      doc.push(el("h2", null, "Fuentes"));
+      doc.push(el("h2", null, tx("Fuentes")));
       const list = el("ol", "source-list");
       for (const source of parsed.sources) list.append(sourceNode(source, details.get(source.number)));
       doc.push(list);
@@ -411,7 +411,7 @@ function bindGuias() {
     if (topic) propose(topic, "outline-live", "propose-status", "topic-error");
   });
   $("repropose").addEventListener("click", () => {
-    if (confirm("Se reemplazará el índice actual, con tus cambios. ¿Continuar?")) {
+    if (confirm(tx("Se reemplazará el índice actual, con tus cambios. ¿Continuar?"))) {
       propose(guide.topic, "repropose-live", "outline-status", "outline-error");
     }
   });
@@ -432,11 +432,11 @@ function bindGuias() {
   $("copy-md").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(guide.markdown);
-      $("copy-md").textContent = "Copiado";
+      $("copy-md").textContent = tx("Copiado");
     } catch {
-      $("copy-md").textContent = "No se pudo copiar";
+      $("copy-md").textContent = tx("No se pudo copiar");
     }
-    setTimeout(() => ($("copy-md").textContent = "Copiar Markdown"), 2000);
+    setTimeout(() => ($("copy-md").textContent = tx("Copiar Markdown")), 2000);
   });
 }
 

@@ -46,6 +46,9 @@ ASSETS = (
     "devices.js",
     "settings.js",
     "mapas.js",
+    "i18n.js",
+    "i18n-en.js",
+    "spotter.js",
 )
 
 
@@ -749,3 +752,88 @@ def test_search_grouped_by_note_and_inside_one_note(server: tuple[str, int]) -> 
     assert after == before  # a search inside a note is not kept in the history
     bad = {"path": "no/existe.md", "query": "Bayes"}
     assert request(server, "POST", "/api/notes/search", bad)[0] == 400
+
+
+# --- the interface in English (ADR-046) ---------------------------------------------------------
+
+_STATIC_DIR = Path(__file__).parents[1] / "src" / "biblio" / "web" / "static"
+_NOT_TRANSLATED = {"Español", "English", "OPB", "PB", "O"}  # each language names itself; the brand
+
+
+def _english() -> dict[str, str]:
+    text = (_STATIC_DIR / "i18n-en.js").read_text(encoding="utf-8")
+    body = text[text.index("const I18N_EN = ") + len("const I18N_EN = ") : text.rindex(";")]
+    data = json.loads(body)
+    assert isinstance(data, dict)
+    return data
+
+
+def _html_texts() -> list[str]:
+    from html.parser import HTMLParser
+
+    class Texts(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.found: list[str] = []
+            self.skip = 0
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag in ("script", "style", "svg", "code", "pre"):
+                self.skip += 1
+            for name, value in attrs:
+                if name in ("placeholder", "title", "aria-label") and value:
+                    self.found.append(" ".join(value.split()))
+
+        def handle_endtag(self, tag: str) -> None:
+            if tag in ("script", "style", "svg", "code", "pre"):
+                self.skip -= 1
+
+        def handle_data(self, data: str) -> None:
+            text = " ".join(data.split())
+            if not self.skip and text:
+                self.found.append(text)
+
+    parser = Texts()
+    parser.feed((_STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+    letters = re.compile(r"[A-Za-zÁÉÍÓÚáéíóúñÑ]")
+    return [t for t in parser.found if letters.search(t) and t not in _NOT_TRANSLATED]
+
+
+def test_every_interface_text_has_an_english_entry() -> None:
+    english = _english()
+    missing = [t for t in _html_texts() if t not in english]
+    for name in ASSETS:
+        if name.endswith(".js") and not name.startswith("i18n"):
+            src = (_STATIC_DIR / name).read_text(encoding="utf-8")
+            for raw in re.findall(r'\btx\("((?:[^"\\]|\\.)*)"', src):
+                key = json.loads(f'"{raw}"')
+                if key not in english:
+                    missing.append(f"{name}: {key}")
+    assert missing == []
+    for spanish, text in english.items():  # the same placeholders on both sides
+        assert sorted(re.findall(r"\{\d+\}", spanish)) == sorted(re.findall(r"\{\d+\}", text)), (
+            spanish
+        )
+
+
+def test_page_scripts_keep_no_spanish_text_outside_tx() -> None:
+    """A Spanish literal with accents or ¿¡ outside tx() would stay Spanish in English mode."""
+    allowed = {"## Fuentes"}  # draft content the page parses, not interface text
+    found = []
+    for name in ASSETS:
+        if not name.endswith(".js") or name.startswith("i18n"):
+            continue
+        text_of = (_STATIC_DIR / name).read_text(encoding="utf-8")
+        src = re.sub(r"//[^\n]*|/\*.*?\*/", "", text_of, flags=re.S)
+        for match in re.finditer(r'"((?:[^"\\\n]|\\.)*)"', src):
+            text = match.group(1)
+            wrapped = src[max(0, match.start() - 3) : match.start()].endswith("tx(")
+            if re.search(r"[áéíóúñÁÉÍÓÚÑ¿¡]", text) and text not in allowed and not wrapped:
+                found.append(f"{name}: {text}")
+    assert found == []
+
+
+def test_the_english_files_are_served(server: tuple[str, int]) -> None:
+    for path in ("/static/i18n.js", "/static/i18n-en.js"):
+        status, headers, _ = request(server, "GET", path)
+        assert status == 200 and "javascript" in headers.get("content-type", "")

@@ -34,10 +34,10 @@ function rememberRecent(path, title) {
 }
 
 // «Leer» next to «Abrir en Obsidian» wherever a note appears
-function readLink(path, line, cls = "btn-soft", label = "Leer") {
+function readLink(path, line, cls = "btn-soft", label = tx("Leer")) {
   const link = el("a", cls, label);
   link.href = readerHref(path, line);
-  link.title = "Leer la nota dentro de la app";
+  link.title = tx("Leer la nota dentro de la app");
   return link;
 }
 
@@ -125,7 +125,7 @@ function readerInline(n) {
     case "wikilink": {
       if (!n.note) {
         const missing = el("span", "wikilink missing", n.text);
-        missing.title = "Esta nota no está en tu biblioteca indexada";
+        missing.title = tx("Esta nota no está en tu biblioteca indexada");
         return missing;
       }
       const link = el("a", "wikilink", n.text);
@@ -133,7 +133,7 @@ function readerInline(n) {
       return link;
     }
     case "image":
-      return el("span", "img-alt", `[Imagen: ${n.alt || "sin descripción"}]`);
+      return el("span", "img-alt", tx("[Imagen: {0}]", n.alt || tx("sin descripción")));
     default:
       return document.createTextNode(n.text || "");
   }
@@ -199,13 +199,13 @@ async function openNote(path, line) {
     $("reader-panel").hidden = true;
     readerFindClear();
     $("reader-find-input").value = "";
-    $("reader-title").textContent = "Abriendo…";
+    $("reader-title").textContent = tx("Abriendo…");
     $("reader-body").replaceChildren();
     const response = await fetch(`/api/notes/view?path=${encodeURIComponent(path)}`);
     if (!response.ok) {
-      $("reader-title").textContent = "No encontré esa nota";
+      $("reader-title").textContent = tx("No encontré esa nota");
       $("reader-path").textContent = path;
-      $("reader-body").replaceChildren(el("p", "muted", "Solo se pueden leer las notas indexadas de tu biblioteca."));
+      $("reader-body").replaceChildren(el("p", "muted", tx("Solo se pueden leer las notas indexadas de tu biblioteca.")));
       $("reader-actions").hidden = true;
       return;
     }
@@ -244,18 +244,18 @@ async function readerFind(event) {
   if (!query || !reader.path) return;
   const box = $("reader-find-results");
   box.hidden = false;
-  box.replaceChildren(el("p", "small muted", "Buscando en la nota…"));
+  box.replaceChildren(el("p", "small muted", tx("Buscando en la nota…")));
   try {
     const response = await postJSON("/api/notes/search", { path: reader.path, query });
     if (!response.ok) throw new Error(await errorText(response));
     const data = await response.json();
     const head = el("div", "reader-find-head");
     head.append(el("span", "small muted", data.hits.length
-      ? `${data.hits.length} ${data.hits.length === 1 ? "sección" : "secciones"} de esta nota, de la más a la menos relevante`
-      : "Nada en esta nota trata de eso."));
+      ? tx("{0} {1} de esta nota, de la más a la menos relevante", data.hits.length, data.hits.length === 1 ? tx("sección") : tx("secciones"))
+      : tx("Nada en esta nota trata de eso.")));
     const close = el("button", "btn-icon-plain", "✕");
     close.type = "button";
-    close.setAttribute("aria-label", "Cerrar los resultados");
+    close.setAttribute("aria-label", tx("Cerrar los resultados"));
     close.addEventListener("click", readerFindClear);
     head.append(close);
     const list = el("ol", "reader-find-list");
@@ -263,7 +263,7 @@ async function readerFind(event) {
       const item = el("li");
       const go = el("button", "reader-find-item");
       go.type = "button";
-      go.append(el("strong", null, hit.sections.join(" › ") || hit.guide), el("span", null, `líneas ${hit.lines[0]}–${hit.lines[1]} · ${hit.excerpt.replace(/[*_`#>]+/g, "")}`));
+      go.append(el("strong", null, hit.sections.join(" › ") || hit.guide), el("span", null, tx("líneas {0}–{1} · {2}", hit.lines[0], hit.lines[1], hit.excerpt.replace(/[*_`#>]+/g, ""))));
       go.addEventListener("click", () => {
         for (const other of list.querySelectorAll(".reader-find-item")) other.classList.toggle("active", other === go);
         scrollToLine(hit.lines[0]);
@@ -285,7 +285,7 @@ async function readerFind(event) {
 
 function renderReadMark() {
   const button = $("reader-read");
-  button.textContent = reader.view.read ? "Leída ✓" : "Marcar como leída";
+  button.textContent = reader.view.read ? tx("Leída ✓") : tx("Marcar como leída");
   button.setAttribute("aria-pressed", String(Boolean(reader.view.read)));
 }
 
@@ -360,11 +360,11 @@ function updateToolbar() {
 function panelCard(kind, passage) {
   $("reader-panel").hidden = false;
   const card = el("section", "reader-card");
-  const level = kind === "Explícame esto" ? ` · ${LEVEL_LABELS[app.settings.level]}` : "";
+  const level = kind === tx("Explícame esto") ? ` · ${LEVEL_LABELS[app.settings.level]}` : "";
   card.append(el("span", "eyebrow", `${kind}${level}`));
   const quote = el("blockquote", "reader-quote", passage.text.length > 260 ? `${passage.text.slice(0, 259)}…` : passage.text);
   card.append(renderMathIn(quote));
-  if (passage.cut) card.append(el("p", "small muted", `Usé los primeros ${PASSAGE_MAX} caracteres de la selección.`));
+  if (passage.cut) card.append(el("p", "small muted", tx("Usé los primeros {0} caracteres de la selección.", PASSAGE_MAX)));
   $("reader-panel-list").append(card);
   card.scrollIntoView({ block: "nearest" });
   return card;
@@ -373,7 +373,7 @@ function panelCard(kind, passage) {
 async function needLLM(card) {
   await loadStatus();
   if (app.llmRunning) return true;
-  card.append(el("p", "error", "El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
+  card.append(el("p", "error", tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.")));
   return false;
 }
 
@@ -398,9 +398,9 @@ function citeNode(fragments) {
 }
 
 async function explainPassage(passage) {
-  const card = panelCard("Explícame esto", passage);
+  const card = panelCard(tx("Explícame esto"), passage);
   if (!(await needLLM(card))) return;
-  const status = el("p", "small muted", "Leyendo el pasaje y lo que dicen tus otras notas…");
+  const status = el("p", "small muted", tx("Leyendo el pasaje y lo que dicen tus otras notas…"));
   const answer = el("div", "reader-answer");
   card.append(status, answer);
   let text = "";
@@ -412,7 +412,7 @@ async function explainPassage(passage) {
       (name, data) => {
         if (name === "meta") {
           fragments = data.fragments;
-          status.textContent = `Con el pasaje y ${fragments.length - 1} ${fragments.length === 2 ? "fragmento" : "fragmentos"} más de tus notas`;
+          status.textContent = tx("Con el pasaje y {0} {1} más de tus notas", fragments.length - 1, fragments.length === 2 ? tx("fragmento") : tx("fragmentos"));
         } else if (name === "token") {
           text += data.text;
           answer.replaceChildren(markdownNode(text, citeNode(fragments), "md answer")); // formulas once done
@@ -420,7 +420,7 @@ async function explainPassage(passage) {
           reader.conversationId = data.conversation_id;
           answer.replaceChildren(renderMathIn(markdownNode(text, citeNode(fragments), "md answer")));
           card.append(flagsNode(data));
-          const more = el("button", "link-button", "Seguir en Conversar →");
+          const more = el("button", "link-button", tx("Seguir en Conversar →"));
           more.type = "button";
           more.addEventListener("click", async () => {
             location.hash = "#/conversar";
@@ -443,9 +443,9 @@ function checkedKinds() {
 }
 
 async function quizPassage(passage) {
-  const card = panelCard("Pregúntame sobre esto", passage);
+  const card = panelCard(tx("Pregúntame sobre esto"), passage);
   if (!(await needLLM(card))) return;
-  const status = el("p", "small muted", "Escribiendo preguntas sobre el pasaje…");
+  const status = el("p", "small muted", tx("Escribiendo preguntas sobre el pasaje…"));
   const list = el("div", "reader-questions");
   card.append(status, list);
   try {
@@ -456,8 +456,8 @@ async function quizPassage(passage) {
         if (name === "question") list.append(questionBox(data));
         else if (name === "done") {
           status.textContent = data.generated
-            ? "Cuentan como práctica de esta sección para tus repasos."
-            : "No pude escribir preguntas sobre este pasaje.";
+            ? tx("Cuentan como práctica de esta sección para tus repasos.")
+            : tx("No pude escribir preguntas sobre este pasaje.");
         }
       },
     );
@@ -480,12 +480,12 @@ function questionBox(q) {
   const show = (good, data) => {
     feedback.replaceChildren();
     feedback.className = `reader-feedback ${good === true ? "good" : good === false ? "bad" : "neutral"}`;
-    if (good !== null) feedback.append(el("strong", null, good ? "Correcto" : "No es correcto"));
-    if (data.reference) feedback.append(renderMathIn(el("p", null, `Referencia: ${data.reference}`)));
+    if (good !== null) feedback.append(el("strong", null, good ? tx("Correcto") : tx("No es correcto")));
+    if (data.reference) feedback.append(renderMathIn(el("p", null, tx("Referencia: {0}", data.reference))));
     if (data.explanation) feedback.append(renderMathIn(el("p", null, data.explanation)));
   };
   if (q.kind === "mc" || q.kind === "tf") {
-    const choices = q.kind === "mc" ? q.options.map((o, i) => [i, `${"ABCD"[i]}. ${o}`]) : [[true, "Verdadero"], [false, "Falso"]];
+    const choices = q.kind === "mc" ? q.options.map((o, i) => [i, `${"ABCD"[i]}. ${o}`]) : [[true, tx("Verdadero")], [false, tx("Falso")]];
     const row = el("div", "reader-choices");
     for (const [value, label] of choices) {
       const button = renderMathIn(el("button", "option", label));
@@ -510,9 +510,9 @@ function questionBox(q) {
   } else {
     const area = el("textarea", "answer-box");
     area.rows = 3;
-    area.placeholder = "Tu respuesta…";
-    area.setAttribute("aria-label", "Tu respuesta");
-    const reveal = el("button", "btn", "Mostrar respuesta");
+    area.placeholder = tx("Tu respuesta…");
+    area.setAttribute("aria-label", tx("Tu respuesta"));
+    const reveal = el("button", "btn", tx("Mostrar respuesta"));
     reveal.type = "button";
     reveal.addEventListener("click", async () => {
       reveal.disabled = true;
@@ -520,13 +520,13 @@ function questionBox(q) {
         const data = await practicePost("/api/practice/reveal", { question_id: q.id });
         show(null, data);
         const grade = el("div", "row");
-        grade.append(el("span", "small", "¿Cómo te fue?"));
-        for (const [result, label] of [["correct", "La sabía"], ["partial", "A medias"], ["wrong", "No la sabía"]]) {
+        grade.append(el("span", "small", tx("¿Cómo te fue?")));
+        for (const [result, label] of [["correct", tx("La sabía")], ["partial", tx("A medias")], ["wrong", tx("No la sabía")]]) {
           const b = el("button", "btn", label);
           b.type = "button";
           b.addEventListener("click", async () => {
             await practicePost("/api/practice/self", { question_id: q.id, answer: area.value, result });
-            grade.replaceChildren(el("span", "small muted", `Guardado: ${label.toLowerCase()}.`));
+            grade.replaceChildren(el("span", "small muted", tx("Guardado: {0}.", label.toLowerCase())));
           });
           grade.append(b);
         }

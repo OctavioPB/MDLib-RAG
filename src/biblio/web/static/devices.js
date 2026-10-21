@@ -13,8 +13,8 @@ function lanMinutesLeft() {
 function lanShowExpiry() {
   const left = lanMinutesLeft();
   $("lan-expiry").textContent = left
-    ? `Vale para un solo dispositivo durante ${left} ${left === 1 ? "minuto" : "minutos"}.`
-    : "El código caducó: genera otro.";
+    ? tx("Vale para un solo dispositivo durante {0} {1}.", left, left === 1 ? tx("minuto") : tx("minutos"))
+    : tx("El código caducó: genera otro.");
   $("lan-qr").classList.toggle("expired", !left);
 }
 
@@ -49,21 +49,21 @@ async function lanLoadDevices() {
   } catch {
     return;
   }
-  $("lan-address").textContent = data.url || "este PC no tiene dirección en una red privada";
+  $("lan-address").textContent = data.url || tx("este PC no tiene dirección en una red privada");
   const list = $("lan-devices");
   if (!data.devices.length) {
-    list.replaceChildren(el("li", "muted", "Ninguno todavía."));
+    list.replaceChildren(el("li", "muted", tx("Ninguno todavía.")));
     return;
   }
   list.replaceChildren(
     ...data.devices.map((d) => {
       const li = el("li", "lan-device");
       const text = el("div");
-      text.append(el("strong", null, d.name), el("span", "small muted", `Emparejado el ${lanDate(d.created)} · último uso ${lanDate(d.last_seen)}`));
-      const remove = el("button", "btn danger-text", "Quitar");
+      text.append(el("strong", null, d.name), el("span", "small muted", tx("Emparejado el {0} · último uso {1}", lanDate(d.created), lanDate(d.last_seen))));
+      const remove = el("button", "btn danger-text", tx("Quitar"));
       remove.type = "button";
       remove.addEventListener("click", async () => {
-        if (!confirm(`¿Quitar «${d.name}»? Tendrá que volver a escanear un código para entrar.`)) return;
+        if (!confirm(tx("¿Quitar «{0}»? Tendrá que volver a escanear un código para entrar.", d.name))) return;
         await postJSON("/api/lan/revoke", { id: d.id });
         lanLoadDevices();
       });

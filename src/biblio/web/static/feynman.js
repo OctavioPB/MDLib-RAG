@@ -3,7 +3,7 @@
 // showScreen of practicar.js. Library and model text is only ever inserted with textContent.
 "use strict";
 
-const FEYNMAN_GRADES = [["correct", "Bien"], ["partial", "A medias"], ["wrong", "Mal"]];
+const FEYNMAN_GRADES = [["correct", tx("Bien")], ["partial", tx("A medias")], ["wrong", tx("Mal")]];
 const COVERAGE_MARKS = { covered: ["✓", "correct"], partial: ["~", "partial"], missing: ["✗", "wrong"] };
 const CLAIM_MARKS = { supported: ["✓", "correct"], contradicts: ["✗", "wrong"], unsupported: ["?", "partial"] };
 
@@ -54,16 +54,16 @@ function renderFeynman() {
   const s = feynman.session;
   const card = el("section", "practice-card question-card");
   const tags = el("div", "row");
-  tags.append(el("span", "tag", "Explícamelo tú"), el("span", "badge warn", "Experimental"));
+  tags.append(el("span", "tag", tx("Explícamelo tú")), el("span", "badge warn", tx("Experimental")));
   card.append(tags);
   card.append(el("h1", "question-text", s.concept));
-  card.append(el("p", "muted", "Explícalo con tus palabras, como si se lo contaras a alguien que no sabe nada del tema. Después lo comparo con tus notas."));
+  card.append(el("p", "muted", tx("Explícalo con tus palabras, como si se lo contaras a alguien que no sabe nada del tema. Después lo comparo con tus notas.")));
   const area = el("textarea", "answer-box");
   area.id = "feynman-text";
   area.rows = 9;
   area.maxLength = 4000;
-  area.placeholder = "Escribe aquí tu explicación…";
-  area.setAttribute("aria-label", "Tu explicación");
+  area.placeholder = tx("Escribe aquí tu explicación…");
+  area.setAttribute("aria-label", tx("Tu explicación"));
   area.value = s.text;
   area.addEventListener("input", () => {
     s.text = area.value;
@@ -75,11 +75,11 @@ function renderFeynman() {
   status.setAttribute("aria-live", "polite");
   card.append(status);
   const row = el("div", "row");
-  const check = el("button", "btn-primary btn-big", "Comprobar");
+  const check = el("button", "btn-primary btn-big", tx("Comprobar"));
   check.id = "feynman-check";
   check.type = "button";
   check.addEventListener("click", checkExplanation);
-  const back = el("button", "btn", "Volver");
+  const back = el("button", "btn", tx("Volver"));
   back.type = "button";
   back.addEventListener("click", leaveFeynman);
   row.append(check, back);
@@ -98,11 +98,11 @@ function updateFeynmanControls() {
   const length = s.text.trim().length;
   let status;
   if (s.error) status = s.error;
-  else if (s.checking) status = "Comparando tu explicación con tus notas…";
-  else if (!s.id) status = "Mientras escribes, leo lo que dicen tus notas…";
-  else if (s.review) status = s.result ? "Guardado en tu práctica." : "";
-  else if (length < minChars()) status = `Listo: lo compararé con ${s.notes} ${s.notes === 1 ? "sección" : "secciones"} de tus notas. Escribe al menos ${minChars()} caracteres.`;
-  else status = `Listo: lo compararé con ${s.notes} ${s.notes === 1 ? "sección" : "secciones"} de tus notas.`;
+  else if (s.checking) status = tx("Comparando tu explicación con tus notas…");
+  else if (!s.id) status = tx("Mientras escribes, leo lo que dicen tus notas…");
+  else if (s.review) status = s.result ? tx("Guardado en tu práctica.") : "";
+  else if (length < minChars()) status = tx("Listo: lo compararé con {0} {1} de tus notas. Escribe al menos {2} caracteres.", s.notes, s.notes === 1 ? tx("sección") : tx("secciones"), minChars());
+  else status = tx("Listo: lo compararé con {0} {1} de tus notas.", s.notes, s.notes === 1 ? tx("sección") : tx("secciones"));
   $("feynman-status").textContent = status;
   $("feynman-status").hidden = !status;
   $("feynman-status").classList.toggle("error", Boolean(s.error));
@@ -159,13 +159,13 @@ async function checkExplanation() {
 
 function citationOf(review, number) {
   const source = (review.sources || []).find((f) => f.number === number);
-  return source ? source.citation : `fragmento ${number}`;
+  return source ? source.citation : tx("fragmento {0}", number);
 }
 
 function voteControl(s, point) {
   const box = el("span", "vote");
-  box.append(el("span", "small muted", "¿Es justo?"));
-  for (const [fair, label] of [[true, "Sí"], [false, "No"]]) {
+  box.append(el("span", "small muted", tx("¿Es justo?")));
+  for (const [fair, label] of [[true, tx("Sí")], [false, tx("No")]]) {
     const button = el("button", "btn-soft btn-small", label);
     button.type = "button";
     button.setAttribute("aria-pressed", String(s.votes.get(point) === fair));
@@ -205,7 +205,7 @@ function renderReview() {
     const covered = r.ideas.filter((i) => i.verdict === "covered").length;
     const partial = r.ideas.filter((i) => i.verdict === "partial").length;
     const summary = el("div", `feedback ${{ correct: "good", partial: "mid", wrong: "bad" }[r.proposed]}`);
-    summary.append(el("strong", null, `Cubriste ${covered} de ${r.ideas.length} ideas clave${partial ? ` y ${partial} a medias` : ""}`));
+    summary.append(el("strong", null, tx("Cubriste {0} de {1} ideas clave{2}", covered, r.ideas.length, partial ? tx(" y {0} a medias", partial) : "")));
     const bar = el("div", "bar");
     const fill = el("div", "bar-fill");
     fill.style.width = `${Math.round(r.score * 100)}%`;
@@ -214,37 +214,37 @@ function renderReview() {
     nodes.push(summary);
   }
   if (r.ideas) {
-    nodes.push(el("h2", "feynman-heading", "Ideas clave de tus notas"));
+    nodes.push(el("h2", "feynman-heading", tx("Ideas clave de tus notas")));
     const list = el("ul", "results-list");
     r.ideas.forEach((idea, i) => {
-      const said = idea.phrase ? ["small", `Lo dijiste: «${idea.phrase}»`] : ["small", "No lo encontré en tu explicación."];
+      const said = idea.phrase ? ["small", tx("Lo dijiste: «{0}»", idea.phrase)] : ["small", tx("No lo encontré en tu explicación.")];
       const source = ["small muted", `${citationOf(r, idea.fragment)}: «${idea.quote}»`];
       list.append(pointRow(COVERAGE_MARKS[idea.verdict], idea.text, [said, source], r.proposed ? voteControl(s, `idea:${i}`) : null));
     });
     nodes.push(list);
   } else if (s.checking) {
-    nodes.push(el("p", "muted", "Buscando las ideas clave en tu explicación…"));
+    nodes.push(el("p", "muted", tx("Buscando las ideas clave en tu explicación…")));
   }
   if (r.claims) {
-    nodes.push(el("h2", "feynman-heading", "Lo que afirmaste"));
-    if (r.claimsFailed) nodes.push(el("p", "muted", "Esta vez no pude revisar tus afirmaciones."));
-    else if (!r.claims.length) nodes.push(el("p", "muted", "No encontré afirmaciones que contrastar."));
+    nodes.push(el("h2", "feynman-heading", tx("Lo que afirmaste")));
+    if (r.claimsFailed) nodes.push(el("p", "muted", tx("Esta vez no pude revisar tus afirmaciones.")));
+    else if (!r.claims.length) nodes.push(el("p", "muted", tx("No encontré afirmaciones que contrastar.")));
     const list = el("ul", "results-list");
     r.claims.forEach((claim, i) => {
       const lines = {
-        supported: [["small", "Tus notas lo respaldan."], ["small muted", `${citationOf(r, claim.fragment)}: «${claim.quote}»`]],
-        contradicts: [["small", "Tus notas dicen otra cosa."], ["small muted", `${citationOf(r, claim.fragment)}: «${claim.quote}»`]],
-        unsupported: [["small", "Tus notas no lo mencionan (no quiere decir que sea falso)."]],
+        supported: [["small", tx("Tus notas lo respaldan.")], ["small muted", `${citationOf(r, claim.fragment)}: «${claim.quote}»`]],
+        contradicts: [["small", tx("Tus notas dicen otra cosa.")], ["small muted", `${citationOf(r, claim.fragment)}: «${claim.quote}»`]],
+        unsupported: [["small", tx("Tus notas no lo mencionan (no quiere decir que sea falso).")]],
       }[claim.verdict];
       list.append(pointRow(CLAIM_MARKS[claim.verdict], `«${claim.text}»`, lines, r.proposed ? voteControl(s, `claim:${i}`) : null));
     });
     nodes.push(list);
   } else if (r.ideas && s.checking) {
-    nodes.push(el("p", "muted", "Revisando lo que afirmaste…"));
+    nodes.push(el("p", "muted", tx("Revisando lo que afirmaste…")));
   }
   if (r.proposed) nodes.push(gradeCard(s));
   if (r.sources) {
-    nodes.push(el("h2", "feynman-heading", "Tus notas"));
+    nodes.push(el("h2", "feynman-heading", tx("Tus notas")));
     for (const f of r.sources) {
       const item = el("details", "map-source");
       item.append(el("summary", null, `[${f.number}] ${f.citation}`));
@@ -252,7 +252,7 @@ function renderReview() {
       const links = el("div", "row");
       links.append(readLink(f.doc_path, f.lines[0]));
       if (f.open_url) {
-        const open = el("a", "btn", "Abrir en Obsidian");
+        const open = el("a", "btn", tx("Abrir en Obsidian"));
         open.href = f.open_url;
         links.append(open);
       }
@@ -267,11 +267,11 @@ function gradeCard(s) {
   const card = el("div", "feedback neutral");
   const proposed = Object.fromEntries(FEYNMAN_GRADES)[s.review.proposed];
   if (s.result) {
-    card.append(el("strong", null, `Guardado: ${Object.fromEntries(FEYNMAN_GRADES)[s.result].toLowerCase()}`));
-    card.append(el("p", "small", "Cuenta para tus repasos y para el dominio de los mapas."));
+    card.append(el("strong", null, tx("Guardado: {0}", Object.fromEntries(FEYNMAN_GRADES)[s.result].toLowerCase())));
+    card.append(el("p", "small", tx("Cuenta para tus repasos y para el dominio de los mapas.")));
   } else {
-    card.append(el("strong", null, `Nota propuesta: ${proposed.toLowerCase()}`));
-    card.append(el("p", "small", "Acéptala o cámbiala; se guarda como práctica de las secciones de tus notas que tratan esto."));
+    card.append(el("strong", null, tx("Nota propuesta: {0}", proposed.toLowerCase())));
+    card.append(el("p", "small", tx("Acéptala o cámbiala; se guarda como práctica de las secciones de tus notas que tratan esto.")));
     const row = el("div", "row");
     for (const [result, label] of FEYNMAN_GRADES) {
       const button = el("button", result === s.review.proposed ? "btn-primary" : "btn", label);
@@ -294,7 +294,7 @@ function gradeCard(s) {
   }
   const more = el("div", "row");
   if (!s.result) {
-    const retry = el("button", "btn", "Corregir y comprobar otra vez");
+    const retry = el("button", "btn", tx("Corregir y comprobar otra vez"));
     retry.type = "button";
     retry.addEventListener("click", () => {
       s.review = null;
@@ -304,7 +304,7 @@ function gradeCard(s) {
     });
     more.append(retry);
   }
-  const another = el("button", "btn", "Explicar otro concepto");
+  const another = el("button", "btn", tx("Explicar otro concepto"));
   another.type = "button";
   another.addEventListener("click", leaveFeynman);
   more.append(another);
@@ -317,12 +317,12 @@ function bindFeynman() {
     event.preventDefault();
     const concept = $("feynman-concept").value.trim();
     if (!concept) {
-      showError("feynman-error", "Escribe el concepto que vas a explicar.");
+      showError("feynman-error", tx("Escribe el concepto que vas a explicar."));
       return;
     }
     await loadStatus();
     if (!app.llmRunning) {
-      showError("feynman-error", "El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
+      showError("feynman-error", tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
       return;
     }
     startFeynman(concept);

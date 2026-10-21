@@ -18,11 +18,11 @@ const mapState = {
 };
 
 const MAP_KINDS = {
-  concepts: { label: "Conceptos", unit: ["concepto", "conceptos"], aria: "Mapa de conceptos" },
-  novak: { label: "Mapa conceptual", unit: ["concepto", "conceptos"], aria: "Mapa conceptual" },
-  flow: { label: "Flujo", unit: ["paso", "pasos"], aria: "Diagrama de flujo", none: "un proceso" },
-  sequence: { label: "Secuencia", unit: ["mensaje", "mensajes"], aria: "Diagrama de secuencia", none: "una interacción entre participantes" },
-  fishbone: { label: "Causa-efecto", unit: ["causa", "causas"], aria: "Diagrama de causa-efecto", none: "causas" },
+  concepts: { label: tx("Conceptos"), unit: [tx("concepto"), tx("conceptos")], aria: tx("Mapa de conceptos") },
+  novak: { label: tx("Mapa conceptual"), unit: [tx("concepto"), tx("conceptos")], aria: tx("Mapa conceptual") },
+  flow: { label: tx("Flujo"), unit: [tx("paso"), tx("pasos")], aria: tx("Diagrama de flujo"), none: tx("un proceso") },
+  sequence: { label: tx("Secuencia"), unit: [tx("mensaje"), tx("mensajes")], aria: tx("Diagrama de secuencia"), none: tx("una interacción entre participantes") },
+  fishbone: { label: tx("Causa-efecto"), unit: [tx("causa"), tx("causas")], aria: tx("Diagrama de causa-efecto"), none: tx("causas") },
 };
 
 const current = () => mapState.trail[mapState.trail.length - 1] || null;
@@ -66,7 +66,7 @@ async function createMap(topic, expand = false) {
   showError("map-error", "");
   await loadStatus();
   if (!app.llmRunning) {
-    showError("map-error", "El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1.");
+    showError("map-error", tx("El modelo de lenguaje no está encendido. Inícialo con scripts/serve-llm.ps1."));
     return;
   }
   const kind = expand && current() ? current().kind : mapState.kind;
@@ -80,9 +80,9 @@ async function createMap(topic, expand = false) {
   mapState.controller = new AbortController();
   $("map-topic").value = topic;
   $("map-suggestion").hidden = true;
-  setStatus("Buscando en tus notas…");
+  setStatus(tx("Buscando en tus notas…"));
   renderAll();
-  const stages = { grouping: "Agrupando las causas en categorías…" };
+  const stages = { grouping: tx("Agrupando las causas en categorías…") };
   try {
     await streamEvents(
       "/api/maps",
@@ -90,30 +90,30 @@ async function createMap(topic, expand = false) {
       (name, data) => {
         if (name === "start") {
           entry.fragments = data.fragments;
-          setStatus(`Leyendo ${data.fragments.length} fragmentos de tus notas…`);
+          setStatus(tx("Leyendo {0} fragmentos de tus notas…", data.fragments.length));
         } else if (name === "map") {
           entry.map = data.map;
-          setStatus(`Fragmento ${data.processed} de ${entry.fragments.length} · ${mapUnits(kind, data.map.nodes.length - 1)}`);
+          setStatus(tx("Fragmento {0} de {1} · {2}", data.processed, entry.fragments.length, mapUnits(kind, data.map.nodes.length - 1)));
           renderAll();
           if (!mapState.moved) fitView();
         } else if (name === "diagram") {
           entry.map = data.map;
-          setStatus(stages[data.stage] || `Fragmento ${data.processed} de ${entry.fragments.length} · ${mapUnits(kind, data.map.count)}`);
+          setStatus(stages[data.stage] || tx("Fragmento {0} de {1} · {2}", data.processed, entry.fragments.length, mapUnits(kind, data.map.count)));
           renderAll();
           if (!mapState.moved) fitView();
         } else if (name === "done") {
           if (isDiagram(entry) && !data.map_id) {
             mapState.trail.pop(); // nothing of that kind in the notes: nothing to keep
-            setStatus(`Tus notas no describen ${MAP_KINDS[kind].none} sobre «${topic}». Prueba otro tipo de diagrama.`);
+            setStatus(tx("Tus notas no describen {0} sobre «{1}». Prueba otro tipo de diagrama.", MAP_KINDS[kind].none, topic));
             return;
           }
           entry.id = data.map_id;
           if (!isDiagram(entry)) applyPositions(entry, {});
           loadMapHistory();
           const count = isDiagram(entry) ? entry.map.count : entry.map.nodes.length - 1;
-          const left = data.omitted ? ` · ${data.omitted} ${isDiagram(entry) ? "piezas" : "conceptos sin relación clara"} se dejaron fuera` : "";
-          const skipped = data.skipped ? ` · ${data.skipped} fragmentos no se pudieron leer` : "";
-          setStatus(`${mapUnits(kind, count)} de ${entry.fragments.length} fragmentos${left}${skipped}`);
+          const left = data.omitted ? tx(" · {0} {1} se dejaron fuera", data.omitted, isDiagram(entry) ? tx("piezas") : tx("conceptos sin relación clara")) : "";
+          const skipped = data.skipped ? tx(" · {0} fragmentos no se pudieron leer", data.skipped) : "";
+          setStatus(tx("{0} de {1} fragmentos{2}{3}", mapUnits(kind, count), entry.fragments.length, left, skipped));
         } else if (name === "gap") {
           entry.gap = data; // a thin map: the topic is pending in Guías (ADR-029)
           renderGap();
@@ -138,13 +138,13 @@ async function suggestKind() {
   const topic = $("map-topic").value.trim();
   const box = $("map-suggestion");
   if (!topic) {
-    showError("map-error", "Escribe primero el tema.");
+    showError("map-error", tx("Escribe primero el tema."));
     return;
   }
   if (mapState.busy) return;
   showError("map-error", "");
   mapState.busy = true;
-  $("map-suggest").textContent = "Pensando…";
+  $("map-suggest").textContent = tx("Pensando…");
   renderAll();
   try {
     const response = await postJSON("/api/maps/suggest", { topic });
@@ -152,15 +152,15 @@ async function suggestKind() {
     const data = await response.json();
     setMapKind(data.kind);
     box.replaceChildren(
-      el("strong", null, `Sugerencia: ${MAP_KINDS[data.kind].label}. `),
-      document.createTextNode(`${data.reason ? `${data.reason} ` : ""}Pulsa «Crear» para hacerlo, o elige otro tipo.`),
+      el("strong", null, tx("Sugerencia: {0}. ", MAP_KINDS[data.kind].label)),
+      document.createTextNode(tx("{0}Pulsa «Crear» para hacerlo, o elige otro tipo.", data.reason ? `${data.reason} ` : "")),
     );
     box.hidden = false;
   } catch (error) {
     showError("map-error", error.message);
   } finally {
     mapState.busy = false;
-    $("map-suggest").textContent = "Sugerir tipo";
+    $("map-suggest").textContent = tx("Sugerir tipo");
     renderAll();
   }
 }
@@ -176,8 +176,8 @@ function renderGap() {
   const box = $("map-gap");
   box.hidden = !(entry && entry.gap);
   const why = entry && entry.gap && entry.gap.absent
-    ? "Tus notas no tratan este tema: los conceptos vienen de notas parecidas. "
-    : "Tus notas tratan poco este tema. ";
+    ? tx("Tus notas no tratan este tema: los conceptos vienen de notas parecidas. ")
+    : tx("Tus notas tratan poco este tema. ");
   box.replaceChildren(...(entry && entry.gap ? [el("span", null, why), gapNote(entry.gap)] : []));
 }
 
@@ -250,7 +250,7 @@ function drawMap() {
       transform: `translate(${n.x},${n.y})`,
       tabindex: 0,
       role: "button",
-      "aria-label": `${mapNodeName(n)}, ${n.sources.length} ${n.sources.length === 1 ? "fuente" : "fuentes"}. Flechas para moverlo.`,
+      "aria-label": tx("{0}, {1} {2}. Flechas para moverlo.", mapNodeName(n), n.sources.length, n.sources.length === 1 ? tx("fuente") : tx("fuentes")),
     });
     g.append(svgEl("rect", { x: -width / 2, y: -height / 2, width, height, rx: novak ? 10 : height / 2 }));
     const text = svgEl("text", { y: n.translation ? -6 : 1, "font-size": font, "dominant-baseline": "middle", "text-anchor": "middle" });
@@ -321,7 +321,7 @@ function drawDiagram(entry) {
     if (line.arrow) path.setAttribute("marker-end", `url(#${line.role === "spine" ? "map-arrow-strong" : "map-arrow"})`);
     lines.append(path);
     if (line.id) { // a message: the whole line and its label are clickable
-      const hit = svgEl("path", { d, class: "dg-hit dg-pick", tabindex: 0, role: "button", "aria-label": `Mensaje: ${line.label}` });
+      const hit = svgEl("path", { d, class: "dg-hit dg-pick", tabindex: 0, role: "button", "aria-label": tx("Mensaje: {0}", line.label) });
       bindPick(hit, line.id);
       lines.append(hit);
     }
@@ -421,7 +421,7 @@ function renderPill() {
   $("map-title-kind").textContent = MAP_KINDS[entry.kind].label;
   const count = entry.map ? (isDiagram(entry) ? entry.map.count : entry.map.nodes.length - 1) : null;
   $("map-title-count").textContent = count === null ? "" : mapUnits(entry.kind, count);
-  $("map-title").title = `Cambiar el tema o el tipo${entry.created ? ` · creado el ${formatWhen(entry.created)}` : ""}`;
+  $("map-title").title = tx("Cambiar el tema o el tipo{0}", entry.created ? tx(" · creado el {0}", formatWhen(entry.created)) : "");
 }
 
 function selectNode(id) {
@@ -470,7 +470,7 @@ async function saveLayout(entry) {
     const response = await postJSON("/api/maps/positions", { id: entry.id, positions: entry.positions || {} });
     if (!response.ok) throw new Error(await errorText(response));
   } catch (error) {
-    showError("map-error", `No se pudo guardar la posición de los nodos: ${error.message}`);
+    showError("map-error", tx("No se pudo guardar la posición de los nodos: {0}", error.message));
   }
 }
 
@@ -620,7 +620,7 @@ function renderMapOutline() {
   const cross = map.edges.filter((e) => e.kind === "cross");
   const nodes = [el("h2", null, entry.topic), list];
   if (cross.length) {
-    nodes.push(el("h3", null, "Otras relaciones"));
+    nodes.push(el("h3", null, tx("Otras relaciones")));
     const other = el("ul");
     for (const e of cross) other.append(el("li", null, sentence(map, e)));
     nodes.push(other);
@@ -655,7 +655,7 @@ function mapMermaid(entry) {
 function mermaidBlock(text) {
   const pre = el("pre", "map-mermaid");
   pre.append(el("code", null, `\`\`\`mermaid\n${text}\`\`\``));
-  return [el("h3", null, "Mermaid"), el("p", "small muted", "Pega este bloque en una nota de Obsidian y lo dibuja."), pre];
+  return [el("h3", null, "Mermaid"), el("p", "small muted", tx("Pega este bloque en una nota de Obsidian y lo dibuja.")), pre];
 }
 
 // The flow or sequence version on show; empty while the first one is being read or when the notes have none.
@@ -673,20 +673,20 @@ function diagramOutline(entry) {
       li.append(pickButton(s.label, s.id), document.createTextNode(` ${cites(s)}`));
       list.append(li);
     }
-    out.push(list, el("p", "small muted", "Las flechas punteadas marcan un orden que tus notas no escriben."));
+    out.push(list, el("p", "small muted", tx("Las flechas punteadas marcan un orden que tus notas no escriben.")));
   } else if (entry.kind === "sequence") {
     const version = shownVersion(map);
     const list = el("ol");
     for (const m of version.messages) {
       const li = el("li");
       li.append(document.createTextNode(`${m.sender} → ${m.receiver}: `), pickButton(m.label, m.id));
-      li.append(document.createTextNode(` [${version.source}]${m.reply ? " (respuesta)" : ""}${m.condition ? ` — si ${m.condition.replace(/^si\s+/i, "")}` : ""}`));
+      li.append(document.createTextNode(` [${version.source}]${m.reply ? tx(" (respuesta)") : ""}${m.condition ? ` — si ${m.condition.replace(/^si\s+/i, "")}` : ""}`));
       list.append(li);
     }
-    out.push(el("p", null, `Participantes: ${version.participants.join(", ")}`), list);
+    out.push(el("p", null, tx("Participantes: {0}", version.participants.join(", "))), list);
   } else {
     const causes = new Map(map.data.causes.map((c) => [c.id, c]));
-    out.push(el("p", null, `Efecto: ${map.data.effect}`));
+    out.push(el("p", null, tx("Efecto: {0}", map.data.effect)));
     for (const group of map.data.categories) {
       out.push(el("h3", null, group.name));
       const list = el("ul");
@@ -706,7 +706,7 @@ function diagramOutline(entry) {
 
 /** The source fragments of a piece, each with its text and «Leer». */
 function sourceList(entry, numbers, title) {
-  const parts = [el("h3", null, title || `Aparece en ${numbers.length} ${numbers.length === 1 ? "fragmento" : "fragmentos"}`)];
+  const parts = [el("h3", null, title || tx("Aparece en {0} {1}", numbers.length, numbers.length === 1 ? tx("fragmento") : tx("fragmentos")))];
   const fragments = new Map(entry.fragments.map((f) => [f.number, f]));
   for (const number of numbers) {
     const f = fragments.get(number);
@@ -717,7 +717,7 @@ function sourceList(entry, numbers, title) {
     const links = el("div", "row");
     links.append(readLink(f.doc_path, f.lines[0]));
     if (f.open_url) {
-      const open = el("a", "btn", "Abrir en Obsidian");
+      const open = el("a", "btn", tx("Abrir en Obsidian"));
       open.href = f.open_url;
       links.append(open);
     }
@@ -738,11 +738,11 @@ function renderPanel() {
   const view = $("map-panel-view");
   view.hidden = !node;
   if (!node) return;
-  const parts = [el("span", "eyebrow", node.level === 0 ? "Tema" : "Concepto"), el("h2", null, node.label)];
-  if (node.translation) parts.push(el("p", "map-translation", `En español: ${node.translation}`));
+  const parts = [el("span", "eyebrow", node.level === 0 ? tx("Tema") : tx("Concepto")), el("h2", null, node.label)];
+  if (node.translation) parts.push(el("p", "map-translation", tx("En español: {0}", node.translation)));
   const related = entry.map.edges.filter((e) => e.label && (e.source === node.id || e.target === node.id));
   if (related.length) {
-    parts.push(el("h3", null, entry.kind === "novak" ? "Proposiciones" : "Relaciones"));
+    parts.push(el("h3", null, entry.kind === "novak" ? tx("Proposiciones") : tx("Relaciones")));
     const list = el("ul", "map-relations");
     for (const e of related) list.append(el("li", null, sentence(entry.map, e)));
     parts.push(list);
@@ -750,26 +750,26 @@ function renderPanel() {
   const known = entry.mastery && entry.mastery.nodes[node.id];
   if (known && node.level > 0) {
     parts.push(el("p", "mastery-line", known.recall === null
-      ? "Aún no has practicado sus secciones."
-      : `Lo recuerdas hoy en un ${Math.round(known.recall * 100)} % (${known.practiced} de ${known.sections.length} ${known.sections.length === 1 ? "sección practicada" : "secciones practicadas"}).`));
+      ? tx("Aún no has practicado sus secciones.")
+      : tx("Lo recuerdas hoy en un {0} % ({1} de {2} {3}).", Math.round(known.recall * 100), known.practiced, known.sections.length, known.sections.length === 1 ? tx("sección practicada") : tx("secciones practicadas"))));
   }
   const actions = el("div", "row");
   if (node.level > 0) {
-    const expand = el("button", "btn-primary", "Expandir");
+    const expand = el("button", "btn-primary", tx("Expandir"));
     expand.type = "button";
     expand.disabled = mapState.busy;
-    expand.title = "Crear un mapa de este concepto";
+    expand.title = tx("Crear un mapa de este concepto");
     expand.addEventListener("click", () => createMap(node.label, true));
     actions.append(expand);
   }
-  const explain = el("a", "btn", "Explicar");
-  explain.href = `#/conversar?q=${encodeURIComponent(`¿Qué es ${node.label}?`)}`;
+  const explain = el("a", "btn", tx("Explicar"));
+  explain.href = `#/conversar?q=${encodeURIComponent(tx("¿Qué es {0}?", node.label))}`;
   let practice;
   if (known && known.sections.length && node.level > 0) {
     // the node's own sections, not a new search on its name (ADR-026)
-    practice = el("button", "btn", "Practicar esto");
+    practice = el("button", "btn", tx("Practicar esto"));
     practice.type = "button";
-    practice.title = "Preguntas sobre las secciones donde aparece este concepto";
+    practice.title = tx("Preguntas sobre las secciones donde aparece este concepto");
     practice.addEventListener("click", () => {
       app.pendingPractice = {
         scope: { kind: "sections", value: JSON.stringify(known.sections), label: node.label },
@@ -778,12 +778,12 @@ function renderPanel() {
       location.hash = "#/practicar";
     });
   } else {
-    practice = el("a", "btn", "Practicar");
+    practice = el("a", "btn", tx("Practicar"));
     practice.href = `#/practicar?tema=${encodeURIComponent(node.label)}`;
   }
-  const feynmanLink = el("a", "btn", "Explícamelo tú");
+  const feynmanLink = el("a", "btn", tx("Explícamelo tú"));
   feynmanLink.href = `#/practicar?explicar=${encodeURIComponent(node.label)}`;
-  feynmanLink.title = "Explícalo con tus palabras y lo comparo con tus notas";
+  feynmanLink.title = tx("Explícalo con tus palabras y lo comparo con tus notas");
   actions.append(explain, practice, feynmanLink);
   parts.push(actions);
   parts.push(...sourceList(entry, node.sources));
@@ -803,10 +803,10 @@ function quoteFigure(entry, quote, source) {
 function pieceActions(entry, label, source) {
   const row = el("div", "row");
   const fragment = entry.fragments.find((f) => f.number === source);
-  if (fragment) row.append(readLink(fragment.doc_path, fragment.lines[0], "btn-soft", "Leer en la nota"));
-  const explain = el("a", "btn", "Explicar");
-  explain.href = `#/conversar?q=${encodeURIComponent(`Explícame: ${label}`)}`;
-  const feynmanLink = el("a", "btn", "Explícamelo tú");
+  if (fragment) row.append(readLink(fragment.doc_path, fragment.lines[0], "btn-soft", tx("Leer en la nota")));
+  const explain = el("a", "btn", tx("Explicar"));
+  explain.href = `#/conversar?q=${encodeURIComponent(tx("Explícame: {0}", label))}`;
+  const feynmanLink = el("a", "btn", tx("Explícamelo tú"));
   feynmanLink.href = `#/practicar?explicar=${encodeURIComponent(label)}`;
   row.append(explain, feynmanLink);
   return row;
@@ -831,13 +831,13 @@ function renderDiagramPanel(entry) {
     if (i >= 0) {
       const s = steps[i];
       const into = map.drawing.lines.find((ln) => ln.target === s.id && ln.role === "flow" && ln.points.length === 2);
-      parts = [el("span", "eyebrow", `${s.decision ? "Decisión" : "Paso"} ${i + 1} de ${steps.length}`), el("h2", null, s.label)];
+      parts = [el("span", "eyebrow", `${s.decision ? tx("Decisión") : tx("Paso")} ${i + 1} de ${steps.length}`), el("h2", null, s.label)];
       parts.push(quoteFigure(entry, s.quote, s.sources[0]));
-      if (into && into.dashed) parts.push(el("p", "map-note", "Flecha de entrada inferida: tus notas describen el paso, pero no escriben que vaya después del anterior. Puedes moverlo."));
+      if (into && into.dashed) parts.push(el("p", "map-note", tx("Flecha de entrada inferida: tus notas describen el paso, pero no escriben que vaya después del anterior. Puedes moverlo.")));
       const move = el("div", "row");
       move.append(
-        editButton("↑ Subir", "Mover este paso antes del anterior", i === 0, { op: "move_step", step: s.id, delta: -1 }),
-        editButton("↓ Bajar", "Mover este paso después del siguiente", i === steps.length - 1, { op: "move_step", step: s.id, delta: 1 }),
+        editButton(tx("↑ Subir"), tx("Mover este paso antes del anterior"), i === 0, { op: "move_step", step: s.id, delta: -1 }),
+        editButton(tx("↓ Bajar"), tx("Mover este paso después del siguiente"), i === steps.length - 1, { op: "move_step", step: s.id, delta: 1 }),
       );
       parts.push(move, pieceActions(entry, s.label, s.sources[0]), ...sourceList(entry, s.sources));
     }
@@ -847,15 +847,15 @@ function renderDiagramPanel(entry) {
     const box = map.drawing.boxes.find((b) => b.id === id);
     if (i >= 0) {
       const m = version.messages[i];
-      parts = [el("span", "eyebrow", `${m.reply ? "Respuesta" : "Mensaje"} ${i + 1} de ${version.messages.length}`), el("h2", null, m.label)];
-      parts.push(el("p", null, `De ${m.sender} a ${m.receiver}${m.condition ? `, si ${m.condition.replace(/^si\s+/i, "")}` : ""}.`));
+      parts = [el("span", "eyebrow", `${m.reply ? tx("Respuesta") : tx("Mensaje")} ${i + 1} de ${version.messages.length}`), el("h2", null, m.label)];
+      parts.push(el("p", null, tx("De {0} a {1}{2}.", m.sender, m.receiver, m.condition ? `, si ${m.condition.replace(/^si\s+/i, "")}` : "")));
       parts.push(quoteFigure(entry, m.quote, version.source), pieceActions(entry, m.label, version.source), ...sourceList(entry, [version.source]));
     } else if (box) {
       const own = version.messages.filter((m) => m.sender === box.label || m.receiver === box.label);
-      parts = [el("span", "eyebrow", "Participante"), el("h2", null, box.label)];
+      parts = [el("span", "eyebrow", tx("Participante")), el("h2", null, box.label)];
       const list = el("ul", "map-relations");
       for (const m of own) list.append(el("li", null, `${m.sender} → ${m.receiver}: ${m.label}`));
-      parts.push(el("h3", null, `${own.length} ${own.length === 1 ? "mensaje" : "mensajes"}`), list, pieceActions(entry, box.label, version.source));
+      parts.push(el("h3", null, `${own.length} ${own.length === 1 ? tx("mensaje") : tx("mensajes")}`), list, pieceActions(entry, box.label, version.source));
     }
   } else {
     const causes = new Map(map.data.causes.map((c) => [c.id, c]));
@@ -863,13 +863,13 @@ function renderDiagramPanel(entry) {
     const group = map.data.categories.find((g) => g.causes.includes(id));
     const box = map.drawing.boxes.find((b) => b.id === id);
     if (cause) {
-      parts = [el("span", "eyebrow", `Causa${group ? ` · ${group.name}` : ""}`), el("h2", null, cause.label)];
-      parts.push(el("p", null, `Contribuye a: ${map.data.effect}`), quoteFigure(entry, cause.quote, cause.sources[0]));
+      parts = [el("span", "eyebrow", tx("Causa{0}", group ? ` · ${group.name}` : "")), el("h2", null, cause.label)];
+      parts.push(el("p", null, tx("Contribuye a: {0}", map.data.effect)), quoteFigure(entry, cause.quote, cause.sources[0]));
       if (map.data.categories.length > 1) {
-        parts.push(el("h3", null, "Mover a otra categoría"));
+        parts.push(el("h3", null, tx("Mover a otra categoría")));
         const chips = el("div", "row map-chips");
         for (const g of map.data.categories) {
-          const chip = editButton(g.name, `Mover a «${g.name}»`, g === group, { op: "move_cause", cause: cause.id, category: g.name });
+          const chip = editButton(g.name, tx("Mover a «{0}»", g.name), g === group, { op: "move_cause", cause: cause.id, category: g.name });
           if (g === group) chip.classList.add("active");
           chips.append(chip);
         }
@@ -878,7 +878,7 @@ function renderDiagramPanel(entry) {
       parts.push(pieceActions(entry, cause.label, cause.sources[0]), ...sourceList(entry, cause.sources));
     } else if (box && box.role === "category") {
       const members = (map.data.categories.find((g) => g.name === box.label) || { causes: [] }).causes.map((c) => causes.get(c)).filter(Boolean);
-      parts = [el("span", "eyebrow", "Categoría"), el("h2", null, box.label)];
+      parts = [el("span", "eyebrow", tx("Categoría")), el("h2", null, box.label)];
       const list = el("ul", "map-relations");
       for (const c of members) {
         const li = el("li");
@@ -887,8 +887,8 @@ function renderDiagramPanel(entry) {
       }
       parts.push(el("h3", null, mapUnits("fishbone", members.length)), list);
     } else if (box && box.role === "effect") {
-      parts = [el("span", "eyebrow", "Efecto"), el("h2", null, box.label)];
-      parts.push(el("p", null, `${mapUnits("fishbone", map.data.causes.length)} en ${map.data.categories.length} ${map.data.categories.length === 1 ? "categoría" : "categorías"}.`));
+      parts = [el("span", "eyebrow", tx("Efecto")), el("h2", null, box.label)];
+      parts.push(el("p", null, `${mapUnits("fishbone", map.data.causes.length)} en ${map.data.categories.length} ${map.data.categories.length === 1 ? tx("categoría") : tx("categorías")}.`));
     }
   }
   $("map-panel-empty").hidden = Boolean(parts);
@@ -916,13 +916,13 @@ async function regroupCauses(grouping, categories) {
   if (!entry || !entry.id || mapState.busy) return;
   showError("map-error", "");
   mapState.busy = true;
-  setStatus(grouping === "6m" ? "Repartiendo las causas en las 6M…" : "Agrupando las causas…");
+  setStatus(grouping === "6m" ? tx("Repartiendo las causas en las 6M…") : tx("Agrupando las causas…"));
   renderAll();
   try {
     const response = await postJSON("/api/maps/regroup", { id: entry.id, grouping, categories });
     if (!response.ok) throw new Error(await errorText(response));
     entry.map = (await response.json()).map;
-    setStatus(`${mapUnits("fishbone", entry.map.count)} en ${entry.map.data.categories.length} categorías.`);
+    setStatus(tx("{0} en {1} categorías.", mapUnits("fishbone", entry.map.count), entry.map.data.categories.length));
   } catch (error) {
     showError("map-error", error.message);
     setStatus("");
@@ -946,26 +946,26 @@ function renderDiagramBar() {
   const map = entry.map;
   const parts = [];
   if (entry.kind === "fishbone") {
-    const by = { model: "propuestas por el modelo a partir de las causas", "6m": "las 6M", custom: "las tuyas", none: "sin agrupar" }[map.data.grouping];
-    parts.push(el("span", null, `Categorías: ${by}.`));
-    const model = el("button", "btn", map.data.grouping === "model" ? "Proponer otras" : "Que las proponga el modelo");
+    const by = { model: tx("propuestas por el modelo a partir de las causas"), "6m": tx("las 6M"), custom: tx("las tuyas"), none: tx("sin agrupar") }[map.data.grouping];
+    parts.push(el("span", null, tx("Categorías: {0}.", by)));
+    const model = el("button", "btn", map.data.grouping === "model" ? tx("Proponer otras") : tx("Que las proponga el modelo"));
     model.type = "button";
     model.addEventListener("click", () => regroupCauses("model"));
-    const six = el("button", "btn", "Usar las 6M");
+    const six = el("button", "btn", tx("Usar las 6M"));
     six.type = "button";
-    six.title = "Método, Máquina, Materiales, Mano de obra, Medición y Medio ambiente";
+    six.title = tx("Método, Máquina, Materiales, Mano de obra, Medición y Medio ambiente");
     six.addEventListener("click", () => regroupCauses("6m"));
-    const own = el("button", "btn", "Mis categorías…");
+    const own = el("button", "btn", tx("Mis categorías…"));
     own.type = "button";
     const form = el("form", "map-own-categories");
     form.hidden = true;
     const input = el("input");
     input.type = "text";
     input.maxLength = 300;
-    input.placeholder = "Categorías separadas por comas: Datos, Modelo, Despliegue";
-    input.setAttribute("aria-label", "Tus categorías, separadas por comas");
+    input.placeholder = tx("Categorías separadas por comas: Datos, Modelo, Despliegue");
+    input.setAttribute("aria-label", tx("Tus categorías, separadas por comas"));
     input.value = map.data.grouping === "custom" ? map.data.categories.map((g) => g.name).filter((n) => n !== "Otras").join(", ") : "";
-    const apply = el("button", "btn-primary", "Agrupar");
+    const apply = el("button", "btn-primary", tx("Agrupar"));
     apply.type = "submit";
     form.append(input, apply);
     form.addEventListener("submit", (event) => {
@@ -978,13 +978,13 @@ function renderDiagramBar() {
       if (!form.hidden) input.focus();
     });
     for (const button of [model, six, own]) button.disabled = mapState.busy;
-    parts.push(model, six, own, form, el("span", "small muted", "Reagrupar no vuelve a leer tus notas."));
+    parts.push(model, six, own, form, el("span", "small muted", tx("Reagrupar no vuelve a leer tus notas.")));
   } else {
     const versions = map.data.versions;
     if (versions.length > 1) {
       // each note's process or interaction is a version of its own (ADR-037)
-      const what = entry.kind === "flow" ? "procesos" : "interacciones";
-      parts.push(el("span", null, `${versions.length} ${what} en tus notas:`));
+      const what = entry.kind === "flow" ? tx("procesos") : tx("interacciones");
+      parts.push(el("span", null, tx("{0} {1} en tus notas:", versions.length, what)));
       versions.forEach((v, i) => {
         const fragment = entry.fragments.find((f) => f.number === v.source);
         const name = fragment ? fragment.sections.at(-1) || fragment.guide : `[${v.source}]`;
@@ -999,12 +999,12 @@ function renderDiagramBar() {
       });
     }
     if (entry.kind === "sequence") {
-      parts.push(el("span", "small muted", "Línea continua: mensaje · punteada: respuesta. Los recuadros son los casos en que ocurre."));
+      parts.push(el("span", "small muted", tx("Línea continua: mensaje · punteada: respuesta. Los recuadros son los casos en que ocurre.")));
     } else {
       const inferred = map.drawing.lines.filter((ln) => ln.dashed).length;
       parts.push(el("span", "small muted", inferred
-        ? `${inferred} ${inferred === 1 ? "flecha punteada marca" : "flechas punteadas marcan"} un orden que la nota no escribe. Selecciona un paso para moverlo.`
-        : "Las flechas siguen el orden en que la nota escribe los pasos."));
+        ? tx("{0} {1} un orden que la nota no escribe. Selecciona un paso para moverlo.", inferred, inferred === 1 ? tx("flecha punteada marca") : tx("flechas punteadas marcan"))
+        : tx("Las flechas siguen el orden en que la nota escribe los pasos.")));
     }
   }
   // one line on the drawing; opened, the versions or the categories
@@ -1120,8 +1120,8 @@ async function loadMapHistory() {
   $("map-history-list").replaceChildren(...items);
   $("map-history-empty").hidden = items.length > 0;
   $("map-history-empty").textContent = query
-    ? "Ningún mapa trata de eso."
-    : "Los mapas y diagramas que crees aparecerán aquí.";
+    ? tx("Ningún mapa trata de eso.")
+    : tx("Los mapas y diagramas que crees aparecerán aquí.");
   markActiveMap();
 }
 
@@ -1160,13 +1160,13 @@ async function openStoredMap(id) {
 
 async function deleteMap() {
   const entry = current();
-  if (!entry || !entry.id || !confirm(`¿Borrar «${entry.topic}» (${MAP_KINDS[entry.kind].label})? No se puede deshacer.`)) return;
+  if (!entry || !entry.id || !confirm(tx("¿Borrar «{0}» ({1})? No se puede deshacer.", entry.topic, MAP_KINDS[entry.kind].label))) return;
   try {
     const response = await postJSON("/api/maps/delete", { id: entry.id });
     if (!response.ok) throw new Error(await errorText(response));
     mapState.trail.pop();
     mapState.selected = null;
-    setStatus("Borrado.");
+    setStatus(tx("Borrado."));
     renderAll();
     if (current()) fitView();
     loadMapHistory();
@@ -1183,7 +1183,7 @@ async function saveMap() {
     const response = await postJSON("/api/maps/save", { id: entry.id });
     if (!response.ok) throw new Error(await errorText(response));
     const data = await response.json();
-    setStatus(`Guardado en ${data.markdown} y ${data.canvas.split(/[\\/]/).pop()} (ábrelo en Obsidian copiándolo a tu bóveda).`);
+    setStatus(tx("Guardado en {0} y {1} (ábrelo en Obsidian copiándolo a tu bóveda).", data.markdown, data.canvas.split(/[\\/]/).pop()));
   } catch (error) {
     showError("map-error", error.message);
   }
@@ -1218,8 +1218,8 @@ async function copyMermaid() {
   if (!text) return;
   const ok = await copyMapText(`\`\`\`mermaid\n${text}\`\`\`\n`);
   setStatus(ok
-    ? "Mermaid copiado: pégalo en una nota de Obsidian y lo dibuja."
-    : "No se pudo copiar: está en la vista «Esquema», al final.");
+    ? tx("Mermaid copiado: pégalo en una nota de Obsidian y lo dibuja.")
+    : tx("No se pudo copiar: está en la vista «Esquema», al final."));
 }
 
 function downloadSvg() {
@@ -1241,7 +1241,7 @@ function downloadSvg() {
   const blob = new Blob([new XMLSerializer().serializeToString(copy)], { type: "image/svg+xml" });
   const link = el("a");
   link.href = URL.createObjectURL(blob);
-  link.download = `${entry.topic.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase() || "mapa"}.svg`;
+  link.download = `${entry.topic.replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase() || tx("mapa")}.svg`;
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
