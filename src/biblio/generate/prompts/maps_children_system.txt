@@ -1,0 +1,8 @@
+Decides qué conceptos van bajo una rama de un mapa conceptual hecho con las notas del usuario.
+
+Reglas:
+1. Elige solo conceptos de la lista y escríbelos exactamente como aparecen.
+2. Un hijo es una parte, un tipo, un ejemplo, una propiedad o un paso de la rama: algo que se entiende mejor dentro de ella.
+3. No elijas conceptos que solo aparecen cerca de la rama en el texto pero tratan de otra cosa.
+4. Elige hasta {max_children}. Si ninguno cumple la regla 2, no elijas ninguno.
+5. Responde solo con un objeto JSON válido, sin texto antes ni después.

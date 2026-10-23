@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -81,17 +82,134 @@ def test_a_note_becomes_typed_blocks_with_their_source_lines() -> None:
     assert blocks[5] == {**blocks[5], "lang": "python", "text": 'print("hola")\n'}
     assert blocks[6]["lang"] == "html"  # raw HTML is shown as code, never rendered
     last = blocks[7]["inlines"]
-    assert last[0] == {"t": "image", "alt": "figura"}
+    assert last[0] == {
+        "t": "image",
+        "alt": "figura",
+        "src": "img.png",
+    }  # drawn by the reader (ADR-048)
     web = next(n for n in last if n["t"] == "link" and "href" in n)
     note = next(n for n in last if n["t"] == "link" and "note" in n)
     assert web["href"] == "https://example.org" and note["note"] == "est/bayes.md"
     assert "<" not in json.dumps([b for b in blocks if b["type"] != "code"])
 
 
+LONG_NOTE = """# 6. Principal Component Analysis
+
+## Chapter 6. Principal Component Analysis
+
+### Understanding Principal Component Analysis
+
+Texto.
+
+#### import matplotlib.pyplot as plt
+
+#### x_train = x_train.reshape(-1, 1)
+
+#### EBITDA = EBIT + D&A
+
+#### `pandas.read_csv`
+
+##### Demasiado hondo
+
+### Filtering Noise
+"""
+
+
+def test_the_outline_leaves_out_headings_that_are_code() -> None:  # ADR-049
+    tree = note_tree(LONG_NOTE, "doc/pca.md", lambda target: None, depth=3)
+    assert [(h["level"], h["text"]) for h in tree["outline"]] == [
+        (2, "Chapter 6. Principal Component Analysis"),
+        (3, "Understanding Principal Component Analysis"),
+        (4, "EBITDA = EBIT + D&A"),  # a formula, not code
+        (4, "pandas.read_csv"),  # a code span the author made a title
+        (3, "Filtering Noise"),
+    ]  # the note's H1 is the page title; H5 is below the three levels
+    assert tree["outline"][1]["line"] == 5  # where the reader finds the heading
+    assert tree["words"] == len(LONG_NOTE.split())
+    assert [
+        h["level"] for h in note_tree(LONG_NOTE, "doc/pca.md", lambda t: None, 1)["outline"]
+    ] == [2]
+    # text before the title's H1 (a web clipping) does not make the title a level of the index
+    preamble = "Texto previo.\n\n# T\n\n## A\n\n### B\n\n#### C\n"
+    outline = note_tree(preamble, "doc/t.md", lambda t: None)["outline"]
+    assert [h["text"] for h in outline] == ["A", "B", "C"]
+
+
+PRACTICED_NOTE = (
+    "# PCA\n\n## Componentes\n\n"
+    + "Las componentes principales ordenan las direcciones de mayor varianza del conjunto. " * 2
+    + "\n\n#### import numpy as np\n\n"
+    + "El código calcula la matriz de covarianza y sus vectores propios para cada caso. " * 2
+    + "\n\n## Ruido\n\n"
+    + "Reducir y restaurar las dimensiones filtra el ruido que no sigue a las componentes. " * 2
+    + "\n\n## Usos\n\n### Anomalías\n\n"  # a parent heading with no text of its own
+    + "Una muestra anómala pierde más información al reducirla y restaurarla con el modelo. " * 2
+    + "\n"
+)
+
+
+def test_the_index_shows_how_each_section_is_remembered(
+    server: tuple[str, int],  # noqa: F811
+    engine: Engine,  # noqa: F811
+) -> None:  # ADR-050
+    from biblio.index.indexer import index_library
+    from biblio.practice.store import QuestionContent, Section
+
+    from fakes import FakeEmbedder, WordCounter
+
+    library = engine.config.paths.library
+    assert library is not None
+    (library / "est" / "pca.md").write_text(PRACTICED_NOTE, encoding="utf-8")
+    index_library(
+        engine.config,
+        library,
+        full=False,
+        dtype="float32",
+        embedder_factory=FakeEmbedder,
+        counter_factory=WordCounter,
+    )
+
+    def answer(heading_path: tuple[str, ...], result: str) -> None:
+        section = Section("est/pca.md", heading_path, 1, 2, "texto")
+        quiz = engine.practice.new_quiz("guide", "est/pca.md", 1)
+        q = engine.practice.add_question(
+            quiz, "tf", section, QuestionContent("¿Sí?", "", truth=True)
+        )
+        engine.practice.record_attempt(q, "true", result, "code")
+
+    status, _, raw = request(server, "GET", "/api/notes/mastery?path=est/pca.md")
+    before = json.loads(raw)
+    assert status == 200 and [e["state"] for e in before["entries"]] == ["new"] * 4
+    # practice under the code heading belongs to the entry the index shows: «Componentes»
+    answer(("PCA", "Componentes", "import numpy as np"), "correct")
+    answer(("PCA", "Ruido"), "wrong")
+    answer(("PCA", "Usos", "Anomalías"), "correct")  # its chunk starts at «## Usos»
+    answer(("PCA", "Ya no existe"), "wrong")  # a section the note no longer has
+    with engine.practice._conn:  # answered a month ago: due today
+        engine.practice._conn.execute(
+            "UPDATE attempts SET answered = ? WHERE question_id IN "
+            "(SELECT id FROM questions WHERE heading_path NOT IN (?, ?))",
+            (
+                (datetime.now().astimezone() - timedelta(days=30)).isoformat(timespec="seconds"),
+                json.dumps(["PCA", "Componentes", "import numpy as np"], ensure_ascii=False),
+                json.dumps(["PCA", "Usos", "Anomalías"], ensure_ascii=False),
+            ),
+        )
+    data = json.loads(request(server, "GET", "/api/notes/mastery?path=est/pca.md")[2])
+    first, second, uses, anomalies = data["entries"]
+    assert first["line"] == 3 and first["state"] != "new"
+    assert (first["practiced"], first["sections"]) == (1, 2)
+    assert second["practiced"] == 1 and second["sections"] == 1
+    assert uses["state"] == "new" and anomalies["state"] != "new" and anomalies["practiced"] == 1
+    assert data["due"] == [["est/pca.md", json.dumps(["PCA", "Ruido"], ensure_ascii=False)]]
+    assert request(server, "GET", "/api/notes/mastery?path=nada.md")[0] == 404
+
+
 def test_the_reader_serves_only_indexed_notes(server: tuple[str, int]) -> None:  # noqa: F811
     status, _, raw = request(server, "GET", "/api/notes/view?path=est/bayes.md")
     view = json.loads(raw)
     assert status == 200 and view["title"] == "Bayes" and not view["read"]
+    assert view["words"] > 0 and view["words_per_minute"] > 0 and isinstance(view["outline"], list)
     assert view["blocks"][1]["type"] == "heading" and view["blocks"][2]["lines"] == [5, 5]
     for bad in ("nada.md", "../est/bayes.md", "est/../est/bayes.md", ""):
         assert request(server, "GET", f"/api/notes/view?path={bad}")[0] == 404, bad

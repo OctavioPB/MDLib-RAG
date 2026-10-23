@@ -6,7 +6,7 @@ from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -24,8 +24,10 @@ from biblio.maps.build import (
     parse_extraction,
 )
 from biblio.maps.export import map_fragments, to_canvas, to_markdown
+from biblio.maps.select import map_candidates, order_sections
 from biblio.retrieve.rerank import RerankPlan
 from biblio.retrieve.store import open_index
+from biblio.retrieve.types import Hit
 from biblio.web.engine import Engine
 from biblio.web.server import make_server
 
@@ -517,3 +519,238 @@ def test_english_text_is_told_apart_from_spanish() -> None:
 
     assert in_english(BURNOUT)
     assert not in_english(TEXT)
+
+
+# --- the sections a map reads (ADR-051, stage 1) ------------------------------------------------
+
+
+def _hit(chunk: int, heading_path: tuple[str, ...], rank: int) -> Hit:
+    return Hit(
+        chunk, f"n{chunk}.md", heading_path, "texto sobre la api", chunk, chunk, rank, 0.0, "t"
+    )
+
+
+def test_a_map_reads_the_sections_that_explain_the_topic_first(config: Config) -> None:
+    cfg = config.maps
+    folder = _hit(1, ("Proyecto", "Instalación"), 1)  # mentions the topic, does not explain it
+    product = _hit(
+        2, ("API de Anthropic", "Gobernanza"), 2
+    )  # the guide's title names it: not enough
+    what = _hit(3, ("Guía", "¿Qué es una API?"), 1)
+    asked: list[tuple[str, int]] = []
+
+    def search(query: str, k: int) -> list[Hit]:
+        asked.append((query, k))
+        return [folder, product] if query == "api" else [what, folder]
+
+    hits = map_candidates(search, "api", cfg, rrf_k=60)
+    assert asked == [
+        ("api", cfg.candidates),
+        (cfg.define_query.format(topic="api"), cfg.candidates),
+    ]
+    assert [h.chunk_id for h in hits] == [1, 3, 2]  # fused: found by both queries first
+    # without the reranker, a heading that names the topic goes first; the rest keep their order
+    assert [h.chunk_id for h in order_sections("api", hits, None)] == [3, 1, 2]
+    # with it, its scores order each group
+    assert [h.chunk_id for h in order_sections("api", hits, [0.1, 0.2, 0.9])] == [3, 2, 1]
+
+
+class _CpuReranker:
+    calls: ClassVar[list[tuple[str, str, int]]] = []
+    closed: ClassVar[int] = 0
+
+    def __init__(self, device: str) -> None:
+        self.device = device
+
+    def score(self, query: str, passages: Sequence[str]) -> list[float]:
+        _CpuReranker.calls.append((self.device, query, len(passages)))
+        return [float("Filtros" in p) for p in passages]
+
+    def close(self) -> None:
+        _CpuReranker.closed += 1
+
+
+def test_the_map_reranks_its_candidates_on_cpu_and_releases_it(
+    config: Config, tmp_path: Path
+) -> None:
+    library = tmp_path / "library"
+    for rel, text in GUIDES.items():
+        (library / rel).parent.mkdir(parents=True, exist_ok=True)
+        (library / rel).write_text(text, encoding="utf-8")
+    cfg = replace(
+        config,
+        chunking=replace(config.chunking, min_tokens=5, target_tokens=60, max_tokens=80),
+        paths=replace(config.paths, library=library, index_db=tmp_path / "index.db"),
+        maps=replace(config.maps, rerank=True, history_db=tmp_path / "maps.db"),
+    )
+    index_library(
+        cfg,
+        library,
+        full=True,
+        dtype="float32",
+        embedder_factory=FakeEmbedder,
+        counter_factory=WordCounter,
+    )
+    _CpuReranker.calls.clear()
+    _CpuReranker.closed = 0
+    engine = Engine(
+        cfg,
+        open_index(cfg, shared_across_threads=True),
+        FakeEmbedder(),
+        reranker_factory=lambda _c, device: _CpuReranker(device),
+        plan_resolver=lambda _c: RerankPlan(None, 0, "test"),
+        llm_factory=lambda _c: _Extractor(),
+        counter_factory=lambda _c: WordCounter(),
+    )
+    try:
+        events = list(engine.concept_map("spam"))
+    finally:
+        engine.close()
+    names = [n for n, _ in events]
+    assert names[:2] == ["selecting", "start"]  # the page says what the wait is for
+    assert _CpuReranker.calls == [("cpu", cfg.maps.define_query.format(topic="spam"), 2)]
+    assert _CpuReranker.closed == 1  # released before the LLM reads: +2.5 GiB only meanwhile
+    first = events[1][1]["fragments"][0]
+    assert first["doc_path"] == "est/spam.md"  # the one the reranker preferred
+    # one of the two sections explains «spam» in general: the map says so (ADR-051 stage 3)
+    gap = next(d for n, d in events if n == "gap")
+    assert (gap["general"], gap["read"]) == (1, 2) and not gap["absent"]
+
+
+# --- the topic's acronym and the LLM's organisation (ADR-051, stage 2) ---------------------------
+
+
+def test_the_topic_spelled_out_where_the_notes_write_it_is_the_topic(config: Config) -> None:
+    from biblio.maps.build import spelled_out_in
+
+    assert spelled_out_in("api", "Una **API (Application Programming Interface)** es") == [
+        "Application Programming Interface"
+    ]
+    assert spelled_out_in("API", "la interfaz de programación de aplicaciones (API) define") == [
+        "interfaz de programación de aplicaciones"  # Spanish word order
+    ]
+    assert (
+        spelled_out_in("api", "El aprendizaje por imitación no es una API.") == []
+    )  # initials only
+    assert spelled_out_in("costo de oportunidad", "costo de oportunidad (CO)") == []
+    # in a map, the spelled-out name joins the topic instead of becoming a branch
+    text = "Una API (Application Programming Interface) es un contrato con un endpoint."
+    ex = Extraction(
+        1,
+        ("application programming interface", "contrato", "endpoint"),
+        (("application programming interface", "contrato", "es un"),),
+        topic_names=tuple(spelled_out_in("api", text)),
+    )
+    cmap = build_map("api", [ex], None, config.maps)
+    labels = {n.label: n.level for n in cmap.nodes}
+    assert "application programming interface" not in labels and labels["contrato"] == 1
+
+
+def test_the_llm_only_chooses_branches_by_name_and_notes_place_the_children(
+    config: Config,
+) -> None:
+    from biblio.maps.build import group_under, inventory, parse_selection
+
+    by_name = {"endpoint": "c1", "rate limiting": "c2", "json": "c3"}
+    reply = (
+        'Listo: {"clave": ["API", "Endpoint", "endpoint", "inventado", "rate limiting", "json"]}'
+    )
+    # the topic, a name not listed and a repeat are dropped; the cap holds
+    assert parse_selection(reply, by_name, 2) == ["c1", "c2"]
+    assert parse_selection("no es json", by_name, 9) == []
+    exs = [
+        Extraction(1, ("endpoint", "solicitud", "json"), (("solicitud", "endpoint", "llega a"),)),
+        Extraction(2, ("rate limiting", "cliente"), ()),
+        Extraction(3, ("kong",), ()),  # tied to no branch: left out, not guessed
+    ]
+    inv = inventory("api", exs, None, config.maps)
+    ids = {inv.others[n].label: n for n in inv.others}
+    children = group_under(inv, [ids["endpoint"], ids["rate limiting"]], config.maps)
+    named = {inv.others[p].label: [inv.others[c].label for c in v] for p, v in children.items()}
+    assert named == {"endpoint": ["solicitud", "json"], "rate limiting": ["cliente"]}
+
+
+class _Organizer:
+    """Extracts like `_Extractor`; asked for the key concepts, names «clasificación de texto»."""
+
+    def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+        if "Eliges los conceptos clave" in messages[0].content:
+            yield json.dumps({"clave": ["spam", "clasificación de texto"]})  # the topic dropped
+        else:
+            yield from _Extractor().stream(messages, max_tokens)
+
+    def close(self) -> None:
+        pass
+
+
+def test_the_last_map_is_organized_by_the_llm(config: Config) -> None:
+    from biblio.maps.build import generate_map
+
+    cfg = replace(config.maps, organize=True, organize_min_branches=1)
+    progress = list(generate_map(_Organizer(), cfg, "spam", [fragment(1), fragment(2)], None))
+    assert [p.stage for p in progress] == ["", "organizing", ""]  # one more map, organized
+    final = progress[-1].map
+    level1 = [n.label for n in final.nodes if n.level == 1]
+    assert level1 == ["clasificación de texto"]
+    child = next(n for n in final.nodes if n.level == 2)
+    assert child.label == "teorema de Bayes" and child.parent == next(
+        n.id for n in final.nodes if n.level == 1
+    )
+    # a grouping the notes do not state gets no label: the relation is never the model's
+    edge = next(e for e in final.edges if child.id in (e.source, e.target) and e.kind == "tree")
+    assert edge.label == ""
+
+
+class _ChildPicker:
+    """Asked about «endpoint», names one tied concept and one that is not tied; about
+    «rate limiting», answers nothing usable."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+        user = messages[1].content
+        self.asked.append(user)
+        if "Rama: endpoint" in user:
+            yield json.dumps(
+                {"hijos": ["json", "cliente"]}
+            )  # «cliente» is tied to the other branch
+        else:
+            yield "no sé"
+
+    def close(self) -> None:
+        pass
+
+
+def test_the_llm_confirms_children_only_among_those_tied_to_the_branch(config: Config) -> None:
+    from biblio.maps.build import ask_children, inventory
+
+    exs = [
+        Extraction(1, ("endpoint", "solicitud", "json"), (("solicitud", "endpoint", "llega a"),)),
+        Extraction(2, ("rate limiting", "cliente"), ()),
+    ]
+    inv = inventory("api", exs, None, config.maps)
+    ids = {inv.others[n].label: n for n in inv.others}
+    llm = _ChildPicker()
+    children = ask_children(llm, config.maps, inv, [ids["endpoint"], ids["rate limiting"]])
+    named = {inv.others[p].label: [inv.others[c].label for c in v] for p, v in children.items()}
+    # «solicitud» was offered and not chosen; «cliente» was never offered to «endpoint»
+    assert named == {"endpoint": ["json"], "rate limiting": ["cliente"]}  # unusable: ties decide
+    assert "- json\n- solicitud" in llm.asked[0] and "cliente" not in llm.asked[0]
+
+
+def test_a_fragment_explains_the_topic_by_score_or_by_heading_and_the_llm() -> None:
+    from biblio.maps.select import count_general
+
+    scored = Fragment(1, "a.md", ("Guía", "Definición"), "texto", 1, 2)  # high score
+    named = Fragment(2, "b.md", ("Guía", "¿Qué es un webhook?"), "texto", 1, 2)  # heading names it
+    other = Fragment(3, "c.md", ("Proyecto", "Decisiones"), "texto", 1, 2)  # neither
+    asked: list[int] = []
+
+    def focus(f: Fragment) -> str:
+        asked.append(f.number)
+        return "general"
+
+    scores = {("a.md", 1): 0.9, ("b.md", 1): 0.1, ("c.md", 1): 0.1}
+    assert count_general("webhook", [scored, named, other], scores, 0.4, focus) == 2
+    assert asked == [2]  # the LLM is asked only about a low score whose heading names the topic

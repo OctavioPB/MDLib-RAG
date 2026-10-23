@@ -1,0 +1,10 @@
+Tema del mapa: {topic}
+Rama: {branch}
+
+Conceptos que las notas escriben junto a «{branch}»:
+{concepts}
+
+¿Cuáles van bajo «{branch}»?
+
+Formato:
+{{"hijos": ["...", "..."]}}

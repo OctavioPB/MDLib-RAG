@@ -7,19 +7,22 @@ the GPU with the LLM. One request at a time uses the models (single user, `lock`
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
+import os
 import queue
 import random
+import re
 import sqlite3
 import threading
 import time
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, TypeVar
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import numpy as np
 
@@ -60,7 +63,13 @@ from biblio.library import (
     check_library,
     save_library,
 )
-from biblio.maps.build import CachedEmbed, ConceptMap, generate_map, topic_in_text
+from biblio.maps.build import (
+    CachedEmbed,
+    ConceptMap,
+    fragment_focus,
+    generate_map,
+    topic_in_text,
+)
 from biblio.maps.diagrams import (
     DIAGRAM_KINDS,
     Fishbone,
@@ -81,6 +90,7 @@ from biblio.maps.drawing import (
 )
 from biblio.maps.export import map_fragments, numbered_fragments, to_canvas, to_markdown
 from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
+from biblio.maps.select import count_general, map_candidates, order_sections, rerank_scores
 from biblio.offline import loopback_port_open
 from biblio.practice.dictionary import Entry, build_dictionary, to_anki
 from biblio.practice.dictionary import to_markdown as dictionary_markdown
@@ -236,6 +246,8 @@ class Engine:
         self._plan_resolver = plan_resolver
         self._llm_factory = llm_factory
         self.llm_switch: LLMSwitch | None = None  # set by `biblio start`/`serve` (ADR-043)
+        self._asset_files: dict[str, list[str]] | None = None  # file name → paths (ADR-048)
+        self._asset_walked = 0.0
         self._counter_factory = counter_factory
         self._index_embedder_factory = index_embedder_factory
         self._index_counter_factory = index_counter_factory
@@ -647,6 +659,85 @@ class Engine:
                 "sections": [list(k) for k in sections],
             }
         return {"nodes": nodes, "mastered_at": p.mastered_at, "partial_at": p.partial_at}
+
+    def note_mastery(self, doc_path: str) -> dict[str, Any] | None:
+        """Per entry of the reader's index: how well its sections are remembered today (ADR-050).
+
+        Practice is keyed by a chunk's heading path, which includes headings the index leaves
+        out (lines of code, levels below `outline_depth`). A section is placed at its own
+        heading: the last heading, up to the end of its first chunk, written as the path's last
+        title (a chunk may start at a parent heading with no text of its own, and a merged
+        chunk carries its parent's path). That heading belongs to the last index entry at or
+        before it; a heading out of the index belongs to the entry above it.
+        """
+        view = self.note_view(doc_path)
+        if view is None:
+            return None
+        lines = [h["line"] for h in view["outline"]]
+        heads = [
+            (b["lines"][0], b["title"])
+            for b in view["blocks"]
+            if b["type"] == "heading" and b.get("lines")
+        ]
+        with self.lock:
+            rows = self._conn.execute(
+                "SELECT c.heading_path, c.start_line, c.end_line FROM chunks c "
+                "JOIN documents d ON d.id = c.document_id WHERE d.path = ? ORDER BY c.start_line",
+                (doc_path,),
+            ).fetchall()
+        entry_of: dict[tuple[str, ...], int] = {}  # a section → its index entry
+        for heading_path, start, end in rows:
+            path = tuple(json.loads(heading_path))
+            if path in entry_of or not lines:
+                continue
+            at = start  # the text before the first heading: the first entry
+            if len(path) > 1:
+                at = next(
+                    (ln for ln, title in reversed(heads) if ln <= end and title == path[-1]), start
+                )
+            entry_of[path] = max(bisect.bisect_right(lines, at) - 1, 0)
+        p = self.config.practice
+        schedules = {
+            (doc, tuple(json.loads(path))): s
+            for (doc, path), s in self._schedules().items()
+            if doc == doc_path
+        }
+        flagged = self.practice.flagged_sections()
+        end_of_day = datetime.now().astimezone().replace(hour=23, minute=59, second=59)
+        recalls: list[list[float]] = [[] for _ in lines]
+        due: list[list[str]] = []
+        for (_, path), s in schedules.items():
+            if path not in entry_of:  # a section the note no longer has
+                continue
+            recalls[entry_of[path]].append(s.recall_now)
+            if s.due <= end_of_day and s.key not in flagged:
+                due.append(list(s.key))
+        entries = []
+        for i, (line, values) in enumerate(zip(lines, recalls, strict=True)):
+            recall = sum(values) / len(values) if values else None
+            if recall is None:
+                state = "new"
+            elif recall >= p.mastered_at:
+                state = "mastered"
+            elif recall >= p.partial_at:
+                state = "partial"
+            else:
+                state = "weak"
+            entries.append(
+                {
+                    "line": line,
+                    "state": state,
+                    "recall": round(recall, 2) if recall is not None else None,
+                    "practiced": len(values),
+                    "sections": sum(1 for e in entry_of.values() if e == i),
+                }
+            )
+        return {
+            "entries": entries,
+            "due": due,
+            "mastered_at": p.mastered_at,
+            "partial_at": p.partial_at,
+        }
 
     def check_choice(self, question_id: int, choice: int | bool) -> dict[str, Any] | None:
         """Grade a multiple-choice index or a true/false answer by code and record it."""
@@ -1271,24 +1362,43 @@ class Engine:
         with self.lock:  # the query embedder is shared with searches
             return self._embedder.embed(list(names))
 
+    def _map_rerank(self, topic: str, hits: Sequence[Hit]) -> list[float]:
+        """The candidates scored by the reranker on CPU, outside the engine's lock: a map needs
+        the LLM, which holds the GPU (ADR-014). Loaded for this and released at once: +2.5 GiB
+        RAM while it runs (measured, ADR-051)."""
+        with self.lock:
+            self._release_reranker()  # a GPU reranker kept from a search goes too
+        reranker = self._reranker_factory(self.config, "cpu")
+        try:
+            return rerank_scores(reranker.score, topic, hits, self.config.maps)
+        finally:
+            reranker.close()
+
     def concept_map(
         self, topic: str, scope: str | None = None, kind: str = "concepts"
     ) -> Generator[Event, None, None]:
-        """Events: ("start", {fragments}), then ("map", …) after each fragment with the map so far,
-        then ("done", …). Raises ValueError before the first event if nothing is found. `kind`
-        "novak" lays the same map out top-down (ADR-036)."""
+        """Events: ("selecting", {candidates}) while the reranker orders them, ("start",
+        {fragments}), then ("map", …) after each fragment with the map so far, then ("done", …).
+        Raises ValueError before the first event if nothing is found. `kind` "novak" lays the
+        same map out top-down (ADR-036)."""
         self._claim_generation()
         try:
             cfg = self.config.maps
-            with self.lock:
-                hits = self._base(scope).search(topic, cfg.fragments * 2)
-            fragments = map_fragments(hits, cfg)
-            if not fragments:
+            with self.lock:  # the sections that explain the topic first (ADR-051)
+                hits = map_candidates(
+                    self._base(scope).search, topic, cfg, self.config.retrieval.rrf_k
+                )
+            if not map_fragments(hits, cfg):
                 self._record_gap(topic, "map", topic, "sin secciones")  # ADR-029
                 raise ValueError(
                     "No encontré secciones sobre ese tema en tus notas. "
                     "Lo apunté como tema pendiente en Guías."
                 )
+            scores = None
+            if cfg.rerank:
+                yield "selecting", {"candidates": len(hits)}
+                scores = self._map_rerank(topic, hits)
+            fragments = map_fragments(order_sections(topic, hits, scores), cfg)
             sources = [fragment_json(f, self) for f in fragments]
             yield "start", {"topic": topic, "fragments": sources}
             with self.lock:
@@ -1304,9 +1414,21 @@ class Engine:
                         {
                             "processed": progress.processed,
                             "skipped": progress.skipped,
+                            "stage": progress.stage,  # "organizing": the LLM picks the branches
                             "map": map_json(progress.map, kind),
                         },
                     )
+                general = None  # how many fragments explain the topic in general (ADR-051)
+                if scores is not None:
+                    score_of = {
+                        (h.doc_path, h.start_line): s for h, s in zip(hits, scores, strict=True)
+                    }
+
+                    def focus(f: Fragment) -> str | None:
+                        with self._llm_lock:
+                            return fragment_focus(llm, cfg, topic, f)
+
+                    general = count_general(topic, fragments, score_of, cfg.general_score, focus)
             finally:
                 llm.close()
             assert progress is not None
@@ -1318,15 +1440,20 @@ class Engine:
             absent = not progress.topic_named and not any(
                 topic_in_text(topic, f.text) for f in fragments
             )
-            if absent or concepts < self.config.gaps.map_min_concepts:  # thin (ADR-029, 030)
+            # scarce: the notes name the topic but hardly explain it in general (ADR-051 stage 3)
+            scarce = general is not None and general < cfg.min_general
+            if absent or scarce or concepts < self.config.gaps.map_min_concepts:  # thin (ADR-029)
                 detail = (
                     "el tema no aparece en tus notas"
                     if absent
+                    else f"explicado en general en {general} de {len(fragments)} secciones"
+                    if scarce
                     else f"{concepts} {'concepto' if concepts == 1 else 'conceptos'}"
                 )
                 gap = self._record_gap(topic, "map", topic, detail)
                 if gap is not None:
-                    yield "gap", {**gap, "absent": absent}
+                    extra = {"general": general, "read": len(fragments)} if scarce else {}
+                    yield "gap", {**gap, "absent": absent, **extra}
         finally:
             self._generating.release()
 
@@ -1752,6 +1879,77 @@ class Engine:
         reads = self.practice.reads()
         return [{"path": p, "title": t, "read": p in reads} for p, t in rows]
 
+    # --- images a note references (ADR-048) --------------------------------------------------
+
+    def note_asset(
+        self, doc_path: str, src: str | None = None, name: str | None = None
+    ) -> tuple[bytes, str] | None:
+        """(bytes, content type) of an image the note references: `src` from Markdown, relative to
+        the note, or `name` from an Obsidian embed, found by name. None unless the file is a
+        browser image inside the library, small enough."""
+        library = self.config.paths.library
+        paths, _ = self._note_index()
+        if library is None or doc_path not in paths or not (src or name):
+            return None
+        root = library.resolve()
+        folder = PurePosixPath(doc_path).parent
+        candidates: list[Path] = []
+        if src:
+            ref = unquote(src.strip().strip("<>").split("#", 1)[0].split("?", 1)[0])
+            if not ref or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", ref):
+                return None  # a URL: never fetched (rule 1)
+            candidates.append(
+                root / ref.lstrip("/") if ref.startswith("/") else root / folder / ref
+            )
+            name = PurePosixPath(ref).name  # Obsidian also writes vault-wide names here
+        if name:
+            candidates += [root / folder / name, root / name]
+            candidates += [
+                root / p for p in self._asset_named(PurePosixPath(name).name, str(folder))
+            ]
+        limit = self.config.reader.asset_max_mb * 1024 * 1024
+        for candidate in candidates:
+            try:
+                file = candidate.resolve()
+            except OSError:
+                continue
+            if not file.is_relative_to(root) or not file.is_file() or file.stat().st_size > limit:
+                continue
+            body = file.read_bytes()
+            kind = _image_type(file.suffix.lower(), body)
+            if kind is not None:
+                return body, kind
+        return None
+
+    def _asset_named(self, name: str, near: str) -> list[str]:
+        """Library files called `name`, the closest to the folder `near` first."""
+        key = name.lower()
+        now = time.monotonic()
+        stale = now - self._asset_walked > self.config.reader.asset_index_seconds
+        if self._asset_files is None or (key not in self._asset_files and stale):
+            library = self.config.paths.library
+            found: dict[str, list[str]] = {}
+            if library is not None:
+                for dirpath, dirnames, filenames in os.walk(library):
+                    dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+                    for f in filenames:
+                        if not f.lower().endswith(".md"):
+                            rel = Path(dirpath, f).relative_to(library).as_posix()
+                            found.setdefault(f.lower(), []).append(rel)
+            self._asset_files, self._asset_walked = found, now
+        options = self._asset_files.get(key, [])
+
+        def shared(path: str) -> int:
+            """How many leading folders `path` shares with `near`."""
+            count = 0
+            for a, b in zip(path.split("/")[:-1], near.split("/"), strict=False):
+                if a != b:
+                    break
+                count += 1
+            return count
+
+        return sorted(options, key=lambda p: -shared(p))
+
     def note_view(self, doc_path: str) -> dict[str, Any] | None:
         """An indexed note as a tree of blocks for the reader; None if it is not indexed."""
         library = self.config.paths.library
@@ -1768,10 +1966,11 @@ class Engine:
             return by_name.get(target.rsplit("/", 1)[-1].lower())
 
         text = file.read_bytes().decode("utf-8-sig", errors="replace")
-        tree = note_tree(text, doc_path, resolve)
+        tree = note_tree(text, doc_path, resolve, self.config.reader.outline_depth)
         return {
             "path": doc_path,
             **tree,
+            "words_per_minute": self.config.reader.words_per_minute,
             "open_url": self.open_url(doc_path),
             "read": doc_path in self.practice.reads(),
         }
@@ -2031,6 +2230,34 @@ def _guides_json(
             }
         )
     return out
+
+
+_IMAGE_TYPES = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
+
+
+def _image_type(suffix: str, body: bytes) -> str | None:
+    """A browser image's content type: by extension, else by its first bytes (`.bin` exports).
+    JPEG 2000 and anything else browsers do not draw: None (ADR-048)."""
+    if suffix in _IMAGE_TYPES:
+        return _IMAGE_TYPES[suffix]
+    if body.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if body[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 def hit_json(hit: Hit, engine: Engine) -> dict[str, Any]:

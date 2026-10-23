@@ -1,0 +1,9 @@
+Tema del mapa: {topic}
+
+Conceptos que escriben las notas:
+{concepts}
+
+¿Cuáles son los conceptos clave para entender el tema?
+
+Formato:
+{{"clave": ["...", "..."]}}

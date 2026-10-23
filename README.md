@@ -247,6 +247,26 @@ number of notes in each, and a box that finds a note by title or folder as you t
 capitals do not matter). The notes you read last are listed first; notes marked as read show
 «✓ leída». Any of them opens in the reader.
 
+**The reader's index** (ADR-049): a bar under the top bar shows the section you are in, how much of
+the note you have read and the minutes left; the column «En esta nota» lists the note's sections
+(headings that are really lines of code are left out) and holds the search inside the note. On a
+narrow screen the index opens from the bar.
+
+Once you have practised a note, its index shows a dot per section: mastered, partly, to review or
+not practised (ADR-050), and «Repasar lo pendiente de esta nota» takes you to Practicar with the
+sections due today.
+
+**Maps read what explains the topic** (ADR-051): before drawing, Mapas looks for the topic as you
+wrote it and as «¿Qué es …?», and keeps first the sections that explain it rather than those that
+only mention it. This adds about 20 seconds to each map. The language model then picks the key
+concepts as branches, and when your notes name a topic but hardly explain it in general (a
+product's business case, say), the map tells you so and the topic goes to Guías as pending.
+
+**Images in the reader** (ADR-048): a note's images are shown where the note puts them, both
+Markdown references (`![](assets/figura.jpg)`) and Obsidian embeds (`![[figura.png]]`); a click opens
+one full size. Only image files inside your library are served; an internet image is never loaded
+(it becomes a link), and JPEG 2000 files, which browsers do not draw, stay as text saying so.
+
 **Gap Spotter** (ADR-047), in Guías: type a topic and, in a minute or two, see which of its subtopics
 your notes explain («cubierto», with the quote that shows it), treat «a medias», or lack («falta»), and
 5 to 10 suggested guides to fill the holes (title, subtopics, questions to answer, related notes).

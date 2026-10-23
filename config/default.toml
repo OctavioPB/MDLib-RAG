@@ -167,6 +167,10 @@ map_min_concepts = 6         # a map with fewer concepts than this is thin
 passage_min_chars = 20       # a selection shorter than this is not a passage
 passage_max_chars = 3000
 passage_questions = 3        # «Pregúntame sobre esto»
+asset_max_mb = 25           # images a note references are shown up to this size (ADR-048)
+asset_index_seconds = 60    # an embed not found walks the library again at most this often
+outline_depth = 3            # heading levels in the reader's index, below the note's title (ADR-049)
+words_per_minute = 200       # reading speed behind the reader's «quedan ~N min»
 
 [dictionary]                 # «Diccionario» in Practicar (ADR-034); kept in [practice].db
 fragments = 10               # topic: sections retrieval finds for it
@@ -200,6 +204,9 @@ history_limit = 30
 
 [maps]
 fragments = 10               # retrieved sections read for one map (~3 s each with the LLM, ADR-022)
+candidates = 20              # first-stage hits per query; the bare topic's and the definitional one's are fused (ADR-051)
+define_query = "¿Qué es {topic}? Definición, conceptos fundamentales y cómo funciona"
+rerank = true                # order the candidates with the reranker on CPU (+10–17 s, +2.5 GiB RAM while it runs)
 max_fragment_chars = 6000    # longer sections (big tables) are cut to this before extraction
 concepts_per_fragment = 8    # asked of the model; more are cut
 extract_max_tokens = 700     # LLM output budget for one fragment's concepts and relations
@@ -207,6 +214,17 @@ merge_similarity = 0.88      # cosine above which two concept names are merged a
 level1_max = 9               # concepts around the topic
 children_max = 5             # concepts under each of them
 max_nodes = 40               # past this a map stops being readable
+organize = true              # the LLM chooses the key branches from the concepts found (ADR-051)
+organize_concepts = 60       # concepts listed to it, most supported first
+organize_ask_branches = 6    # asked for at least this many key branches (it stops at the minimum asked)
+organize_min_branches = 4    # fewer usable branches: the heuristic hierarchy stays
+organize_max_tokens = 700    # LLM output budget for the plan
+organize_children = true     # then the LLM confirms each branch's children among the concepts tied to it
+organize_child_candidates = 15  # concepts tied to a branch shown to it
+focus_max_chars = 3000       # a fragment's text shown when asking how it treats the topic (stage 3)
+focus_max_tokens = 40
+general_score = 0.4          # reranker score at which a fragment explains the topic in general (stage 3)
+min_general = 3              # fewer general fragments read: the map says so and the topic goes to Guías
 history_db = "data/maps.db" # generated maps (ADR-024); apart from the index
 history_limit = 200          # maps listed in the side panel, newest first
 

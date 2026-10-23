@@ -837,3 +837,51 @@ def test_the_english_files_are_served(server: tuple[str, int]) -> None:
     for path in ("/static/i18n.js", "/static/i18n-en.js"):
         status, headers, _ = request(server, "GET", path)
         assert status == 200 and "javascript" in headers.get("content-type", "")
+
+
+# --- images a note references, in the reader (ADR-048) -------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+JPEG2000 = b"\x00\x00\x00\x0cjP  \r\n\x87\n" + b"\x00" * 8
+
+
+def test_the_reader_gets_the_images_a_note_references(
+    server: tuple[str, int], engine: Engine, tmp_path: Path
+) -> None:
+    library = engine.config.paths.library
+    assert library is not None
+    (library / "est" / "assets").mkdir()
+    (library / "est" / "assets" / "curva.png").write_bytes(PNG)
+    (library / "est" / "assets" / "export.bin").write_bytes(JPEG)  # an export with no extension
+    (library / "est" / "assets" / "old.bin").write_bytes(JPEG2000)  # browsers do not draw it
+    (library / "alg" / "figuras").mkdir()
+    (library / "alg" / "figuras" / "diagrama.png").write_bytes(PNG)  # embedded by name elsewhere
+    (library / "est" / "dibujo.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    (tmp_path / "secreto.png").write_bytes(PNG)  # outside the library
+
+    def get(query: str) -> tuple[int, dict[str, str], bytes]:
+        return request(server, "GET", f"/api/notes/asset?path=est/bayes.md&{query}")
+
+    status, headers, body = get("src=assets/curva.png")
+    assert status == 200 and headers["content-type"] == "image/png" and body == PNG
+    status, headers, _ = get("src=assets%2Fexport.bin")
+    assert status == 200 and headers["content-type"] == "image/jpeg"  # told by its first bytes
+    assert get("src=assets/old.bin")[0] == 404  # JPEG 2000: not a browser image
+    status, headers, _ = get("name=diagrama.png")  # ![[diagrama.png]], found by name
+    assert status == 200 and headers["content-type"] == "image/png"
+    status, headers, _ = get("src=dibujo.svg")
+    assert status == 200 and "sandbox" in headers["content-security-policy"]  # runs no script
+    assert get("src=../../secreto.png")[0] == 404  # nothing outside the library
+    assert get("src=../bayes.md")[0] == 404  # only images
+    assert get("src=https://example.org/x.png")[0] == 404  # never fetched (rule 1)
+    assert request(server, "GET", "/api/notes/asset?path=no/existe.md&src=x.png")[0] == 404
+
+
+def test_an_obsidian_image_embed_becomes_an_image() -> None:
+    from biblio.reader import _text_nodes
+
+    nodes = _text_nodes("Mira ![[diagrama.png|300]] y ![[otra nota]].", lambda target: None)
+    assert {"t": "image", "alt": "diagrama.png", "embed": "diagrama.png"} in nodes
+    assert all(n.get("text") != "!" for n in nodes)  # the «!» of the embed is not shown
+    assert any(n.get("t") == "wikilink" for n in nodes)  # a note embed stays a link

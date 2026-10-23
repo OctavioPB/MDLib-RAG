@@ -1111,9 +1111,11 @@ def concept_map(
     from biblio.index.embedder import load_query_embedder
     from biblio.maps.build import CachedEmbed, generate_map, map_outline
     from biblio.maps.export import map_fragments
+    from biblio.maps.select import map_candidates, order_sections, rerank_scores
     from biblio.models import ModelNotAvailableError
     from biblio.offline import loopback_port_open
     from biblio.retrieve.pipeline import build_retriever
+    from biblio.retrieve.rerank import load_reranker
     from biblio.retrieve.store import IndexNotFoundError, QueryEmbedderMismatchError
 
     config = _config(ctx)
@@ -1125,8 +1127,11 @@ def concept_map(
         raise typer.Exit(2)
     try:
         embedder = load_query_embedder(config)
+        # the first stage only: the map's candidates are reranked below, on CPU (ADR-051)
         retriever = build_retriever(
-            config, config.retrieval.default_mode, embedder_factory=lambda _c: embedder
+            config,
+            config.retrieval.default_mode.partition("-")[0],
+            embedder_factory=lambda _c: embedder,
         )
     except (IndexNotFoundError, QueryEmbedderMismatchError, ModelNotAvailableError) as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1134,16 +1139,33 @@ def concept_map(
     llm = load_llm_client(config.llm)
     t0 = time.perf_counter()
     try:
-        fragments = map_fragments(retriever.search(topic, config.maps.fragments * 2), config.maps)
+        hits = map_candidates(retriever.search, topic, config.maps, config.retrieval.rrf_k)
+        scores = None
+        if config.maps.rerank and map_fragments(hits, config.maps):
+            console.print(
+                f"[dim]Choosing among {len(hits)} sections the ones that explain it…[/dim]"
+            )
+            reranker = load_reranker(config, "cpu")
+            try:
+                scores = rerank_scores(reranker.score, topic, hits, config.maps)
+            finally:
+                reranker.close()
+        fragments = map_fragments(order_sections(topic, hits, scores), config.maps)
         if not fragments:
             console.print("[yellow]No sections about that topic in the library.[/yellow]")
             raise typer.Exit(1)
         progress = None
+        shown: set[int] = set()
         for progress in generate_map(
             llm, config.maps, topic, fragments, CachedEmbed(embedder.embed)
         ):
+            if progress.processed in shown:
+                continue  # the organized map after the last fragment (ADR-051)
+            shown.add(progress.processed)
             done = fragments[progress.processed - 1]
             console.print(f"[dim]({progress.processed}/{len(fragments)}) {done.citation}[/dim]")
+            if progress.stage == "organizing":  # ADR-051
+                console.print("[dim]Choosing the key branches among the concepts found…[/dim]")
     except LLMError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc

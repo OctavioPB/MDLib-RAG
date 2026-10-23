@@ -1,0 +1,11 @@
+Tema del mapa: {topic}
+
+Fragmento de «{citation}»:
+---
+{section}
+---
+
+¿Cómo trata este fragmento el tema «{topic}»?
+
+Formato:
+{{"enfoque": "general"}} o {{"enfoque": "especifico"}} o {{"enfoque": "incidental"}}

@@ -188,6 +188,10 @@ class ReaderConfig:
     passage_min_chars: int
     passage_max_chars: int
     passage_questions: int
+    asset_max_mb: int  # the largest image the reader shows (ADR-048)
+    asset_index_seconds: int  # how often a missed embed may walk the library again
+    outline_depth: int  # heading levels in the reader's index (ADR-049)
+    words_per_minute: int  # reading speed for the time left
 
 
 TUTOR_LEVELS = ("beginner", "intermediate", "advanced")
@@ -241,6 +245,9 @@ class SpotterConfig:  # «Gap Spotter» in Guías (ADR-047)
 @dataclass(frozen=True)
 class MapsConfig:
     fragments: int
+    candidates: int  # first-stage hits per query (ADR-051)
+    define_query: str  # the definitional question; {topic} is the map's topic
+    rerank: bool  # order the candidates with the CPU reranker
     max_fragment_chars: int
     concepts_per_fragment: int
     extract_max_tokens: int
@@ -248,6 +255,17 @@ class MapsConfig:
     level1_max: int
     children_max: int
     max_nodes: int
+    organize: bool  # the LLM chooses the key branches (ADR-051)
+    organize_concepts: int
+    organize_ask_branches: int
+    organize_min_branches: int
+    organize_max_tokens: int
+    organize_children: bool  # the LLM confirms each branch's children (ADR-051)
+    organize_child_candidates: int
+    focus_max_chars: int  # how a fragment treats the topic (ADR-051 stage 3)
+    focus_max_tokens: int
+    general_score: float  # a fragment explains the topic in general (ADR-051 stage 3)
+    min_general: int
     history_db: Path
     history_limit: int
 

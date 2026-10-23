@@ -10,6 +10,8 @@ const reader = {
   view: null,
   conversationId: null, // «Explícame esto» on this note continue one conversation
   passage: null, // the current selection: {text, lines}
+  headings: [], // the index's entries with their heading elements: [{line, text, node, link}] (ADR-049)
+  current: null, // the entry whose section is on screen
 };
 const READER_KINDS = ["mc", "tf", "open_self"]; // answered in the panel (ADR-031)
 const PASSAGE_MIN = 20; // as reader.passage_min_chars; the server says so if it changes
@@ -133,10 +135,44 @@ function readerInline(n) {
       return link;
     }
     case "image":
-      return el("span", "img-alt", tx("[Imagen: {0}]", n.alt || tx("sin descripción")));
+      return readerImage(n);
     default:
       return document.createTextNode(n.text || "");
   }
+}
+
+/** An image the note references (ADR-048): drawn from the library, never fetched from the internet. */
+function readerImage(n) {
+  const alt = n.alt || tx("sin descripción");
+  if (n.src && /^[a-z][a-z0-9+.-]*:/i.test(n.src)) {
+    const link = el("a", "img-alt", tx("[Imagen externa: {0}]", alt));
+    link.href = n.src;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.title = tx("No se carga sin conexión; ábrela en el navegador si quieres verla.");
+    return link;
+  }
+  const ref = n.embed ? `name=${encodeURIComponent(n.embed)}` : `src=${encodeURIComponent(n.src || "")}`;
+  const url = `/api/notes/asset?path=${encodeURIComponent(reader.path)}&${ref}`;
+  const figure = el("figure", "reader-figure");
+  const open = el("a");
+  open.href = url;
+  open.target = "_blank";
+  open.rel = "noopener";
+  open.title = tx("Ver la imagen a tamaño completo");
+  const img = el("img");
+  img.src = url;
+  img.alt = alt;
+  img.loading = "lazy";
+  img.decoding = "async";
+  img.addEventListener("error", () => {
+    const why = /\.bin$/i.test(n.src || "") ? tx("formato que el navegador no muestra") : tx("no se encontró en tu biblioteca");
+    figure.replaceWith(el("span", "img-alt", tx("[Imagen: {0} · {1}]", alt, why)));
+  });
+  open.append(img);
+  figure.append(open);
+  if (n.alt && n.alt !== n.src && n.alt !== n.embed) figure.append(el("figcaption", null, n.alt));
+  return figure;
 }
 
 function readerBlock(b) {
@@ -195,18 +231,21 @@ async function openNote(path, line) {
     reader.path = path;
     reader.view = null;
     reader.conversationId = null;
-    $("reader-panel-list").replaceChildren();
-    $("reader-panel").hidden = true;
+    readerPanelReset();
     readerFindClear();
     $("reader-find-input").value = "";
     $("reader-title").textContent = tx("Abriendo…");
+    $("reader-bar-title").textContent = "";
     $("reader-body").replaceChildren();
+    readerOutline([]);
     const response = await fetch(`/api/notes/view?path=${encodeURIComponent(path)}`);
     if (!response.ok) {
       $("reader-title").textContent = tx("No encontré esa nota");
       $("reader-path").textContent = path;
       $("reader-body").replaceChildren(el("p", "muted", tx("Solo se pueden leer las notas indexadas de tu biblioteca.")));
-      $("reader-actions").hidden = true;
+      $("reader-open").hidden = true;
+      $("reader-read").hidden = true;
+      readerShowNav(false);
       return;
     }
     reader.view = await response.json();
@@ -214,21 +253,162 @@ async function openNote(path, line) {
     renderNote();
   }
   scrollToLine(line);
+  readerMastery(); // again on coming back from Practicar
 }
 
 function renderNote() {
   const view = reader.view;
   $("reader-title").textContent = view.title;
-  $("reader-path").textContent = view.path;
-  $("reader-actions").hidden = false;
+  $("reader-bar-title").textContent = view.title;
+  // the folders as a trail; the whole path on hover
+  $("reader-path").textContent = view.path.split("/").slice(0, -1).join(" › ");
+  $("reader-path").title = view.path;
   $("reader-open").hidden = !view.open_url;
   if (view.open_url) $("reader-open").href = view.open_url;
+  $("reader-read").hidden = false;
   renderReadMark();
   const blocks = view.blocks.slice();
   // the note's own title is the page header already
   if (blocks[0] && blocks[0].type === "heading" && blocks[0].level === 1) blocks.shift();
   $("reader-body").replaceChildren(...blocks.map(readerBlock));
-  $("reader-find-wrap").hidden = false;
+  readerOutline(view.outline || []);
+  readerShowNav(readerNavWanted());
+  readerTrack();
+}
+
+// --- the index, where you are, and how much is left (ADR-049) ----------------------------------
+
+const READER_NARROW = window.matchMedia("(max-width: 1100px)"); // the index is a drawer there
+
+function readerNavWanted() {
+  return READER_NARROW.matches ? false : store.get("biblio.readerToc", true) !== false;
+}
+
+function readerShowNav(open) {
+  $("reader-nav").hidden = !open;
+  $("reader-toc-toggle").setAttribute("aria-expanded", String(open));
+}
+
+function readerOutline(outline) {
+  reader.headings = [];
+  reader.current = null;
+  $("reader-bar-section").textContent = "";
+  const top = Math.min(...outline.map((h) => h.level));
+  const nodes = [...$("reader-body").querySelectorAll("h2, h3, h4, h5, h6")];
+  const items = [];
+  for (const h of outline) {
+    const node = nodes.find((n) => Number(n.dataset.start) === h.line);
+    if (!node) continue;
+    const item = el("li", `depth-${Math.min(h.level - top, 2)}`);
+    const link = el("a");
+    const dot = el("span", "reader-dot");
+    dot.setAttribute("aria-hidden", "true");
+    const state = el("span", "sr-only"); // the dot's meaning for screen readers
+    link.append(dot, el("span", null, h.text), state);
+    link.href = readerHref(reader.path, h.line);
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      node.scrollIntoView({ block: "start" });
+      if (READER_NARROW.matches) readerShowNav(false);
+    });
+    item.append(link);
+    items.push(item);
+    reader.headings.push({ line: h.line, text: h.text, node, link, dot, state });
+  }
+  if (!items.length && reader.view) items.push(el("li", "small muted", tx("Esta nota no tiene secciones.")));
+  $("reader-toc").replaceChildren(...items);
+  $("reader-mastery").hidden = true;
+}
+
+// --- how well each section is remembered today, in the index (ADR-050) -------------------------
+
+const READER_STATES = {
+  mastered: tx("Dominada"),
+  partial: tx("A medias"),
+  weak: tx("Por repasar"),
+  new: tx("Sin practicar"),
+};
+
+async function readerMastery() {
+  const path = reader.path;
+  if (!reader.view || !reader.headings.length) return;
+  let data;
+  try {
+    const response = await fetch(`/api/notes/mastery?path=${encodeURIComponent(path)}`);
+    if (!response.ok) return;
+    data = await response.json();
+  } catch {
+    return; // the index works without it
+  }
+  if (path !== reader.path) return; // another note was opened meanwhile
+  const practiced = data.entries.some((e) => e.practiced);
+  const counts = { mastered: 0, partial: 0, weak: 0, new: 0 };
+  for (const h of reader.headings) {
+    const entry = data.entries.find((e) => e.line === h.line);
+    const state = practiced && entry && entry.sections ? entry.state : null;
+    h.dot.className = state ? `reader-dot m-${state}` : "reader-dot";
+    h.state.textContent = state ? ` (${READER_STATES[state]})` : "";
+    h.link.title = state && state !== "new"
+      ? tx("{0}: recuerdas ~{1} % hoy ({2} de {3} secciones practicadas)", READER_STATES[state], Math.round(entry.recall * 100), entry.practiced, entry.sections)
+      : state ? READER_STATES.new : "";
+    if (state) counts[state] += 1;
+  }
+  $("reader-toc").classList.toggle("with-dots", practiced);
+  const legend = $("reader-mastery-legend");
+  legend.replaceChildren();
+  if (practiced) {
+    for (const [state, n] of Object.entries(counts)) {
+      if (!n) continue;
+      const item = el("li");
+      const dot = el("span", `reader-dot m-${state}`);
+      dot.setAttribute("aria-hidden", "true");
+      item.append(dot, el("span", null, `${READER_STATES[state]} · ${n}`));
+      legend.append(item);
+    }
+  } else {
+    legend.append(el("li", "small muted", tx("Aún no has practicado esta nota.")));
+  }
+  const button = $("reader-practice");
+  const due = data.due;
+  button.textContent = due.length ? tx("Repasar lo pendiente de esta nota ({0})", due.length) : tx("Practicar esta nota");
+  button.className = due.length ? "btn-primary" : "btn";
+  button.onclick = () => {
+    app.pendingPractice = due.length
+      ? { scope: { kind: "sections", value: JSON.stringify(due), label: reader.view.title }, count: Math.min(due.length, 10) }
+      : { scope: { kind: "guide", value: reader.path, label: reader.view.title }, count: 10 };
+    location.hash = "#/practicar";
+  };
+  $("reader-mastery").hidden = false;
+}
+
+// the section on screen, the share read and the minutes left; once per frame while scrolling
+function readerTrack() {
+  if (currentPage() !== "leer" || !reader.view) return;
+  const below = $("reader-bar").getBoundingClientRect().bottom + 24;
+  let current = null;
+  for (const h of reader.headings) {
+    if (h.node.getBoundingClientRect().top <= below) current = h;
+    else break;
+  }
+  if (current !== reader.current) {
+    if (reader.current) reader.current.link.removeAttribute("aria-current");
+    reader.current = current;
+    $("reader-bar-section").textContent = current ? `› ${current.text}` : "";
+    if (current) {
+      current.link.setAttribute("aria-current", "location");
+      const nav = $("reader-nav");
+      const top = current.link.offsetTop - nav.offsetTop;
+      if (top < nav.scrollTop || top > nav.scrollTop + nav.clientHeight - 40) nav.scrollTop = top - nav.clientHeight / 3;
+    }
+  }
+  const body = $("reader-body").getBoundingClientRect();
+  const seen = Math.min(Math.max((window.innerHeight - body.top) / Math.max(body.height, 1), 0), 1);
+  const percent = Math.round(seen * 100);
+  const minutes = Math.ceil(((1 - seen) * (reader.view.words || 0)) / (reader.view.words_per_minute || 200));
+  $("reader-progress-fill").style.width = `${percent}%`;
+  $("reader-nav-fill").style.width = `${percent}%`;
+  $("reader-bar-left").textContent = minutes > 0 ? tx("{0} % · ~{1} min", percent, minutes) : tx("Al final");
+  $("reader-nav-left").textContent = minutes > 0 ? tx("{0} % leído · quedan ~{1} min", percent, minutes) : tx("Llegaste al final de la nota");
 }
 
 // --- search inside the note (ADR-045): its sections ranked, a click jumps to one ---------------
@@ -236,6 +416,7 @@ function renderNote() {
 function readerFindClear() {
   $("reader-find-results").replaceChildren();
   $("reader-find-results").hidden = true;
+  $("reader-toc").hidden = false; // the results take the index's place while they are open
 }
 
 async function readerFind(event) {
@@ -244,6 +425,7 @@ async function readerFind(event) {
   if (!query || !reader.path) return;
   const box = $("reader-find-results");
   box.hidden = false;
+  $("reader-toc").hidden = true;
   box.replaceChildren(el("p", "small muted", tx("Buscando en la nota…")));
   try {
     const response = await postJSON("/api/notes/search", { path: reader.path, query });
@@ -263,13 +445,17 @@ async function readerFind(event) {
       const item = el("li");
       const go = el("button", "reader-find-item");
       go.type = "button";
-      go.append(el("strong", null, hit.sections.join(" › ") || hit.guide), el("span", null, tx("líneas {0}–{1} · {2}", hit.lines[0], hit.lines[1], hit.excerpt.replace(/[*_`#>]+/g, ""))));
+      // named as the index names its section, so a heading that is code never shows (ADR-049)
+      const entry = reader.headings.filter((h) => h.line <= hit.lines[0]).pop();
+      const name = entry ? entry.text : hit.sections[hit.sections.length - 1] || hit.guide;
+      go.append(el("strong", null, name), el("span", null,tx("líneas {0}–{1} · {2}", hit.lines[0], hit.lines[1], hit.excerpt.replace(/[*_`#>]+/g, ""))));
       go.addEventListener("click", () => {
         for (const other of list.querySelectorAll(".reader-find-item")) other.classList.toggle("active", other === go);
         scrollToLine(hit.lines[0]);
-        // the section lands below the search bar, not under its results
+        if (READER_NARROW.matches) readerShowNav(false);
+        // the section lands below the reading bar
         const target = $("reader-body").querySelector(".flash");
-        const below = $("reader-find-wrap").getBoundingClientRect().bottom + 12;
+        const below = $("reader-bar").getBoundingClientRect().bottom + 12;
         if (target && target.getBoundingClientRect().top < below) {
           window.scrollBy(0, target.getBoundingClientRect().top - below);
         }
@@ -285,7 +471,9 @@ async function readerFind(event) {
 
 function renderReadMark() {
   const button = $("reader-read");
-  button.textContent = reader.view.read ? tx("Leída ✓") : tx("Marcar como leída");
+  const label = reader.view.read ? tx("Leída ✓") : tx("Marcar como leída");
+  $("reader-read-label").textContent = label; // only the check on phones (ADR-049)
+  button.title = label;
   button.setAttribute("aria-pressed", String(Boolean(reader.view.read)));
 }
 
@@ -357,8 +545,16 @@ function updateToolbar() {
 
 // --- the side panel --------------------------------------------------------------------------
 
+// at rest the panel only says what it is for, on wide screens (ADR-049)
+function readerPanelReset() {
+  $("reader-panel-list").replaceChildren();
+  $("reader-panel").classList.add("empty");
+  $("reader-panel").hidden = false;
+}
+
 function panelCard(kind, passage) {
   $("reader-panel").hidden = false;
+  $("reader-panel").classList.remove("empty");
   const card = el("section", "reader-card");
   const level = kind === tx("Explícame esto") ? ` · ${LEVEL_LABELS[app.settings.level]}` : "";
   card.append(el("span", "eyebrow", `${kind}${level}`));
@@ -500,6 +696,7 @@ function questionBox(q) {
             else if (choices[i][0] === value) b.classList.add("is-wrong");
           });
           show(data.result === "correct", data);
+          readerMastery();
         } catch (error) {
           feedback.replaceChildren(el("p", "error", error.message));
         }
@@ -526,6 +723,7 @@ function questionBox(q) {
           b.type = "button";
           b.addEventListener("click", async () => {
             await practicePost("/api/practice/self", { question_id: q.id, answer: area.value, result });
+            readerMastery();
             grade.replaceChildren(el("span", "small muted", tx("Guardado: {0}.", label.toLowerCase())));
           });
           grade.append(b);
@@ -550,7 +748,36 @@ function bindReader() {
     clearTimeout(reader.selectionTimer);
     reader.selectionTimer = setTimeout(updateToolbar, 150);
   });
-  window.addEventListener("scroll", () => ($("reader-toolbar").hidden = true), { passive: true });
+  window.addEventListener("scroll", () => {
+    $("reader-toolbar").hidden = true;
+    if (reader.tracking) return;
+    reader.tracking = true;
+    requestAnimationFrame(() => {
+      reader.tracking = false;
+      readerTrack();
+    });
+  }, { passive: true });
+  window.addEventListener("resize", readerTrack, { passive: true });
+  READER_NARROW.addEventListener("change", () => readerShowNav(Boolean(reader.view) && readerNavWanted()));
+  $("reader-toc-toggle").addEventListener("click", () => {
+    const open = $("reader-nav").hidden;
+    readerShowNav(open);
+    if (!READER_NARROW.matches) store.set("biblio.readerToc", open);
+  });
+  $("reader-find-open").addEventListener("click", () => {
+    readerShowNav(true);
+    $("reader-find-input").focus();
+  });
+  // the drawer closes when the note is touched (narrow screens)
+  document.querySelector(".reader-main").addEventListener("click", () => {
+    if (READER_NARROW.matches && !$("reader-nav").hidden) readerShowNav(false);
+  });
+  $("reader-nav").addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && READER_NARROW.matches) {
+      readerShowNav(false);
+      $("reader-toc-toggle").focus();
+    }
+  });
   for (const [id, run] of [["reader-explain", explainPassage], ["reader-quiz", quizPassage]]) {
     const button = $(id);
     button.addEventListener("mousedown", (event) => event.preventDefault()); // keep the selection

@@ -1,0 +1,9 @@
+Eliges los conceptos clave de un mapa conceptual entre los que se extrajeron de las notas del usuario sobre un tema.
+
+Reglas:
+1. Elige solo conceptos de la lista y escríbelos exactamente como aparecen.
+2. Un concepto clave es necesario para entender el tema en general: qué es, sus partes, cómo funciona, sus tipos, sus propiedades o cuándo se usa.
+3. No elijas productos, herramientas, librerías, proveedores, proyectos ni ejemplos concretos: esos ilustran, no explican. Los tipos o variantes del propio tema sí son clave, aunque tengan nombre propio.
+4. No elijas el tema mismo ni otro nombre del tema: el tema es el centro del mapa, no una de sus ramas.
+5. Elige entre {ask_branches} y {max_branches}, del más fundamental al menos.
+6. Responde solo con un objeto JSON válido, sin texto antes ni después.

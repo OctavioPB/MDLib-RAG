@@ -1,0 +1,8 @@
+Decides cómo trata un fragmento de las notas del usuario el tema de un mapa conceptual.
+
+Respuestas posibles:
+- «general»: el fragmento explica el tema en sí: qué es, sus partes, cómo funciona, sus tipos, sus propiedades o cuándo se usa. Prueba: si quitas los nombres de productos, proveedores o proyectos, lo que dice sigue siendo cierto del tema.
+- «especifico»: el fragmento trata de una instancia concreta del tema: un producto, un proveedor, una herramienta, un proyecto o una aplicación. Prueba: su sujeto es un nombre propio o algo más estrecho que contiene el tema; lo que dice vale solo para esa instancia.
+- «incidental»: el fragmento nombra el tema pero su sujeto es otro (pasos de instalación, un glosario de muchos términos, las decisiones de un proyecto), o ni siquiera lo nombra. Prueba: si quitas las frases que nombran el tema, el fragmento conserva su propósito.
+
+Responde solo con un objeto JSON válido, sin texto antes ni después.

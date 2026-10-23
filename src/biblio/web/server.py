@@ -1230,6 +1230,36 @@ def make_handler(
             if parts.path == "/api/notes":
                 self._send_json({"notes": engine.note_list()})
                 return True
+            if parts.path == "/api/notes/asset":  # an image the note references (ADR-048)
+                query = parse_qs(parts.query)
+                found = engine.note_asset(
+                    query.get("path", [""])[0],
+                    src=query.get("src", [None])[0],
+                    name=query.get("name", [None])[0],
+                )
+                if found is None:
+                    self._not_found()
+                    return True
+                body, kind = found
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(body)))
+                for header, value in _SECURITY_HEADERS.items():
+                    if header == "Content-Security-Policy" and kind == "image/svg+xml":
+                        value = (
+                            "default-src 'none'; style-src 'unsafe-inline'; sandbox"  # no script
+                        )
+                    elif header == "Cache-Control":
+                        value = "private, max-age=300"
+                    self.send_header(header, value)
+                self.end_headers()
+                self.wfile.write(body)
+                return True
+            if parts.path == "/api/notes/mastery":  # the reader's index, by state (ADR-050)
+                path = parse_qs(parts.query).get("path", [""])[0]
+                mastery = engine.note_mastery(path) if path else None
+                self._send_json(mastery) if mastery is not None else self._not_found()
+                return True
             if parts.path != "/api/notes/view":
                 return False
             path = parse_qs(parts.query).get("path", [""])[0]

@@ -370,34 +370,50 @@
   </main>
 
   <main id="page-leer" class="page leer" hidden>
-    <article class="reader-main" aria-labelledby="reader-title">
-      <header class="reader-head">
-        <button id="reader-back" class="back-link" type="button">← Volver</button>
-        <p id="reader-path" class="path"></p>
-        <h1 id="reader-title"></h1>
-        <div id="reader-actions" class="row" hidden>
-          <a id="reader-open" class="btn" href="#">Abrir en Obsidian</a>
-          <button id="reader-read" class="btn" type="button" aria-pressed="false">Marcar como leída</button>
-          <span class="small muted">Selecciona un párrafo para que te lo explique o te pregunte sobre él.</span>
+    <div id="reader-bar" class="reader-bar" role="toolbar" aria-label="Lectura">
+      <button id="reader-back" class="reader-icon-btn" type="button" aria-label="Volver" title="Volver"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <span id="reader-bar-title" class="reader-bar-title"></span>
+      <span id="reader-bar-section" class="reader-bar-section"></span>
+      <span id="reader-bar-left" class="reader-bar-left"></span>
+      <button id="reader-toc-toggle" class="reader-icon-btn" type="button" aria-controls="reader-nav" aria-expanded="true" aria-label="Índice de la nota" title="Índice de la nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
+      <button id="reader-find-open" class="reader-icon-btn" type="button" aria-label="Buscar en esta nota" title="Buscar en esta nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
+      <a id="reader-open" class="reader-icon-btn" href="#" aria-label="Abrir en Obsidian" title="Abrir en Obsidian" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M19 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/></svg></a>
+      <button id="reader-read" class="btn reader-read" type="button" aria-pressed="false" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg><span id="reader-read-label">Marcar como leída</span></button>
+      <div class="reader-progress" aria-hidden="true"><div id="reader-progress-fill"></div></div>
+    </div>
+    <div class="reader-layout">
+      <nav id="reader-nav" class="reader-nav" aria-label="En esta nota" hidden>
+        <span class="eyebrow">En esta nota</span>
+        <div class="reader-nav-meter" aria-hidden="true"><div id="reader-nav-fill"></div></div>
+        <span id="reader-nav-left" class="small muted"></span>
+        <div id="reader-mastery" class="reader-mastery" hidden>
+          <ul id="reader-mastery-legend" class="reader-mastery-legend" aria-label="Dominio de las secciones"></ul>
+          <button id="reader-practice" class="btn" type="button"></button>
         </div>
-      </header>
-      <div id="reader-find-wrap" class="reader-find-wrap" hidden>
         <form id="reader-find" class="reader-find" role="search" autocomplete="off">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
           <label for="reader-find-input" class="sr-only">Buscar en esta nota</label>
           <input id="reader-find-input" type="search" maxlength="300" placeholder="Buscar en esta nota…">
-          <button id="reader-find-go" class="btn" type="submit">Buscar</button>
         </form>
         <div id="reader-find-results" class="reader-find-results" hidden></div>
-      </div>
-      <div id="reader-body" class="reader-body md"></div>
-    </article>
-    <aside id="reader-panel" class="reader-panel" aria-label="Sobre tu selección" hidden>
-      <div class="row-between">
-        <h2 class="eyebrow">Sobre tu selección</h2>
-        <button id="reader-panel-close" class="btn-ghost" type="button" aria-label="Cerrar el panel">Cerrar</button>
-      </div>
-      <div id="reader-panel-list" class="reader-panel-list"></div>
-    </aside>
+        <ol id="reader-toc" class="reader-toc"></ol>
+      </nav>
+      <article class="reader-main" aria-labelledby="reader-title">
+        <header class="reader-head">
+          <p id="reader-path" class="path"></p>
+          <h1 id="reader-title"></h1>
+        </header>
+        <div id="reader-body" class="reader-body md"></div>
+      </article>
+      <aside id="reader-panel" class="reader-panel empty" aria-label="Sobre tu selección" hidden>
+        <div class="row-between">
+          <h2 class="eyebrow">Sobre tu selección</h2>
+          <button id="reader-panel-close" class="btn-ghost" type="button" aria-label="Cerrar el panel">Cerrar</button>
+        </div>
+        <p class="reader-panel-hint">Selecciona un párrafo para que te lo explique o te pregunte sobre él.</p>
+        <div id="reader-panel-list" class="reader-panel-list"></div>
+      </aside>
+    </div>
     <div id="reader-toolbar" class="reader-toolbar" role="toolbar" aria-label="Acciones sobre la selección" hidden>
       <button id="reader-explain" class="btn-primary" type="button">Explícame esto</button>
       <button id="reader-quiz" class="btn" type="button">Pregúntame sobre esto</button>

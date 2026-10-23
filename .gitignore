@@ -9,7 +9,7 @@ data/
 config/local.toml
 CLAUDE.md
 drafts/
-
+console-output.txt
 # This repository is public: nothing derived from the personal library is published.
 # Evaluation data names and quotes the user's notes; it stays local (the example set is kept).
 eval/*.jsonl

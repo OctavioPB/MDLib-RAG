@@ -88,12 +88,17 @@ async function createMap(topic, expand = false) {
       "/api/maps",
       { topic, kind },
       (name, data) => {
-        if (name === "start") {
+        if (name === "selecting") {
+          // the reranker orders the candidates on CPU: 10-17 s (ADR-051)
+          setStatus(tx("Eligiendo, entre {0} secciones, las que explican el tema…", data.candidates));
+        } else if (name === "start") {
           entry.fragments = data.fragments;
           setStatus(tx("Leyendo {0} fragmentos de tus notas…", data.fragments.length));
         } else if (name === "map") {
           entry.map = data.map;
-          setStatus(tx("Fragmento {0} de {1} · {2}", data.processed, entry.fragments.length, mapUnits(kind, data.map.nodes.length - 1)));
+          setStatus(data.stage === "organizing"
+            ? tx("Eligiendo las ramas clave entre los conceptos encontrados…") // ADR-051
+            : tx("Fragmento {0} de {1} · {2}", data.processed, entry.fragments.length, mapUnits(kind, data.map.nodes.length - 1)));
           renderAll();
           if (!mapState.moved) fitView();
         } else if (name === "diagram") {
@@ -175,9 +180,12 @@ function renderGap() {
   const entry = current();
   const box = $("map-gap");
   box.hidden = !(entry && entry.gap);
-  const why = entry && entry.gap && entry.gap.absent
+  const gap = entry && entry.gap;
+  const why = gap && gap.absent
     ? tx("Tus notas no tratan este tema: los conceptos vienen de notas parecidas. ")
-    : tx("Tus notas tratan poco este tema. ");
+    : gap && gap.general != null // they name it but hardly explain it in general (ADR-051)
+      ? tx("Tus notas explican este tema en general en solo {0} de las {1} secciones leídas; las demás tratan casos concretos o lo mencionan de pasada. ", gap.general, gap.read)
+      : tx("Tus notas tratan poco este tema. ");
   box.replaceChildren(...(entry && entry.gap ? [el("span", null, why), gapNote(entry.gap)] : []));
 }
 
