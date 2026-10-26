@@ -70,6 +70,10 @@ class RetrievalConfig:
     navigation_margin: int  # extra hits asked for, to make up for the ones dropped
     bm25_heading_weight: float  # BM25 weight of the heading path against the text (1 = equal)
     group_depth: int  # grouped search asks for this many hits per note shown (ADR-045)
+    bilingual: bool  # the chat also searches the question in English (ADR-052)
+    bilingual_head: int  # its own best hits keep their places (ADR-052)
+    translate_max_tokens: int
+    translate_max_ratio: float
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,7 @@ class ReaderConfig:
     asset_index_seconds: int  # how often a missed embed may walk the library again
     outline_depth: int  # heading levels in the reader's index (ADR-049)
     words_per_minute: int  # reading speed for the time left
+    callout_headings: tuple[str, ...]  # headings that are a book's boxes, not sections (ADR-053)
 
 
 TUTOR_LEVELS = ("beginner", "intermediate", "advanced")
@@ -276,6 +281,7 @@ class LibraryConfig:
     browse_max_entries: int
     minutes_per_1000_gpu: float
     minutes_per_1000_cpu: float
+    books_folder: str  # a folder named so holds books (ADR-053)
 
 
 @dataclass(frozen=True)

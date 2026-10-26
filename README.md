@@ -262,6 +262,14 @@ only mention it. This adds about 20 seconds to each map. The language model then
 concepts as branches, and when your notes name a topic but hardly explain it in general (a
 product's business case, say), the map tells you so and the topic goes to Guías as pending.
 
+**Search in English too** (ADR-052): most of a library of books may be in English while you ask in
+Spanish. Ajustes › «Búsqueda» › «Buscar también en inglés» makes the chat translate your question and
+search with both, keeping the first places for your own wording. It adds about 1.5 seconds per answer.
+
+**Books** (ADR-053): a folder inside a «Books» folder is a book. Biblioteca shows your books on a shelf,
+by area and with your progress, apart from your own notes, and «Seguir leyendo» takes you back to where you
+left a note. In the reader, a chapter shows its book, its place («13 de 17») and the chapters before and after.
+
 **Images in the reader** (ADR-048): a note's images are shown where the note puts them, both
 Markdown references (`![](assets/figura.jpg)`) and Obsidian embeds (`![[figura.png]]`); a click opens
 one full size. Only image files inside your library are served; an internet image is never loaded

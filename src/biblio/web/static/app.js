@@ -1070,6 +1070,13 @@ function bindTheme() {
       store.set("biblio.theme", radio.value);
     });
   }
+  const contrast = $("code-contrast");
+  contrast.checked = store.get("biblio.codeContrast", false) === true;
+  contrast.addEventListener("change", () => {
+    if (contrast.checked) document.documentElement.dataset.codeContrast = "high";
+    else delete document.documentElement.dataset.codeContrast;
+    store.set("biblio.codeContrast", contrast.checked);
+  });
 }
 
 function bindSettings() {

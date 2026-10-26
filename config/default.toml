@@ -43,6 +43,10 @@ skip_navigation = true       # «Índice» / «Tabla de contenidos» sections ar
 navigation_margin = 5        # extra hits asked for to replace the dropped ones
 group_depth = 3              # «Solo ubicar» groups by note: asks for k × this many hits (ADR-045)
 bm25_heading_weight = 0.5    # BM25: heading path (title › sections) vs text; 0.5 measured best (ADR-044)
+bilingual = false            # chat: a Spanish question is also searched in English, fused (ADR-052); on only once measured
+bilingual_head = 6           # the Spanish question's own best hits keep their places; the English search fills the rest
+translate_max_tokens = 120   # LLM output budget for the translation
+translate_max_ratio = 3.0    # a reply longer than this × the question answered it instead: ignored
 
 [reranker]
 model = "BAAI/bge-reranker-v2-m3"
@@ -76,6 +80,7 @@ relocate_min_overlap = 0.5       # share of notes matching the index (path + con
 browse_max_entries = 400         # folders listed at once by «Examinar»
 minutes_per_1000_gpu = 13        # full index estimate shown before a rebuild (~35 min for 2,673 notes, ADR-012)
 minutes_per_1000_cpu = 260       # the same on CPU (~11.5 h for 2,673 notes)
+books_folder = "Books"           # a folder named so holds books: Area/Books/<Book>/<chapter>.md (ADR-053)
 
 [thread]                     # a conversation keeps its topic; questions that join areas reach each one (ADR-038)
 plan = true                      # plan each message: standalone question + searches per area (false = as before)
@@ -171,6 +176,7 @@ asset_max_mb = 25           # images a note references are shown up to this size
 asset_index_seconds = 60    # an embed not found walks the library again at most this often
 outline_depth = 3            # heading levels in the reader's index, below the note's title (ADR-049)
 words_per_minute = 200       # reading speed behind the reader's «quedan ~N min»
+callout_headings = ["note", "tip", "warning", "caution", "important", "info", "hint"]  # book boxes, kept out of the index (ADR-053)
 
 [dictionary]                 # «Diccionario» in Practicar (ADR-034); kept in [practice].db
 fragments = 10               # topic: sections retrieval finds for it

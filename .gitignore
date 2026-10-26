@@ -1,4 +1,5 @@
 .venv/
+.agents/
 __pycache__/
 *.pyc
 .mypy_cache/
@@ -8,6 +9,7 @@ models/
 data/
 config/local.toml
 CLAUDE.md
+AGENTS.md
 drafts/
 console-output.txt
 # This repository is public: nothing derived from the personal library is published.

@@ -158,6 +158,8 @@ def run_eval(
             "thread": (  # questions planned first (ADR-038)
                 asdict(config.thread) if hasattr(retriever, "last_plan") else None
             ),
+            # each question also searched in English, translated by the LLM (ADR-052)
+            "bilingual": hasattr(retriever, "last_translation"),
             "identical_copies_accepted": True,
             **{
                 k: meta.get(k)

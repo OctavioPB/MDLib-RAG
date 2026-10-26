@@ -8,7 +8,7 @@ source lines the chunks and citations use. The page builds the DOM from this tre
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from markdown_it.token import Token
@@ -33,7 +33,13 @@ _CONTAINERS = {
 _INLINE_SPANS = {"strong", "em", "s", "link"}
 
 
-def note_tree(text: str, doc_path: str, resolve: Resolve, depth: int = 3) -> dict[str, Any]:
+def note_tree(
+    text: str,
+    doc_path: str,
+    resolve: Resolve,
+    depth: int = 3,
+    callouts: Sequence[str] = (),
+) -> dict[str, Any]:
     """{title, blocks, outline, words}: blocks with `lines` [first, last] (1-based, like chunks)."""
     doc = parse_text(text, doc_path)
     body = "\n".join(doc.lines[doc.body_start :]) + "\n"
@@ -42,7 +48,13 @@ def note_tree(text: str, doc_path: str, resolve: Resolve, depth: int = 3) -> dic
     return {
         "title": doc.title,
         "blocks": blocks,
-        "outline": outline(blocks, depth, doc.title),
+        "outline": outline(blocks, depth, doc.title, callouts),
+        # a book's boxes («Note», «Tip») kept out of the index, counted (ADR-053)
+        "callouts": sum(
+            1
+            for b in blocks
+            if b["type"] == "heading" and _plain(b["inlines"]).strip().casefold() in callouts
+        ),
         "words": len(body.split()),
     }
 
@@ -79,7 +91,9 @@ def _plain(inlines: list[Node], code: bool = True) -> str:
     return "".join(out)
 
 
-def outline(blocks: list[Node], depth: int, title: str = "") -> list[Node]:
+def outline(
+    blocks: list[Node], depth: int, title: str = "", callouts: Sequence[str] = ()
+) -> list[Node]:
     """The note's sections for the reader's index: {level, text, line}, top `depth` levels.
 
     The note's own H1 is the page title, so the outline starts below it, also when some text
@@ -94,7 +108,7 @@ def outline(blocks: list[Node], depth: int, title: str = "") -> list[Node]:
     for h in heads:
         text = " ".join(_plain(h["inlines"]).split())
         prose = " ".join(_plain(h["inlines"], code=False).split())
-        if not text or (prose and _looks_like_code(prose)):
+        if not text or (prose and _looks_like_code(prose)) or text.casefold() in callouts:
             continue
         out.append({"level": h["level"], "text": text, "line": h["lines"][0]})
     if not out:

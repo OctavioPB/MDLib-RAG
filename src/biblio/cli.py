@@ -520,6 +520,13 @@ def eval_command(
             help="Plan each question as a conversation's first message (ADR-038; needs the LLM).",
         ),
     ] = False,
+    bilingual: Annotated[
+        bool,
+        typer.Option(
+            "--bilingual",
+            help="Also search each question in English, translated by the LLM (ADR-052).",
+        ),
+    ] = False,
 ) -> None:
     """Measure retrieval on eval/questions.jsonl and append the run to eval/results/runs.jsonl."""
     from datetime import datetime
@@ -548,6 +555,18 @@ def eval_command(
         raise typer.Exit(2)
 
     retriever = _open_retriever(config, mode)
+    if bilingual:  # ADR-052: each question also searched in English, translated by the LLM
+        from biblio.generate.llm import load_llm_client
+        from biblio.generate.translate import translate_query
+        from biblio.retrieve.bilingual import BilingualRetriever
+
+        translator = load_llm_client(config.llm)
+        retriever = BilingualRetriever(
+            retriever,
+            lambda q: translate_query(translator, config.retrieval, q),
+            config.retrieval.rrf_k,
+            config.retrieval.bilingual_head or None,  # 0: equal-weight fusion
+        )
     if plan:
         from biblio.generate.llm import load_llm_client
         from biblio.generate.thread import PlannedRetriever

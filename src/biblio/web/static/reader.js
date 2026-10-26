@@ -29,10 +29,21 @@ function recentNotes() {
   return Array.isArray(list) ? list : [];
 }
 
-function rememberRecent(path, title) {
-  const list = recentNotes().filter((r) => r.path !== path);
-  list.unshift({ path, title });
-  store.set("biblio.recentNotes", list.slice(0, RECENT_MAX));
+function rememberRecent(path, title, extra = {}) {
+  const list = recentNotes();
+  const before = list.find((r) => r.path === path) || {}; // where it was left (ADR-053)
+  const rest = list.filter((r) => r.path !== path);
+  rest.unshift({ ...before, path, title, ...extra });
+  store.set("biblio.recentNotes", rest.slice(0, RECENT_MAX));
+}
+
+// where the open note was left, for «Seguir leyendo» in Biblioteca (ADR-053): kept in this browser
+function readerSavePlace(place) {
+  const list = recentNotes();
+  const i = list.findIndex((r) => r.path === reader.path);
+  if (i < 0) return;
+  list[i] = { ...list[i], ...place };
+  store.set("biblio.recentNotes", list);
 }
 
 // «Leer» next to «Abrir en Obsidian» wherever a note appears
@@ -175,6 +186,42 @@ function readerImage(n) {
   return figure;
 }
 
+const READER_PYTHON_KEYWORDS = new Set(
+  "and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield False None True match case".toLowerCase().split(" "),
+);
+const READER_SQL_KEYWORDS = new Set(
+  "add all alter as asc begin between by case cascade check column commit constraint create cross database default delete desc distinct drop else end except exists foreign from full group having in index inner insert intersect into is join key left like limit not null offset on or order outer primary references right rollback select set table then union unique update values view when where with".split(" "),
+);
+
+function readerCodeContent(text, lang) {
+  const language = (lang || "").toLowerCase();
+  const keywords = ["py", "python", "python3"].includes(language)
+    ? READER_PYTHON_KEYWORDS
+    : language === "sql"
+      ? READER_SQL_KEYWORDS
+      : null;
+  if (!keywords) return document.createTextNode(text);
+
+  const fragment = document.createDocumentFragment();
+  const tokens = /#[^\n]*|--[^\n]*|\/\*[\s\S]*?\*\/|'''[\s\S]*?'''|"""[\s\S]*?"""|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`[^`]*`|\b\d+(?:\.\d+)?\b|[A-Za-z_]\w*|[^\s]/g;
+  let cursor = 0;
+  for (const match of text.matchAll(tokens)) {
+    const token = match[0];
+    const start = match.index;
+    if (start > cursor) fragment.append(document.createTextNode(text.slice(cursor, start)));
+    let kind = "";
+    if (token.startsWith("#") || token.startsWith("--") || token.startsWith("/*")) kind = "comment";
+    else if (/^[`'"]/.test(token)) kind = "string";
+    else if (/^\d/.test(token)) kind = "number";
+    else if (/^[A-Za-z_]/.test(token) && keywords.has(token.toLowerCase())) kind = "keyword";
+    if (kind) fragment.append(el("span", `code-token-${kind}`, token));
+    else fragment.append(document.createTextNode(token));
+    cursor = start + token.length;
+  }
+  if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
+  return fragment;
+}
+
 function readerBlock(b) {
   let node;
   if (b.type === "heading") {
@@ -186,7 +233,8 @@ function readerBlock(b) {
     if (b.align) node.style.textAlign = b.align;
   } else if (b.type === "code") {
     node = el("pre", "reader-code");
-    const code = el("code", null, b.text);
+    const code = el("code");
+    code.append(readerCodeContent(b.text, b.lang));
     if (b.lang) node.dataset.lang = b.lang;
     node.append(code);
   } else if (b.type === "math") {
@@ -238,6 +286,9 @@ async function openNote(path, line) {
     $("reader-bar-title").textContent = "";
     $("reader-body").replaceChildren();
     readerOutline([]);
+    readerBook(null);
+    reader.placeKey = null;
+    $("reader-callouts").hidden = true;
     const response = await fetch(`/api/notes/view?path=${encodeURIComponent(path)}`);
     if (!response.ok) {
       $("reader-title").textContent = tx("No encontré esa nota");
@@ -249,7 +300,7 @@ async function openNote(path, line) {
       return;
     }
     reader.view = await response.json();
-    rememberRecent(reader.view.path, reader.view.title);
+    rememberRecent(reader.view.path, reader.view.title, { book: reader.view.book ? reader.view.book.title : null });
     renderNote();
   }
   scrollToLine(line);
@@ -272,8 +323,48 @@ function renderNote() {
   if (blocks[0] && blocks[0].type === "heading" && blocks[0].level === 1) blocks.shift();
   $("reader-body").replaceChildren(...blocks.map(readerBlock));
   readerOutline(view.outline || []);
+  readerBook(view.book);
+  $("reader-callouts").hidden = !view.callouts;
+  if (view.callouts) {
+    $("reader-callouts").textContent = tx("{0} recuadros del libro («Note», «Tip»…) quedan dentro de sus secciones.", view.callouts);
+  }
   readerShowNav(readerNavWanted());
   readerTrack();
+}
+
+// --- a chapter in its book (ADR-053): the book, its position, the chapters before and after ---
+
+function readerBook(book) {
+  reader.book = book || null;
+  const has = Boolean(book);
+  for (const id of ["reader-bar-book", "reader-bar-book-sep", "reader-book-nav"]) $(id).hidden = !has;
+  $("reader-prev").hidden = !(has && book.prev);
+  $("reader-next").hidden = !(has && book.next);
+  $("reader-bar-pos").hidden = !(has && book.position);
+  $("reader-next-card").hidden = !(has && book.next);
+  if (!has) {
+    $("reader-book-list").replaceChildren();
+    return;
+  }
+  const link = $("reader-bar-book");
+  link.textContent = book.title;
+  link.title = book.title;
+  link.href = `#/biblioteca?libro=${encodeURIComponent(book.id)}`;
+  if (book.position) $("reader-bar-pos").textContent = tx("{0} de {1}", book.position, book.total);
+  if (book.prev) $("reader-prev").title = tx("Anterior: {0}", book.prev.title);
+  if (book.next) {
+    $("reader-next").title = tx("Siguiente: {0}", book.next.title);
+    $("reader-next-card").href = readerHref(book.next.path);
+    $("reader-next-title").textContent = book.next.title;
+  }
+  $("reader-book-list").replaceChildren(...book.chapters.map((c) => {
+    const item = el("li");
+    const a = el("a", null, c.title);
+    a.href = readerHref(c.path);
+    if (c.path === reader.path) a.setAttribute("aria-current", "page");
+    item.append(a);
+    return item;
+  }));
 }
 
 // --- the index, where you are, and how much is left (ADR-049) ----------------------------------
@@ -409,6 +500,13 @@ function readerTrack() {
   $("reader-nav-fill").style.width = `${percent}%`;
   $("reader-bar-left").textContent = minutes > 0 ? tx("{0} % · ~{1} min", percent, minutes) : tx("Al final");
   $("reader-nav-left").textContent = minutes > 0 ? tx("{0} % leído · quedan ~{1} min", percent, minutes) : tx("Llegaste al final de la nota");
+  // saved when the section or a step of 5 % changes, not on every frame
+  const place = { line: current ? current.line : null, section: current ? current.text : null, percent, minutes };
+  const key = `${place.line}|${Math.floor(percent / 5)}`;
+  if (key !== reader.placeKey) {
+    reader.placeKey = key;
+    readerSavePlace(place);
+  }
 }
 
 // --- search inside the note (ADR-045): its sections ranked, a click jumps to one ---------------
@@ -759,6 +857,12 @@ function bindReader() {
   }, { passive: true });
   window.addEventListener("resize", readerTrack, { passive: true });
   READER_NARROW.addEventListener("change", () => readerShowNav(Boolean(reader.view) && readerNavWanted()));
+  for (const [id, side] of [["reader-prev", "prev"], ["reader-next", "next"]]) {
+    $(id).addEventListener("click", () => {
+      const target = reader.book && reader.book[side];
+      if (target) location.hash = readerHref(target.path);
+    });
+  }
   $("reader-toc-toggle").addEventListener("click", () => {
     const open = $("reader-nav").hidden;
     readerShowNav(open);

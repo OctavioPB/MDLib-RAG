@@ -20,6 +20,7 @@ function bindSettingsPanel() {
   bindLibraryLocation();
   bindAppReset();
   $("llm-toggle").addEventListener("click", settingsLlmToggle);
+  $("set-bilingual").addEventListener("change", settingsBilingualSet);
   // the interface's language (ADR-046): kept in this browser; the page reloads in it
   for (const radio of document.querySelectorAll('input[name="lang"]')) {
     radio.checked = radio.value === I18N.lang;
@@ -44,6 +45,7 @@ async function loadLibraryLocation() {
   $("libloc").hidden = !data.local || !data.path;
   $("app-reset").hidden = !data.local; // this PC only (ADR-040)
   $("settings-llm").hidden = !data.local; // this PC only (ADR-043)
+  $("settings-search").hidden = !data.local; // this PC only (ADR-052)
   if (data.local) settingsLlmLoad();
   $("settings-devices").hidden = $("lan-connect").hidden;
   $("libloc-path").textContent = data.path || "";
@@ -258,11 +260,36 @@ const llmSwitch = { control: null, busy: false };
 
 async function settingsLlmLoad() {
   try {
-    llmSwitch.control = (await (await fetch("/api/status")).json()).llm_control;
+    const status = await (await fetch("/api/status")).json();
+    llmSwitch.control = status.llm_control;
+    $("set-bilingual").checked = Boolean(status.bilingual); // ADR-052
   } catch {
     llmSwitch.control = null;
   }
   settingsLlmRender();
+}
+
+// «Buscar también en inglés» (ADR-052): kept by the server in config/local.toml
+async function settingsBilingualSet() {
+  const box = $("set-bilingual");
+  const result = $("bilingual-result");
+  box.disabled = true;
+  try {
+    const response = await postJSON("/api/settings/bilingual", { on: box.checked });
+    if (!response.ok) throw new Error(await errorText(response));
+    result.hidden = false;
+    result.className = "small muted";
+    result.textContent = box.checked
+      ? tx("Activado: se usa desde tu próxima pregunta.")
+      : tx("Desactivado: el chat busca solo con tu pregunta.");
+  } catch (error) {
+    box.checked = !box.checked; // the server kept the old setting
+    result.hidden = false;
+    result.className = "small error";
+    result.textContent = error.message;
+  } finally {
+    box.disabled = false;
+  }
 }
 
 function settingsLlmRender() {

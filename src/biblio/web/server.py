@@ -326,6 +326,19 @@ def make_handler(
                 return
             self._send_json({"backup": str(result.backup), "moved": list(result.moved)})
 
+        # --- «Buscar también en inglés» (ADR-052): this PC only ---------------------------------
+
+        def _bilingual_set(self, payload: dict[str, Any]) -> None:
+            if not self._client_is_local():
+                self._send_json({"error": "only from this PC"}, HTTPStatus.FORBIDDEN)
+                return
+            on = payload.get("on")
+            if not isinstance(on, bool):
+                self._send_json({"error": "'on' must be true or false"}, HTTPStatus.BAD_REQUEST)
+                return
+            engine.set_bilingual(on)
+            self._send_json({"bilingual": on})
+
         # --- switching the LLM off and on (ADR-043): this PC only -----------------------------
 
         def _llm_switch(self, payload: dict[str, Any], on: bool) -> None:
@@ -523,6 +536,7 @@ def make_handler(
                 "/api/plans/read": self._plan_read,
                 "/api/plans/delete": self._plan_delete,
                 "/api/gaps/undo": self._gap_undo,
+                "/api/settings/bilingual": self._bilingual_set,
                 "/api/llm/stop": lambda payload: self._llm_switch(payload, False),
                 "/api/llm/start": lambda payload: self._llm_switch(payload, True),
                 "/api/gaps/status": self._gap_status,
@@ -1229,6 +1243,13 @@ def make_handler(
             parts = urlsplit(self.path)
             if parts.path == "/api/notes":
                 self._send_json({"notes": engine.note_list()})
+                return True
+            if parts.path == "/api/books":  # the shelf (ADR-053)
+                self._send_json(engine.books())
+                return True
+            if parts.path == "/api/books/one":
+                one = engine.book(parse_qs(parts.query).get("id", [""])[0])
+                self._send_json(one) if one is not None else self._not_found()
                 return True
             if parts.path == "/api/notes/asset":  # an image the note references (ADR-048)
                 query = parse_qs(parts.query)

@@ -9,4 +9,11 @@
     /* storage blocked: follow the system */
   }
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+  try {
+    if (JSON.parse(localStorage.getItem("biblio.codeContrast")) === true) {
+      document.documentElement.dataset.codeContrast = "high";
+    }
+  } catch {
+    /* keep the default code style when storage is blocked */
+  }
 })();

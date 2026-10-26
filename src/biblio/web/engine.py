@@ -17,6 +17,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Generator, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
@@ -26,6 +27,7 @@ from urllib.parse import quote, unquote
 
 import numpy as np
 
+from biblio.books import Book, book_id, find_books
 from biblio.config import Config
 from biblio.conversations import ConversationStore, NewTurn
 from biblio.generate.ask import Tutor
@@ -43,6 +45,7 @@ from biblio.generate.draft import (
 )
 from biblio.generate.llm import LLMClient, load_llm_client
 from biblio.generate.thread import Plan, PriorTurn, gist
+from biblio.generate.translate import translate_query
 from biblio.index.embedder import (
     DeviceChoice,
     Embedder,
@@ -52,7 +55,7 @@ from biblio.index.embedder import (
 from biblio.index.indexer import IndexLockedError, IndexMismatchError, IndexStats, index_library
 from biblio.index.watch import choose_device
 from biblio.ingest.tokens import TokenCounter, load_llm_token_counter, load_token_counter
-from biblio.launcher import LLMSwitch
+from biblio.launcher import LLMSwitch, set_local_value
 from biblio.library import (
     INVALID,
     RELOCATE,
@@ -68,6 +71,7 @@ from biblio.maps.build import (
     ConceptMap,
     fragment_focus,
     generate_map,
+    in_english,
     topic_in_text,
 )
 from biblio.maps.diagrams import (
@@ -119,6 +123,7 @@ from biblio.practice.store import (
 )
 from biblio.reader import note_tree
 from biblio.reset import MemoryItem, ResetResult, memory_items, reset_memory
+from biblio.retrieve.bilingual import BilingualRetriever
 from biblio.retrieve.bm25 import BM25Retriever
 from biblio.retrieve.dense import DenseRetriever
 from biblio.retrieve.fusion import HybridRetriever
@@ -248,6 +253,7 @@ class Engine:
         self.llm_switch: LLMSwitch | None = None  # set by `biblio start`/`serve` (ADR-043)
         self._asset_files: dict[str, list[str]] | None = None  # file name → paths (ADR-048)
         self._asset_walked = 0.0
+        self._english_books: dict[str, bool] = {}  # book id → its chapters are in English (ADR-053)
         self._counter_factory = counter_factory
         self._index_embedder_factory = index_embedder_factory
         self._index_counter_factory = index_counter_factory
@@ -347,7 +353,13 @@ class Engine:
                 self._counter = self._counter_factory(self.config)
             llm = self._llm_factory(self.config)
             try:
-                tutor = Tutor(self.config, self._base(scope), llm, self._counter, map_reduce, level)
+                base = self._base(scope)
+                if self.config.retrieval.bilingual:  # also searched in English (ADR-052)
+                    r = self.config.retrieval
+                    base = BilingualRetriever(
+                        base, lambda q: translate_query(llm, r, q), r.rrf_k, r.bilingual_head
+                    )
+                tutor = Tutor(self.config, base, llm, self._counter, map_reduce, level)
                 t0 = time.perf_counter()
                 plan: Plan | None = None
                 if passage is not None:  # a passage of a note is fragment [1] (ADR-031)
@@ -372,6 +384,8 @@ class Engine:
                         "strategy": prepared.strategy,
                         "fragments": [fragment_json(f, self) for f in prepared.context.fragments],
                         "plan": plan_json(plan, time.perf_counter() - t0) if plan else None,
+                        # the question as it was also searched in English (ADR-052)
+                        "translation": getattr(base, "last_translation", None),
                     },
                 )
                 parts = []
@@ -1873,11 +1887,113 @@ class Engine:
         return f"{slug}.md", "text/markdown; charset=utf-8", text
 
     def note_list(self) -> list[dict[str, Any]]:
-        """Every indexed note for the «Biblioteca» page (ADR-033): path, title, read mark."""
+        """Every indexed note for the «Biblioteca» page (ADR-033): path, title, read mark, and
+        the book it is a chapter of, if any (ADR-053)."""
         with self.lock:
             rows = self._conn.execute("SELECT path, title FROM documents ORDER BY path").fetchall()
         reads = self.practice.reads()
-        return [{"path": p, "title": t, "read": p in reads} for p, t in rows]
+        folder = self.config.library.books_folder
+        return [
+            {"path": p, "title": t, "read": p in reads, "book": book_id(p, folder)} for p, t in rows
+        ]
+
+    # --- books (ADR-053) --------------------------------------------------------------------
+
+    def _books(self) -> list[Book]:
+        with self.lock:
+            rows = self._conn.execute("SELECT path, title FROM documents").fetchall()
+        return find_books(rows, self.config.library.books_folder)
+
+    def _in_english(self, book: Book) -> bool:
+        """Whether a book is in English, from its first chapter's first fragment; kept."""
+        if book.id not in self._english_books and book.chapters:
+            with self.lock:
+                row = self._conn.execute(
+                    "SELECT c.text FROM chunks c JOIN documents d ON d.id = c.document_id "
+                    "WHERE d.path = ? ORDER BY c.ordinal LIMIT 1",
+                    (book.chapters[0].path,),
+                ).fetchone()
+            self._english_books[book.id] = bool(row) and in_english(row[0])
+        return self._english_books.get(book.id, False)
+
+    def books(self) -> dict[str, Any]:
+        """The shelf: every book with its area, chapters read and the next one to read."""
+        reads = self.practice.reads()
+        out = []
+        areas: Counter[str] = Counter()
+        for b in self._books():
+            read = [c for c in b.chapters if c.path in reads]
+            following = next((c for c in b.chapters if c.path not in reads), None)
+            areas[b.area] += 1
+            out.append(
+                {
+                    "id": b.id,
+                    "title": b.title,
+                    "area": b.area,
+                    "chapters": len(b.chapters),
+                    "read": len(read),
+                    "english": self._in_english(b),
+                    "next": {"path": following.path, "title": following.title}
+                    if following
+                    else None,
+                }
+            )
+        return {
+            "books": out,
+            "areas": [{"name": a, "count": n} for a, n in areas.most_common()],
+        }
+
+    def book(self, book: str) -> dict[str, Any] | None:
+        """One book's chapters, in order, with their read marks."""
+        found = next((b for b in self._books() if b.id == book), None)
+        if found is None:
+            return None
+        reads = self.practice.reads()
+        return {
+            "id": found.id,
+            "title": found.title,
+            "area": found.area,
+            "english": self._in_english(found),
+            "chapters": [
+                {"path": c.path, "title": c.title, "read": c.path in reads} for c in found.chapters
+            ],
+        }
+
+    def _book_context(self, doc_path: str) -> dict[str, Any] | None:
+        """Where a chapter sits in its book, for the reader: position, previous and next."""
+        key = book_id(doc_path, self.config.library.books_folder)
+        if key is None:
+            return None
+        found = next((b for b in self._books() if b.id == key), None)
+        if found is None:
+            return None
+        paths = [c.path for c in found.chapters]
+        if doc_path not in paths:  # the cover
+            return {
+                "id": found.id,
+                "title": found.title,
+                "position": 0,
+                "total": len(paths),
+                "prev": None,
+                "next": {"path": paths[0], "title": found.chapters[0].title} if paths else None,
+                "chapters": [{"path": c.path, "title": c.title} for c in found.chapters],
+            }
+        i = paths.index(doc_path)
+
+        def chapter(j: int) -> dict[str, str] | None:
+            if 0 <= j < len(paths):
+                return {"path": found.chapters[j].path, "title": found.chapters[j].title}
+            return None
+
+        return {
+            "id": found.id,
+            "title": found.title,
+            "position": i + 1,
+            "total": len(paths),
+            "prev": chapter(i - 1),
+            "next": chapter(i + 1),
+            "chapters": [{"path": c.path, "title": c.title} for c in found.chapters],
+        }
 
     # --- images a note references (ADR-048) --------------------------------------------------
 
@@ -1966,13 +2082,20 @@ class Engine:
             return by_name.get(target.rsplit("/", 1)[-1].lower())
 
         text = file.read_bytes().decode("utf-8-sig", errors="replace")
-        tree = note_tree(text, doc_path, resolve, self.config.reader.outline_depth)
+        tree = note_tree(
+            text,
+            doc_path,
+            resolve,
+            self.config.reader.outline_depth,
+            self.config.reader.callout_headings,
+        )
         return {
             "path": doc_path,
             **tree,
             "words_per_minute": self.config.reader.words_per_minute,
             "open_url": self.open_url(doc_path),
             "read": doc_path in self.practice.reads(),
+            "book": self._book_context(doc_path),  # a chapter of a book (ADR-053)
         }
 
     def passage(self, doc_path: str, first: int, last: int, text: str) -> Hit | None:
@@ -2079,7 +2202,19 @@ class Engine:
             "llm_model": self.config.llm.model,
             "final_k": self.config.retrieval.final_k,
             "llm_control": self.llm_control(llm),
+            "bilingual": self.config.retrieval.bilingual,  # the chat also searches in English
         }
+
+    def set_bilingual(self, on: bool) -> None:
+        """«Buscar también en inglés» in Ajustes (ADR-052): used from the next question, and kept
+        in `config/local.toml` so a restart and the terminal see it too."""
+        set_local_value(
+            self.config.root / "config" / "local.toml",
+            "retrieval",
+            "bilingual",
+            "true" if on else "false",
+        )
+        self.config = replace(self.config, retrieval=replace(self.config.retrieval, bilingual=on))
 
     # --- switching the LLM off and on (ADR-043) ---------------------------------------------------
 

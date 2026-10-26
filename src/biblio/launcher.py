@@ -23,30 +23,34 @@ if TYPE_CHECKING:
 
 SERVE_LLM_SCRIPT = Path("scripts") / "serve-llm.ps1"
 _ENV_LINE_RE = re.compile(r'^\s*\$env:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"\s*$')
-_LIBRARY_LINE_RE = re.compile(r"^library\s*=.*$", re.MULTILINE)
-_PATHS_HEADER_RE = re.compile(r"^\[paths\]\s*$", re.MULTILINE)
+# --- settings kept in config/local.toml -----------------------------------------------------------
 
 
-# --- library path ---------------------------------------------------------------------------------
+def set_local_value(local_toml: Path, section: str, key: str, value: str) -> None:
+    """Write `key = value` (a TOML literal) under `[section]` of `config/local.toml`, keeping
+    everything else in the file."""
+    line = f"{key} = {value}"
+    key_re = re.compile(rf"^{re.escape(key)}\s*=.*$", re.MULTILINE)
+    header_re = re.compile(rf"^\[{re.escape(section)}\]\s*$", re.MULTILINE)
+    text = local_toml.read_text(encoding="utf-8") if local_toml.is_file() else ""
+    header = header_re.search(text)
+    if header is not None:
+        section_end = text.find("\n[", header.end())
+        body = text[header.end() : None if section_end < 0 else section_end]
+        if key_re.search(body):
+            body = key_re.sub(lambda _: line, body, count=1)
+        else:
+            body = f"\n{line}{body}"
+        text = text[: header.end()] + body + ("" if section_end < 0 else text[section_end:])
+    else:
+        text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + f"[{section}]\n{line}\n"
+    local_toml.parent.mkdir(parents=True, exist_ok=True)
+    local_toml.write_text(text, encoding="utf-8", newline="\n")
 
 
 def set_local_library(local_toml: Path, library: Path) -> None:
     """Write `paths.library` into `config/local.toml`, keeping everything else in the file."""
-    value = f'library = "{library.resolve().as_posix()}"'
-    text = local_toml.read_text(encoding="utf-8") if local_toml.is_file() else ""
-    paths = _PATHS_HEADER_RE.search(text)
-    if paths is not None:
-        section_end = text.find("\n[", paths.end())
-        section = text[paths.end() : None if section_end < 0 else section_end]
-        if _LIBRARY_LINE_RE.search(section):
-            section = _LIBRARY_LINE_RE.sub(lambda _: value, section, count=1)
-        else:
-            section = f"\n{value}{section}"
-        text = text[: paths.end()] + section + ("" if section_end < 0 else text[section_end:])
-    else:
-        text = (text.rstrip("\n") + "\n\n" if text.strip() else "") + f"[paths]\n{value}\n"
-    local_toml.parent.mkdir(parents=True, exist_ok=True)
-    local_toml.write_text(text, encoding="utf-8", newline="\n")
+    set_local_value(local_toml, "paths", "library", f'"{library.resolve().as_posix()}"')
 
 
 def looks_like_library(path: Path) -> bool:

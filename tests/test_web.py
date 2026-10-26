@@ -885,3 +885,27 @@ def test_an_obsidian_image_embed_becomes_an_image() -> None:
     assert {"t": "image", "alt": "diagrama.png", "embed": "diagrama.png"} in nodes
     assert all(n.get("text") != "!" for n in nodes)  # the «!» of the embed is not shown
     assert any(n.get("t") == "wikilink" for n in nodes)  # a note embed stays a link
+
+
+# --- «Buscar también en inglés» in Ajustes (ADR-052) ---------------------------------------------
+
+
+def test_the_bilingual_search_is_switched_from_ajustes_and_kept(
+    server: tuple[str, int], engine: Engine
+) -> None:
+    local = engine.config.root / "config" / "local.toml"
+    local.write_text('[paths]\nlibrary = "C:/biblioteca"\n', encoding="utf-8")
+    status = json.loads(request(server, "GET", "/api/status")[2])
+    assert status["bilingual"] is False  # off by default
+
+    code, _, raw = request(server, "POST", "/api/settings/bilingual", {"on": True})
+    assert code == 200 and json.loads(raw) == {"bilingual": True}
+    assert engine.config.retrieval.bilingual  # used from the next question
+    assert json.loads(request(server, "GET", "/api/status")[2])["bilingual"] is True
+    saved = local.read_text(encoding="utf-8")
+    assert "[retrieval]\nbilingual = true" in saved and 'library = "C:/biblioteca"' in saved
+
+    request(server, "POST", "/api/settings/bilingual", {"on": False})
+    assert "bilingual = false" in local.read_text(encoding="utf-8")
+    assert local.read_text(encoding="utf-8").count("bilingual") == 1  # replaced, not added
+    assert request(server, "POST", "/api/settings/bilingual", {"on": "sí"})[0] == 400

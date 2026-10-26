@@ -353,31 +353,56 @@
   <!-- Mapas (ADR-022) ---------------------------------------------------------------------->
   <main id="page-biblioteca" class="page biblioteca" hidden>
     <div class="library-wrap">
-      <header class="library-head">
-        <h1>Biblioteca</h1>
-        <p id="library-count" class="muted"></p>
-        <label for="library-filter" class="sr-only">Buscar una nota</label>
-        <input id="library-filter" class="library-filter" type="search" maxlength="200" autocomplete="off"
-          placeholder="Busca una nota por título o carpeta…">
-      </header>
-      <section id="library-recent" class="library-recent" aria-labelledby="library-recent-title" hidden>
-        <h2 id="library-recent-title" class="eyebrow">Leídas hace poco</h2>
-        <ul id="library-recent-list" class="library-list"></ul>
+      <section id="library-continue" class="library-continue" aria-labelledby="library-continue-title" hidden>
+        <h2 id="library-continue-title" class="eyebrow">Seguir leyendo</h2>
+        <div id="library-continue-list" class="library-continue-list"></div>
       </section>
-      <div id="library-tree" class="library-tree" aria-label="Notas por carpeta"></div>
-      <p id="library-empty" class="muted" hidden>Ninguna nota coincide con tu búsqueda.</p>
+      <header class="library-head">
+        <div class="library-title">
+          <h1>Biblioteca</h1>
+          <p id="library-count" class="muted"></p>
+        </div>
+        <div class="segmented library-tabs" role="tablist" aria-label="Qué ver">
+          <button id="library-tab-books" type="button" role="tab" aria-selected="true" aria-controls="library-books-view">Libros</button>
+          <button id="library-tab-notes" type="button" role="tab" aria-selected="false" aria-controls="library-notes-view">Mis notas</button>
+        </div>
+        <label for="library-filter" class="sr-only">Buscar en la biblioteca</label>
+        <input id="library-filter" class="library-filter" type="search" maxlength="200" autocomplete="off"
+          placeholder="Busca un libro, un capítulo o una nota…">
+      </header>
+      <section id="library-books-view" class="library-books-view" role="tabpanel" aria-labelledby="library-tab-books">
+        <div id="library-areas" class="library-areas" role="group" aria-label="Áreas"></div>
+        <div id="library-books" class="library-books"></div>
+        <p id="library-books-empty" class="muted" hidden>Ningún libro coincide con tu búsqueda.</p>
+      </section>
+      <section id="library-book" class="library-book" aria-labelledby="library-book-title" hidden>
+        <button id="library-book-back" class="back-link" type="button">← Todos los libros</button>
+        <h2 id="library-book-title"></h2>
+        <p id="library-book-meta" class="muted"></p>
+        <a id="library-book-go" class="btn-primary library-book-go" href="#"></a>
+        <ol id="library-book-chapters" class="library-chapters"></ol>
+      </section>
+      <section id="library-notes-view" class="library-notes-view" role="tabpanel" aria-labelledby="library-tab-notes" hidden>
+        <div id="library-tree" class="library-tree" aria-label="Notas por carpeta"></div>
+        <p id="library-empty" class="muted" hidden>Ninguna nota coincide con tu búsqueda.</p>
+      </section>
     </div>
   </main>
 
   <main id="page-leer" class="page leer" hidden>
     <div id="reader-bar" class="reader-bar" role="toolbar" aria-label="Lectura">
       <button id="reader-back" class="reader-icon-btn" type="button" aria-label="Volver" title="Volver"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+      <a id="reader-bar-book" class="reader-bar-book" href="#" hidden></a>
+      <span id="reader-bar-book-sep" class="reader-bar-sep" aria-hidden="true" hidden>›</span>
       <span id="reader-bar-title" class="reader-bar-title"></span>
+      <span id="reader-bar-pos" class="reader-bar-pos" hidden></span>
       <span id="reader-bar-section" class="reader-bar-section"></span>
       <span id="reader-bar-left" class="reader-bar-left"></span>
       <button id="reader-toc-toggle" class="reader-icon-btn" type="button" aria-controls="reader-nav" aria-expanded="true" aria-label="Índice de la nota" title="Índice de la nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
       <button id="reader-find-open" class="reader-icon-btn" type="button" aria-label="Buscar en esta nota" title="Buscar en esta nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
       <a id="reader-open" class="reader-icon-btn" href="#" aria-label="Abrir en Obsidian" title="Abrir en Obsidian" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M19 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/></svg></a>
+      <button id="reader-prev" class="btn reader-next" type="button" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg><span>Anterior</span></button>
+      <button id="reader-next" class="btn reader-next" type="button" hidden><span>Siguiente</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
       <button id="reader-read" class="btn reader-read" type="button" aria-pressed="false" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg><span id="reader-read-label">Marcar como leída</span></button>
       <div class="reader-progress" aria-hidden="true"><div id="reader-progress-fill"></div></div>
     </div>
@@ -397,6 +422,11 @@
         </form>
         <div id="reader-find-results" class="reader-find-results" hidden></div>
         <ol id="reader-toc" class="reader-toc"></ol>
+        <p id="reader-callouts" class="small muted reader-callouts" hidden></p>
+        <section id="reader-book-nav" class="reader-book-nav" aria-labelledby="reader-book-nav-title" hidden>
+          <span id="reader-book-nav-title" class="eyebrow">El libro</span>
+          <ol id="reader-book-list" class="reader-book-list"></ol>
+        </section>
       </nav>
       <article class="reader-main" aria-labelledby="reader-title">
         <header class="reader-head">
@@ -404,6 +434,10 @@
           <h1 id="reader-title"></h1>
         </header>
         <div id="reader-body" class="reader-body md"></div>
+        <a id="reader-next-card" class="reader-next-card" href="#" hidden>
+          <span class="small muted">Al terminar este capítulo · siguiente</span>
+          <strong id="reader-next-title"></strong>
+        </a>
       </article>
       <aside id="reader-panel" class="reader-panel empty" aria-label="Sobre tu selección" hidden>
         <div class="row-between">
@@ -742,6 +776,8 @@
         <label title="Como el sistema"><input type="radio" name="theme" value="system" aria-label="Tema del sistema"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg>Sistema</span></label>
         <label title="Oscuro"><input type="radio" name="theme" value="dark" aria-label="Tema oscuro"><span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"></path></svg>Oscuro</span></label>
       </div>
+      <label class="code-contrast-setting"><input id="code-contrast" type="checkbox"> <span>Alto contraste para bloques de código</span></label>
+      <p class="small muted">Fondo negro y texto claro; resaltado de sintaxis para Python y SQL.</p>
       <h4 id="settings-lang" class="settings-sub">Idioma</h4>
       <div class="segmented settings-lang" role="radiogroup" aria-labelledby="settings-lang">
         <label lang="es"><input type="radio" name="lang" value="es"><span>Español</span></label>
@@ -786,6 +822,12 @@
         </button>
         <span class="small muted">Usa la app desde un teléfono o una tableta de tu red.</span>
       </div>
+    </section>
+    <section id="settings-search" class="settings-group" aria-labelledby="settings-search-title" hidden>
+      <h3 id="settings-search-title">Búsqueda</h3>
+      <label class="code-contrast-setting"><input id="set-bilingual" type="checkbox"> <span>Buscar también en inglés</span></label>
+      <p class="small muted">Al conversar, el modelo traduce tu pregunta al inglés y busca también así, para encontrar los libros en inglés. Añade unos 1.5 segundos a cada respuesta.</p>
+      <p id="bilingual-result" class="small" role="status" hidden></p>
     </section>
     <section id="settings-llm" class="settings-group" aria-labelledby="settings-llm-title" hidden>
       <h3 id="settings-llm-title">Modelo de lenguaje</h3>

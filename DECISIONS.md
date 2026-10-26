@@ -56,6 +56,8 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 049 | The reader's layout: a slim reading bar, the note's index beside it, the selection panel waiting | Accepted |
 | 050 | The reader's index shows how each section is remembered; practice placed by its heading's title | Accepted |
 | 051 | Maps and diagrams built from what explains the topic, not from what mentions it; measured stage by stage | Stages 1–3 implemented and measured for maps; diagrams pending |
+| 052 | The chat also searches the question in English; the question's own top 6 keep their places | Proposed (off until measured on book questions) |
+| 053 | Books on a shelf, chapters read in their book, and «Seguir leyendo» | Accepted |
 
 ---
 
@@ -954,4 +956,47 @@ How a fragment is judged, measured on the 176 labelled sections:
 Live, with the real models on the user's library and temporary stores: «burnout» was flagged (1 general of 10 read), «API» was not.
 
 **Consequences (stage 3).** (+) A map no longer passes off a product's business case as an explanation of the topic: it says so and the topic goes to Guías. (+) Almost free: the scores exist already; the LLM is asked only about fragments whose heading names the topic and whose score is low (~0.3 s each). (−) Topics explained through one tool (webhook through n8n) are not flagged. (−) Only with the reranker on (`maps.rerank`). **Diagrams** keep the bare-topic search: process topics («despliegue de un modelo») need labels of their own before the selection is changed for them.
+
+## ADR-052 — The chat also searches the question in English; the question's own top 6 keep their places
+
+**Date:** 2026-10-26 · **State:** Proposed. Implemented behind `retrieval.bilingual = false`; switched on only if the book questions show the gain.
+
+**Context.** The library grew to 9,222 notes and 261,264 fragments (×3.5), 71 % of the notes in English (book chapters; 1,082 over 10,000 words). On the user's eval set (64 questions, answers in their Spanish notes) plain `hybrid`, the chat's mode while the LLM holds the GPU, kept recall@8 (0.663 → 0.667 with 8,758 notes indexed; the two questions that left the top 8 were displaced by other relevant Spanish notes, not by books). But four probes whose answer lives only in an English chapter, asked in Spanish, ranked the chapter 5, 5, 10 and 3 (1, 1, 2, 1 asked in English), with 2–5 English fragments of the 8 the chat reads: BM25 does not cross languages and the multilingual reranker is skipped while the LLM runs (ADR-014). The books rarely reach the chat.
+
+**Decision (proposed).** In the chat (`Engine.ask`), the first stage is wrapped by `retrieve.bilingual.BilingualRetriever`: the LLM translates the question to English (`generate.translate`, one line, ~1 s; a reply far longer than the question is ignored; an English question or one the translation leaves unchanged is searched once), the English query is searched too, and `reserve_and_fill` keeps the question's own best `retrieval.bilingual_head` (6) hits in place, the English search filling the rest of the top k. The answer's meta reports the English query. `biblio eval --bilingual` measures it.
+
+**Measured** (plain `hybrid`, full index, each question translated once and reused across variants; `eval/results/runs.jsonl`). recall@8 of the sections the chat reads:
+
+| | book questions (18) | user's set (64) |
+|---|---|---|
+| no translation | 0.722 | 0.667 |
+| translated, own top 6 kept | **1.000** | **0.651** |
+| own top 5 | 1.000 | 0.635 |
+| own top 4 | 1.000 | 0.628 |
+| equal-weight fusion (RRF) | 1.000 | 0.604 |
+
+With the top 6 kept, the five book questions that failed enter the top 8 (book-q01, q03, q04, q06, q18) and the user's set loses one (q037, lookup); equal-weight fusion has the best MRR on the books (0.743) but costs the user's notes 6 points (lookup 0.788 → 0.697). The book questions (`eval/questions_books.jsonl`, 18) were written by Claude at the user's request, against the retrieval-eval rule; each says so in `notes`. They were written in Claude's own words from 30 candidate sections, dropping those the user's Spanish notes likely also answer (sorting algorithms, regression, clustering…), since an alternative cannot be added without the user's judgement: the set favours topics only the books hold. A first run of the kept-top variants did not renumber the ranks after `reserve_and_fill` (the metrics read `Hit.rank`, so English hits kept their rank in the other search); the numbers above are from the corrected code (`books-fixed-*`, `user-fixed-*`), with a test for it.
+
+**To accept.** The gain on the books (+5 of 18) is clear; the user's set loses one question (noise by the protocol, though lookup moves 3 points). Then `retrieval.bilingual = true`. Latency: +~1.5 s per question (translation + a second search) on top of 1.2 s.
+
+**Switch.** Ajustes › «Búsqueda» › «Buscar también en inglés» (this PC only, like the LLM switch): `POST /api/settings/bilingual` sets it in the running app from the next question and keeps it in `config/local.toml` (`[retrieval] bilingual`), so a restart and the terminal see it; `/api/status` reports it.
+
+**Consequences (expected).** (+) English chapters reach the chat from Spanish questions. (−) One LLM call per search; in a planned conversation (ADR-038) each of the plan's searches is translated too. (−) Only for the chat: the search page uses the reranker when the GPU is free, which is multilingual.
+
+## ADR-053 — Books on a shelf, chapters read in their book, and «Seguir leyendo»
+
+**Date:** 2026-10-26 · **State:** Accepted
+
+**Context.** The library grew to 9,222 notes: 316 books (6,281 chapters, 306 of them in English) and 2,723 of the user's own notes. Biblioteca was one folder tree (ADR-033) in which a book was a folder of numbered files, and the reader (ADR-049) did not know a chapter belonged to a book: no previous or next chapter, no position, and books' boxes («NOTE», «TIP») filled the chapter's index. Three designs were drawn on a canvas with the user's books; the user chose the shelf (A), with the reader in its book and «Seguir leyendo» from the study-centred one (C).
+
+**Decision.**
+- **What a book is** (`biblio.books`): a folder inside a folder named `library.books_folder` («Books»), `Area/Books/<Book>/…`; its chapters are its notes in the natural order of their file names; a note named like the folder is the cover (not a chapter); a note directly in `Books/` is a book of one chapter. The title is the folder's name as the user wrote it, since some covers' headings (12 of 218) are «A», «FPO» or the like; a slug folder takes its cover's title, or a readable form of itself. A book is in English when its first chapter's first fragment is (`maps.build.in_english`), kept per book.
+- **Biblioteca**: «Seguir leyendo» on top; tabs «Libros» and «Mis notas»; on «Libros», areas as filters and one card per book (chapters, language, read, progress: books in progress first); a search finds books by title, area or the title of any chapter; a book's page lists its chapters with their read marks and offers «Empezar», «Seguir» (the first chapter not read, at the place it was left) or «Leer de nuevo». «Mis notas» is the folder tree of ADR-033 without the books. `GET /api/books`, `GET /api/books/one?id=`; `/api/notes` says which book a note belongs to.
+- **The reader in a book**: the bar shows the book (a link to its page), the chapter's position («13 de 17»), and «Anterior» / «Siguiente»; the index adds «El libro» with every chapter, the current one marked; a card at the end leads to the next chapter. `note_view` carries `book` (position, total, previous, next, chapters).
+- **Books' boxes**: headings named in `reader.callout_headings` (note, tip, warning, caution, important, info, hint) leave the index and are counted («5 recuadros del libro … quedan dentro de sus secciones»); the text keeps them.
+- **«Seguir leyendo»**: the reader saves, with each recent note, the section on screen, the share read and the minutes left, when the section or a 5 % step changes; Biblioteca shows up to three notes left between 1 % and 95 %, each opening at its section. Kept in the browser like the recent notes (ADR-033): a phone paired over LAN keeps its own.
+
+**Checked** in Edge on the user's library: 316 books in 10 areas, «AI Engineering» 24, «object detection» found by chapter titles; the Applied ML book's page (17 chapters, «Empezar: Preface»); chapter 12 in the reader («13 de 17», previous and next, 17 chapters listed, 5 boxes out of the index); «Seguir leyendo» after scrolling («Te quedaste en «Mask R-CNN» · quedan ~27 min»); no sideways scroll at 390 px.
+
+**Consequences.** (+) Books are browsed and read as books; the user's notes are no longer buried among 6,281 chapters. (+) No new store: read marks are ADR-028's, the place left is the browser's. (−) «Leídas hace poco» is replaced by «Seguir leyendo», which shows only notes left part-way. (−) The place left is per browser. (−) A book outside a «Books» folder is shown as notes.
 
