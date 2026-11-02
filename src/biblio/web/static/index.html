@@ -70,12 +70,14 @@
 
     <section class="chat" aria-label="Conversación">
       <div id="conversation-bar" class="conversation-bar" hidden>
-        <h2 id="conversation-title"></h2>
-        <p id="conversation-frame" class="conversation-frame" hidden>
-          <span class="muted">Tema:</span> <span id="conversation-frame-text"></span>
-          <button id="conversation-frame-edit" class="link-button" type="button"
-            title="El tema guía cómo entiendo tus preguntas en esta conversación">Editar</button>
-        </p>
+        <div id="conversation-line" class="conversation-line">
+          <h2 id="conversation-title"></h2>
+          <p id="conversation-frame" class="conversation-frame" hidden>
+            <span class="muted">Tema:</span> <span id="conversation-frame-text"></span>
+            <button id="conversation-frame-edit" class="link-button" type="button"
+              title="El tema guía cómo entiendo tus preguntas en esta conversación">Editar</button>
+          </p>
+        </div>
         <form id="conversation-frame-form" class="row" hidden>
           <label for="conversation-frame-input" class="sr-only">Tema de la conversación</label>
           <input id="conversation-frame-input" type="text" maxlength="160" required>
@@ -88,10 +90,17 @@
           <button class="btn-primary" type="submit">Guardar</button>
           <button id="conversation-rename-cancel" class="btn-ghost" type="button">Cancelar</button>
         </form>
-        <div id="conversation-actions" class="row">
-          <button id="conversation-rename-start" class="btn-ghost" type="button">Renombrar</button>
-          <button id="conversation-export" class="btn-ghost" type="button">Exportar</button>
-          <button id="conversation-delete" class="btn-ghost danger" type="button">Borrar</button>
+        <div id="conversation-actions" class="conversation-menu">
+          <button id="conversation-menu-button" class="btn-icon" type="button" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="conversation-menu"
+            aria-label="Más acciones: renombrar, exportar y borrar" title="Renombrar · Exportar · Borrar">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"></circle><circle cx="12" cy="12" r="1.8"></circle><circle cx="19" cy="12" r="1.8"></circle></svg>
+          </button>
+          <div id="conversation-menu" class="conversation-menu-list" role="menu" hidden>
+            <button id="conversation-rename-start" role="menuitem" type="button">Renombrar</button>
+            <button id="conversation-export" role="menuitem" type="button">Exportar</button>
+            <button id="conversation-delete" class="danger" role="menuitem" type="button">Borrar</button>
+          </div>
         </div>
       </div>
       <p id="conversation-status" class="small muted conversation-status" role="status"></p>
@@ -106,20 +115,27 @@
       <div class="composer-wrap">
         <form id="composer" class="composer" autocomplete="off">
           <label for="message" class="sr-only">Mensaje</label>
-          <textarea id="message" rows="2" maxlength="2000"
+          <textarea id="message" rows="1" maxlength="2000"
             placeholder="Pregunta algo o escribe un tema para ubicarlo en tus notas…"></textarea>
           <div class="composer-row">
             <div class="segmented" role="radiogroup" aria-label="Qué hacer">
               <label><input type="radio" name="mode" value="explain" checked><span>Explicar</span></label>
               <label><input type="radio" name="mode" value="find"><span>Solo ubicar</span></label>
             </div>
-            <div id="level-choice" class="segmented level-choice" role="radiogroup" aria-label="Nivel de la explicación">
-              <label title="Lo más sencillo, con un ejemplo cotidiano"><input type="radio" name="level" value="beginner"><span>Principiante</span></label>
-              <label title="Los términos de tus guías, para profundizar"><input type="radio" name="level" value="intermediate" checked><span>Intermedio</span></label>
-              <label title="Terminología técnica y relaciones entre temas, como en una maestría"><input type="radio" name="level" value="advanced"><span>Avanzado</span></label>
-            </div>
+            <label id="level-choice" class="composer-select" title="Intermedio usa los términos de tus guías; Principiante es lo más sencillo, con un ejemplo cotidiano; Avanzado usa terminología técnica y relaciones entre temas.">
+              <span>Nivel</span>
+              <select id="set-level" aria-label="Nivel de la explicación">
+                <option value="beginner">Principiante</option>
+                <option value="intermediate" selected>Intermedio</option>
+                <option value="advanced">Avanzado</option>
+              </select>
+            </label>
+            <label id="reason-choice" class="reason-toggle" title="Razona con tus notas y, solo en temas que tus notas explican, añade conocimiento general marcado. Más lento: usa un modelo más grande."><input type="checkbox" id="set-reason"><span class="reason-switch" aria-hidden="true"></span><span>Razonar</span></label>
             <div class="composer-actions">
-              <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings">Opciones de respuesta</button>
+              <button id="settings-toggle" class="btn-ghost" type="button" aria-expanded="false" aria-controls="settings" title="Opciones de respuesta">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h8M18 6h2M4 12h2M12 12h8M4 18h10M20 18h0"></path><circle cx="15" cy="6" r="2"></circle><circle cx="9" cy="12" r="2"></circle><circle cx="17" cy="18" r="2"></circle></svg>
+                <span>Opciones</span>
+              </button>
               <button id="send" class="btn-send" type="submit" aria-label="Enviar">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="M13 6l6 6-6 6"></path></svg>
               </button>
@@ -148,16 +164,22 @@
                 <option value="map-reduce">Por guía (experimental)</option>
               </select>
             </label>
+            <p class="settings-help">Cada mensaje se entiende dentro del tema de la conversación y se responde solo con tus notas.</p>
             <p class="settings-help">Atajos al inicio del mensaje: <code>/ubicar</code> · <code>/explicar</code> · <code>/en Math</code> (cualquier carpeta). «Por guía» cita con menos fidelidad: revisa las fuentes.</p>
           </div>
-          <p class="composer-note">Cada mensaje se entiende dentro del tema de la conversación y se responde solo con tus notas.</p>
         </form>
       </div>
     </section>
 
     <aside id="source-panel" class="source-panel" aria-label="Fuente seleccionada">
       <p id="source-empty" class="muted">Pulsa un número de cita o un resultado para leer aquí el fragmento original.</p>
+      <div id="source-list-view" class="source-list-view" hidden>
+        <h2 id="source-list-title" class="eyebrow"></h2>
+        <ul id="source-cards" class="source-cards"></ul>
+        <p class="small muted source-list-hint">Pulsa una fuente o un número de cita para leer aquí el fragmento original.</p>
+      </div>
       <div id="source-view" hidden>
+        <button id="source-back" class="link-button source-back" type="button">← Todas las fuentes</button>
         <div class="source-head">
           <span id="source-count" class="eyebrow"></span>
           <div class="source-nav">
@@ -357,6 +379,7 @@
         <h2 id="library-continue-title" class="eyebrow">Seguir leyendo</h2>
         <div id="library-continue-list" class="library-continue-list"></div>
       </section>
+      <div class="library-content">
       <header class="library-head">
         <div class="library-title">
           <h1>Biblioteca</h1>
@@ -365,27 +388,120 @@
         <div class="segmented library-tabs" role="tablist" aria-label="Qué ver">
           <button id="library-tab-books" type="button" role="tab" aria-selected="true" aria-controls="library-books-view">Libros</button>
           <button id="library-tab-notes" type="button" role="tab" aria-selected="false" aria-controls="library-notes-view">Mis notas</button>
+          <button id="library-tab-summaries" type="button" role="tab" aria-selected="false" aria-controls="library-summaries-view">Resúmenes</button>
         </div>
+        <button id="library-continue-toggle" class="btn-ghost library-continue-toggle" type="button" aria-controls="library-continue" aria-expanded="false" aria-label="Mostrar panel Seguir leyendo" hidden>Mostrar «Seguir leyendo»</button>
         <label for="library-filter" class="sr-only">Buscar en la biblioteca</label>
         <input id="library-filter" class="library-filter" type="search" maxlength="200" autocomplete="off"
           placeholder="Busca un libro, un capítulo o una nota…">
       </header>
       <section id="library-books-view" class="library-books-view" role="tabpanel" aria-labelledby="library-tab-books">
-        <div id="library-areas" class="library-areas" role="group" aria-label="Áreas"></div>
+        <div class="library-toolbar">
+          <label class="library-select">Área <select id="library-area"></select></label>
+          <div id="library-status" class="library-status" role="group" aria-label="Estado"></div>
+          <span class="library-toolbar-gap"></span>
+          <label class="library-select">Orden
+            <select id="library-sort">
+              <option value="recent">Abiertos hace poco</option>
+              <option value="title">Título A–Z</option>
+              <option value="chapters">Más capítulos</option>
+              <option value="area">Por área</option>
+            </select>
+          </label>
+          <div class="library-view" role="group" aria-label="Vista">
+            <button id="library-view-grid" type="button" aria-pressed="true" aria-label="Cuadrícula" title="Cuadrícula">
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg>
+            </button>
+            <button id="library-view-list" type="button" aria-pressed="false" aria-label="Lista" title="Lista">
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg>
+            </button>
+          </div>
+        </div>
+        <p id="library-shown" class="small muted library-shown"></p>
         <div id="library-books" class="library-books"></div>
+        <div id="library-table-wrap" class="library-table-wrap" hidden>
+          <table class="library-table">
+            <thead>
+              <tr>
+                <th scope="col">Título</th>
+                <th scope="col">Área</th>
+                <th scope="col" class="num">Capítulos</th>
+                <th scope="col">Leído</th>
+                <th scope="col" id="library-col-hit" hidden>Coincide en</th>
+              </tr>
+            </thead>
+            <tbody id="library-table-body"></tbody>
+          </table>
+        </div>
         <p id="library-books-empty" class="muted" hidden>Ningún libro coincide con tu búsqueda.</p>
       </section>
       <section id="library-book" class="library-book" aria-labelledby="library-book-title" hidden>
         <button id="library-book-back" class="back-link" type="button">← Todos los libros</button>
         <h2 id="library-book-title"></h2>
         <p id="library-book-meta" class="muted"></p>
-        <a id="library-book-go" class="btn-primary library-book-go" href="#"></a>
+        <div class="row">
+          <a id="library-book-go" class="btn-primary library-book-go" href="#"></a>
+          <a id="library-book-summary" class="btn-soft" href="#" hidden>Ver resumen del libro</a>
+        </div>
         <ol id="library-book-chapters" class="library-chapters"></ol>
       </section>
       <section id="library-notes-view" class="library-notes-view" role="tabpanel" aria-labelledby="library-tab-notes" hidden>
-        <div id="library-tree" class="library-tree" aria-label="Notas por carpeta"></div>
+        <section id="library-edited" class="library-edited" aria-labelledby="library-edited-title" hidden>
+          <h2 id="library-edited-title" class="eyebrow">Editadas hace poco</h2>
+          <div id="library-edited-list" class="library-edited-list"></div>
+        </section>
+        <div class="library-toolbar">
+          <label class="library-select">Área <select id="library-notes-area"></select></label>
+          <div id="library-notes-status" class="library-status" role="group" aria-label="Estado"></div>
+          <span class="library-toolbar-gap"></span>
+          <label class="library-select">Orden
+            <select id="library-notes-sort">
+              <option value="size">Más notas</option>
+              <option value="edited">Editadas hace poco</option>
+              <option value="title">A–Z</option>
+            </select>
+          </label>
+          <div class="library-view" role="group" aria-label="Vista">
+            <button id="library-notes-view-grid" type="button" aria-pressed="true" aria-label="Temas" title="Temas">
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="6" height="6"/><rect x="14" y="4" width="6" height="6"/><rect x="4" y="14" width="6" height="6"/><rect x="14" y="14" width="6" height="6"/></svg>
+            </button>
+            <button id="library-notes-view-list" type="button" aria-pressed="false" aria-label="Carpetas" title="Carpetas">
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+            </button>
+          </div>
+        </div>
+        <p id="library-notes-shown" class="small muted library-shown"></p>
+        <div id="library-topics" class="library-topics"></div>
+        <div id="library-tree" class="library-groups" aria-label="Notas por carpeta"></div>
         <p id="library-empty" class="muted" hidden>Ninguna nota coincide con tu búsqueda.</p>
       </section>
+      <section id="library-summaries-view" class="library-summaries-view" role="tabpanel" aria-labelledby="library-tab-summaries" hidden>
+        <div id="library-summaries" class="library-summaries"></div>
+        <p id="library-summaries-empty" class="muted" hidden>Todavía no hay resúmenes. Pídelos desde el lector con el botón «Resumen», en cualquier nota o capítulo.</p>
+      </section>
+      <section id="library-summary" class="library-summary" aria-labelledby="library-summary-title" hidden>
+        <button id="library-summary-back" class="back-link" type="button">← Todos los resúmenes</button>
+        <h2 id="library-summary-title"></h2>
+        <p id="library-summary-meta" class="muted"></p>
+        <div id="library-summary-actions" class="row"></div>
+        <div id="library-summary-body" class="library-summary-body"></div>
+      </section>
+      <section id="library-topic" class="library-topic" aria-labelledby="library-topic-title" hidden>
+        <button id="library-topic-back" class="back-link" type="button">← Todos los temas</button>
+        <nav id="library-topic-crumbs" class="library-crumbs" aria-label="Ruta"></nav>
+        <div class="library-topic-head">
+          <div>
+            <h2 id="library-topic-title"></h2>
+            <p id="library-topic-meta" class="muted"></p>
+          </div>
+          <div class="library-topic-actions">
+            <a id="library-topic-plan" class="btn-primary" href="#">Plan de estudio de este tema</a>
+            <a id="library-topic-practice" class="btn-soft" href="#">Practicar este tema</a>
+          </div>
+        </div>
+        <div id="library-topic-groups" class="library-groups"></div>
+      </section>
+      </div>
     </div>
   </main>
 
@@ -399,6 +515,7 @@
       <span id="reader-bar-section" class="reader-bar-section"></span>
       <span id="reader-bar-left" class="reader-bar-left"></span>
       <button id="reader-toc-toggle" class="reader-icon-btn" type="button" aria-controls="reader-nav" aria-expanded="true" aria-label="Índice de la nota" title="Índice de la nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></button>
+      <button id="reader-summary" class="reader-icon-btn" type="button" aria-label="Resumen de esta nota" title="Resumen de esta nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16M4 10h16M4 15h10M4 20h7"/></svg></button>
       <button id="reader-find-open" class="reader-icon-btn" type="button" aria-label="Buscar en esta nota" title="Buscar en esta nota"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg></button>
       <a id="reader-open" class="reader-icon-btn" href="#" aria-label="Abrir en Obsidian" title="Abrir en Obsidian" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"/><path d="M10 14L21 3"/><path d="M19 14v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6"/></svg></a>
       <button id="reader-prev" class="btn reader-next" type="button" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M11 18l-6-6 6-6"/></svg><span>Anterior</span></button>

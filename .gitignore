@@ -17,6 +17,7 @@ console-output.txt
 eval/*.jsonl
 !eval/questions.example.jsonl
 !eval/feynman.example.jsonl
+!eval/reasoning.example.jsonl
 eval/results/*
 !eval/results/.gitkeep
 eval/review/

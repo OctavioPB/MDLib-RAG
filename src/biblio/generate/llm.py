@@ -53,6 +53,8 @@ class OpenAICompatibleClient:
             "max_tokens": max_tokens,
             "stream": True,
         }
+        if self._config.reasoning_effort:  # "none" turns a thinking model's thinking off
+            body["reasoning_effort"] = self._config.reasoning_effort
         try:
             with self._http.stream("POST", "/chat/completions", json=body) as response:
                 if response.status_code != 200:

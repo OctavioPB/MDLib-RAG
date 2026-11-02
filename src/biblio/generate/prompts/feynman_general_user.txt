@@ -1,0 +1,9 @@
+Concepto: {concept}
+
+Afirmaciones del estudiante que sus notas no tratan:
+{claims}
+
+Juzga cada una por su número.
+
+Formato:
+{{"afirmaciones": [{{"numero": 1, "veredicto": "correcta", "razon": "una frase"}}]}}

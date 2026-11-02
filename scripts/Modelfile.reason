@@ -1,0 +1,7 @@
+# The «Razonar» model (ADR-057): Gemma 4 26B-A4B QAT with its weights memory-mapped.
+# Ollama 0.40 otherwise copies the whole model into private memory: 18 GB committed at load and
+# 27 GB under a 6k-token prompt, with ~9 GB of swap during `ask-eval`; mapped, 8 GB.
+# Create it (no network) after `ollama pull gemma4:26b-a4b-it-qat`:
+#   ollama create biblio-reason -f scripts/Modelfile.reason
+FROM gemma4:26b-a4b-it-qat
+PARAMETER use_mmap true

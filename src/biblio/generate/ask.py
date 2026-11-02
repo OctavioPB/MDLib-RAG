@@ -13,6 +13,7 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from importlib import resources
+from typing import TYPE_CHECKING
 
 from biblio.config import TUTOR_LEVELS, Config
 from biblio.generate.citations import Validation, is_abstention, validate
@@ -21,6 +22,9 @@ from biblio.generate.llm import LLMClient, Message
 from biblio.generate.thread import Plan, PriorTurn, make_plan, render_history, search_plan
 from biblio.ingest.tokens import TokenCounter
 from biblio.retrieve.types import Hit, Retriever
+
+if TYPE_CHECKING:
+    from biblio.generate.reason import ReasonChecks
 
 _PROMPTS = resources.files("biblio.generate") / "prompts"
 DIRECT = "direct"
@@ -46,6 +50,7 @@ class Answer:
     retriever: str
     strategy: str = DIRECT
     notes: tuple[MapNote, ...] = ()
+    reason: ReasonChecks | None = None  # the «Razonar» mode's checks (ADR-056)
 
 
 @dataclass

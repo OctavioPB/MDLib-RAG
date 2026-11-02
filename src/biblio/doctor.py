@@ -12,13 +12,13 @@ import sqlite3
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
 import psutil
 
-from biblio.config import Config
+from biblio.config import Config, reason_llm
 from biblio.models import local_model_path, model_specs, model_status
 from biblio.offline import is_loopback_url, missing_offline_env
 
@@ -143,7 +143,11 @@ def run_checks(config: Config, hardware: HardwareInfo, load_models: bool = False
     checks += _model_checks(config, load_models)
     checks.append(_index_device_check(config))
     checks.append(_reranker_device_check(config))
-    checks.append(_llm_server_check(config))
+    checks.append(server := _llm_server_check(config))
+    if server.status is Status.OK:
+        checks.append(_llm_context_check(config, load_models))
+    if config.reason.model:  # the «Razonar» mode's own model (ADR-057), on the same server
+        checks.append(_llm_server_check(replace(config, llm=reason_llm(config))))
     checks += _config_checks(config)
     return checks
 
@@ -402,6 +406,58 @@ def _llm_server_check(config: Config) -> Check:
             f"!= pinned {config.llm.model_digest[:12]}",
         )
     return Check("models", name, Status.OK, f"served, digest {config.llm.model_digest[:12]}")
+
+
+def llm_served_context(config: Config, load: bool = False) -> int | None:
+    """The context Ollama gave the loaded model (`/api/ps`), or None when the model is not loaded
+    or the server does not say. Ollama sizes it from the server's environment when it loads the
+    model, so only a loaded model tells; `load` loads it with an empty prompt and unloads it."""
+    import httpx
+
+    base = config.llm.base_url.rstrip("/").removesuffix("/v1")
+    model = config.llm.model
+    with httpx.Client(timeout=config.llm.request_timeout_s, trust_env=False) as http:
+
+        def loaded() -> int | None:
+            for m in http.get(f"{base}/api/ps").json().get("models", []):
+                if m.get("name") == model and isinstance(m.get("context_length"), int):
+                    return int(m["context_length"])
+            return None
+
+        context = loaded()
+        if context is None and load:
+            http.post(f"{base}/api/generate", json={"model": model, "keep_alive": "30s"})
+            context = loaded()
+            http.post(f"{base}/api/generate", json={"model": model, "keep_alive": 0})
+    return context
+
+
+def _llm_context_check(config: Config, load: bool) -> Check:
+    """An Ollama started without scripts/serve-llm.ps1 (the tray app, a plain `ollama serve`) gives
+    the model its default context, which truncates the tutor's prompts (ADR-015)."""
+    import httpx
+
+    needed = config.llm.context_budget_tokens + config.llm.max_answer_tokens
+    try:
+        context = llm_served_context(config, load)
+    except (httpx.HTTPError, ValueError):
+        return Check("models", "llm context", Status.WARN, "could not ask the server")
+    if context is None:
+        return Check(
+            "models",
+            "llm context",
+            Status.OK,
+            f"model not loaded; needs ≥ {needed} tokens (`doctor --load-models` checks it)",
+        )
+    if context < needed:
+        return Check(
+            "models",
+            "llm context",
+            Status.FAIL,
+            f"{context} tokens < {needed} needed: the server was not started with "
+            "scripts/serve-llm.ps1; close it and start it with that script",
+        )
+    return Check("models", "llm context", Status.OK, f"{context} tokens (needs ≥ {needed})")
 
 
 def _config_checks(config: Config) -> list[Check]:

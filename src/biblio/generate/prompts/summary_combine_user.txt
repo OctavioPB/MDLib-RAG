@@ -1,0 +1,5 @@
+Título: {title}
+
+{parts}
+
+Escribe el resumen.

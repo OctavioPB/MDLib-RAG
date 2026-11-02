@@ -1,0 +1,7 @@
+Libro: {title}
+
+Capítulos:
+
+{chapters}
+
+Escribe la visión general.

@@ -14,12 +14,13 @@ import json
 import re
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from biblio.eval.questions import Question
-from biblio.generate.ask import Answer, Tutor
+from biblio.generate.ask import Answer
 
 RESULTS_FILE = "answers.jsonl"
 # "- fidelidad: 3 de 4", also "- **fidelidad: 3 de 4** — nota" (bold and trailing text tolerated).
@@ -29,14 +30,24 @@ _GRADE_RE = re.compile(
 # Grades belong to "### Calificación <id>" or, in a hand-made sheet, to "## <id> (type) — …".
 _SECTION_RE = re.compile(r"^(?:###\s+Calificación\s+(\S+)|##\s+(\S+)\s+\()")
 _EXCERPT_CHARS = 400
+# What a reasoning-set answer must do (ADR-056), shown above it on the review sheet.
+_BEHAVIOR_TEXT = {
+    "notes": "responder desde tus notas, con el razonamiento citado.",
+    "general": "responder y marcar como conocimiento general lo que no está en tus notas.",
+    "abstain": "abstenerse: el tema no está en tu biblioteca.",
+}
 
 
 def review_paths(review_dir: Path, tag: str) -> tuple[Path, Path]:
     return review_dir / f"answers-{tag}.json", review_dir / f"answers-{tag}.md"
 
 
+class Answerer(Protocol):  # the tutor, or the «Razonar» mode (ADR-056)
+    def ask(self, question: str) -> Answer: ...
+
+
 def run_answers(
-    tutor: Tutor,
+    tutor: Answerer,
     questions: Sequence[Question],
     on_question: Callable[[Question, Answer, float], None] | None = None,
 ) -> list[dict[str, Any]]:
@@ -50,6 +61,8 @@ def run_answers(
             {
                 "id": q.id,
                 "type": q.type,
+                "behavior": q.behavior,
+                "abstain": q.should_abstain,
                 "question": q.question,
                 "expected": [{"path": e.path, "heading": e.heading} for e in q.expected],
                 "key_points": list(q.key_points),
@@ -73,6 +86,8 @@ def run_answers(
                 "seconds": round(seconds, 2),
             }
         )
+        if answer.reason is not None:
+            records[-1]["reason"] = asdict(answer.reason)
         if on_question:
             on_question(q, answer, seconds)
     return records
@@ -103,6 +118,17 @@ def review_markdown(records: Sequence[dict[str, Any]], tag: str) -> str:
             f"*{r['strategy']} · {len(r['fragments'])} fragmentos · {r['seconds']} s · {status}*",
             "",
         ]
+        if r.get("behavior"):
+            lines += [f"Debe: {_BEHAVIOR_TEXT[r['behavior']]}", ""]
+        if reason := r.get("reason"):
+            gate = reason["gate"]
+            opened = f"abierto por «{gate['subject']}»" if gate["open"] else "cerrado"
+            lines += [
+                f"Filtro por tema: {opened} ({', '.join(gate['subjects']) or 'sin campos'}) · "
+                f"citas textuales en el razonamiento: {reason['quotes_found']} de "
+                f"{reason['quotes']} encontradas en su fragmento",
+                "",
+            ]
         if r["expected"]:
             lines += [
                 "Esperado: " + "; ".join(f"`{e['path']}` › {e['heading']}" for e in r["expected"]),
@@ -147,7 +173,7 @@ def review_markdown(records: Sequence[dict[str, Any]], tag: str) -> str:
                 lines += [f"**{n['guide']}**", "", n["text"], ""]
             lines += ["</details>", ""]
         lines += [f"### Calificación {r['id']}", "", "- fidelidad: ? de ?"]
-        if r["key_points"]:
+        if r["key_points"] and not r.get("abstain"):
             lines.append(f"- cobertura: ? de {len(r['key_points'])}")
             lines += [f"  - [ ] {k}" for k in r["key_points"]]
         lines.append("")
@@ -214,9 +240,13 @@ def parse_grades(markdown: str) -> dict[str, dict[str, tuple[int, int]]]:
 def score(
     records: Sequence[dict[str, Any]], grades: dict[str, dict[str, tuple[int, int]]]
 ) -> dict[str, Any]:
+    def must_abstain(r: dict[str, Any]) -> bool:
+        # runs saved before the reasoning set (ADR-056) have no "abstain" field
+        return bool(r.get("abstain", r["type"] == "absent"))
+
     def summarize(group: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        answerable = [r for r in group if r["type"] != "absent"]
-        absent = [r for r in group if r["type"] == "absent"]
+        answerable = [r for r in group if not must_abstain(r)]
+        absent = [r for r in group if must_abstain(r)]
         faith = [
             grades[r["id"]]["fidelidad"] for r in group if "fidelidad" in grades.get(r["id"], {})
         ]
@@ -248,6 +278,14 @@ def score(
         out["map_reduce_share"] = round(
             sum(r["strategy"] == "map-reduce" for r in group) / len(group), 3
         )
+        reasoned = [r["reason"] for r in group if "reason" in r]
+        if reasoned:  # the «Razonar» mode (ADR-056)
+            out["gate_open"] = round(sum(c["gate"]["open"] for c in reasoned) / len(reasoned), 3)
+            quotes = sum(c["quotes"] for c in reasoned)
+            if quotes:
+                out["quotes_found"] = round(sum(c["quotes_found"] for c in reasoned) / quotes, 3)
+            out["general_citations"] = sum(c["general_citations"] for c in reasoned)
+            out["general_used"] = sum("general" in c["layers"] for c in reasoned)
         return out
 
     by_type = {

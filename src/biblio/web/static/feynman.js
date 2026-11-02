@@ -6,6 +6,7 @@
 const FEYNMAN_GRADES = [["correct", tx("Bien")], ["partial", tx("A medias")], ["wrong", tx("Mal")]];
 const COVERAGE_MARKS = { covered: ["✓", "correct"], partial: ["~", "partial"], missing: ["✗", "wrong"] };
 const CLAIM_MARKS = { supported: ["✓", "correct"], contradicts: ["✗", "wrong"], unsupported: ["?", "partial"] };
+const FEYNMAN_GENERAL = { true: tx("parece correcta"), false: tx("parece incorrecta"), unsure: tx("no estoy seguro") };
 
 const feynman = { session: null };
 
@@ -236,7 +237,14 @@ function renderReview() {
         contradicts: [["small", tx("Tus notas dicen otra cosa.")], ["small muted", `${citationOf(r, claim.fragment)}: «${claim.quote}»`]],
         unsupported: [["small", tx("Tus notas no lo mencionan (no quiere decir que sea falso).")]],
       }[claim.verdict];
-      list.append(pointRow(CLAIM_MARKS[claim.verdict], `«${claim.text}»`, lines, r.proposed ? voteControl(s, `claim:${i}`) : null));
+      // ADR-058: what the model knows of a claim the notes do not cover, marked as not the notes'
+      const general = claim.verdict === "unsupported" && FEYNMAN_GENERAL[claim.general];
+      if (general) {
+        const why = claim.general_note ? ` ${claim.general_note}` : "";
+        lines.push(["small general-knowledge", tx("Conocimiento general (no está en tus notas): {0}.{1}", general, why)]);
+      }
+      const mark = general && claim.general === "false" ? CLAIM_MARKS.contradicts : CLAIM_MARKS[claim.verdict];
+      list.append(pointRow(mark, `«${claim.text}»`, lines, r.proposed ? voteControl(s, `claim:${i}`) : null));
     });
     nodes.push(list);
   } else if (r.ideas && s.checking) {

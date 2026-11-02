@@ -74,6 +74,11 @@ def memory_items(config: Config) -> list[MemoryItem]:
             _count(config.practice.db, "SELECT count(*) FROM questions"),
         ),
         MemoryItem(
+            "summaries",
+            config.understanding.db,
+            _count(config.understanding.db, "SELECT count(*) FROM summaries"),
+        ),
+        MemoryItem(
             "drafts",
             drafts,
             sum(1 for p in drafts.rglob("*") if p.is_file()) if drafts.is_dir() else 0,

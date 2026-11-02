@@ -10,7 +10,7 @@ ADR-022); a point that cannot be checked is dropped or, for coverage, counted as
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from biblio.config import FeynmanConfig
 from biblio.generate.ask import load_prompt
@@ -21,6 +21,7 @@ from biblio.practice.quiz import _complete, _json_object
 
 COVERAGE = {"cubierta": "covered", "parcial": "partial", "falta": "missing"}
 CLAIMS = {"respaldada": "supported", "contradice": "contradicts", "sin respaldo": "unsupported"}
+GENERAL = {"correcta": "true", "incorrecta": "false", "dudosa": "unsure"}
 _MAX_TEXT = 400  # characters of an idea, a claim or a quote
 _MIN_QUOTE_WORDS = 2
 
@@ -44,6 +45,10 @@ class Claim:
     verdict: str  # supported | contradicts | unsupported
     fragment: int  # 0 when unsupported
     quote: str
+    # an unsupported claim judged with the model's own knowledge (ADR-058): true | false | unsure,
+    # with one sentence of why; never a citation, never the notes' word
+    general: str = ""
+    general_note: str = ""
 
 
 def contains(text: str, quote: str) -> bool:
@@ -224,6 +229,53 @@ def check_claims(
         if claims is not None:
             return claims
     return None
+
+
+# --- step 2c: the unsupported claims, with general knowledge (ADR-058) ----------------------------
+
+
+def parse_general(reply: str, claims: Sequence[Claim]) -> dict[int, tuple[str, str]] | None:
+    """{index in `claims`: (verdict, why)} for the claims the model judged; None if unusable."""
+    data = _json_object(reply)
+    raw = data.get("afirmaciones") if data is not None else None
+    if not isinstance(raw, list):
+        return None
+    judged: dict[int, tuple[str, str]] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        number = _number(item.get("numero"))
+        verdict = GENERAL.get(fold(str(item.get("veredicto", ""))))
+        if number is None or not 1 <= number <= len(claims) or verdict is None:
+            continue
+        judged.setdefault(number - 1, (verdict, _clean(item.get("razon")) or ""))
+    return judged
+
+
+def judge_general(
+    llm: LLMClient, cfg: FeynmanConfig, concept: str, claims: Sequence[Claim]
+) -> list[Claim]:
+    """The claims, with the «sin respaldo» ones judged by the model's own knowledge. Only for a
+    concept the notes explain (the caller checks the topic gate, ADR-056); the others are
+    returned as they are, and so are all of them when the reply is unusable."""
+    unsupported = [c for c in claims if c.verdict == "unsupported"]
+    if not unsupported:
+        return list(claims)
+    listed = "\n".join(f"{i}. {c.text}" for i, c in enumerate(unsupported, start=1))
+    user = load_prompt("feynman_general_user").format(concept=concept, claims=listed)
+    system = load_prompt("feynman_general_system")
+    judged: dict[int, tuple[str, str]] | None = None
+    for _ in range(2):
+        judged = parse_general(_complete(llm, system, user, cfg.check_max_tokens), unsupported)
+        if judged is not None:
+            break
+    by_text = {c.text: judged[i] for i, c in enumerate(unsupported) if judged and i in judged}
+    return [
+        replace(c, general=by_text[c.text][0], general_note=by_text[c.text][1])
+        if c.text in by_text
+        else c
+        for c in claims
+    ]
 
 
 # --- the proposed grade --------------------------------------------------------------------------

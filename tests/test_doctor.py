@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -135,3 +138,89 @@ def test_cli_models_pull_leaves_download_env_unset(
     assert result.exit_code == 0, result.output
     assert seen == {"HF_HUB_OFFLINE": None}
     assert os.environ["HF_HUB_DISABLE_TELEMETRY"] == "1"
+
+
+# --- the LLM server's context (ADR-015) ---------------------------------------------------------
+
+
+class _FakeOllama:
+    """Answers the Ollama API on loopback: the pinned model is served; `context` is what /api/ps
+    reports once it is loaded (None: not loaded until a generate call loads it)."""
+
+    def __init__(self, config: Config, context: int, loaded: bool) -> None:
+        self.config, self.context, self.loaded = config, context, loaded
+        self.generate: list[object] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        model, path = self.config.llm.model, request.url.path
+        if path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": model}]})
+        if path == "/api/tags":
+            digest = self.config.llm.model_digest
+            return httpx.Response(200, json={"models": [{"name": model, "digest": digest}]})
+        if path == "/api/generate":
+            keep = json.loads(request.content)["keep_alive"]
+            self.generate.append(keep)
+            self.loaded = keep != 0
+            return httpx.Response(200, json={"done": True})
+        assert path == "/api/ps"
+        loaded = [{"name": model, "context_length": self.context}] if self.loaded else []
+        return httpx.Response(200, json={"models": loaded})
+
+
+@pytest.fixture
+def fake_ollama(monkeypatch: pytest.MonkeyPatch) -> Callable[[Config, int, bool], _FakeOllama]:
+    def install(config: Config, context: int, loaded: bool) -> _FakeOllama:
+        server = _FakeOllama(config, context, loaded)
+        real = httpx.Client
+        monkeypatch.setattr(
+            httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(server), **kw)
+        )
+        return server
+
+    return install
+
+
+def _context_check(config: Config, load: bool = False) -> Check:
+    if load:  # only the context check, without loading the embedding models of --load-models
+        from biblio.doctor import _llm_context_check
+
+        return _llm_context_check(config, True)
+    return _by_name(run_checks(config, FAKE_HW))["llm context"]
+
+
+def test_a_short_served_context_fails(
+    config: Config, fake_ollama: Callable[[Config, int, bool], _FakeOllama]
+) -> None:
+    fake_ollama(config, 4096, True)
+    check = _context_check(config)
+    assert check.status is Status.FAIL
+    assert "4096 tokens < 7024" in check.detail and "serve-llm.ps1" in check.detail
+
+
+def test_the_scripts_context_passes(
+    config: Config, fake_ollama: Callable[[Config, int, bool], _FakeOllama]
+) -> None:
+    fake_ollama(config, 8192, True)
+    check = _context_check(config)
+    assert check.status is Status.OK and check.detail == "8192 tokens (needs ≥ 7024)"
+
+
+def test_an_unloaded_model_is_loaded_only_when_asked(
+    config: Config, fake_ollama: Callable[[Config, int, bool], _FakeOllama]
+) -> None:
+    server = fake_ollama(config, 4096, False)
+    check = _context_check(config)
+    assert check.status is Status.OK and "--load-models" in check.detail
+    assert server.generate == []
+    check = _context_check(config, load=True)
+    assert check.status is Status.FAIL
+    assert server.generate == ["30s", 0] and not server.loaded  # loaded, read, unloaded
+
+
+def test_the_reasoning_model_is_checked_on_the_same_server(
+    config: Config, fake_ollama: Callable[[Config, int, bool], _FakeOllama]
+) -> None:
+    fake_ollama(config, 8192, True)  # serves only the tutor's model
+    check = _by_name(run_checks(config, FAKE_HW))[f"llm: {config.reason.model}"]
+    assert check.status is Status.FAIL and "ollama pull" in check.detail

@@ -69,6 +69,8 @@ def test_llm_settings_come_from_the_serve_script() -> None:
         "OLLAMA_FLASH_ATTENTION": "1",
         "OLLAMA_KV_CACHE_TYPE": "q8_0",
         "OLLAMA_CONTEXT_LENGTH": "8192",
+        "OLLAMA_MAX_LOADED_MODELS": "1",
+        "LLAMA_ARG_CACHE_RAM": "0",
     }
 
 

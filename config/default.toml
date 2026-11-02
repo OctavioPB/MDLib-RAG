@@ -74,6 +74,7 @@ map_reduce_min_guides = 3                # auto: evidence from this many guides 
 map_reduce_max_fragments = 12            # ...or fragments dropped by the budget; fragments it reads
 max_answer_tokens = 1024
 probe_timeout_s = 0.5                    # loopback check for a running server (ADR-012)
+reasoning_effort = ""                    # sent to the server when set; the 4B instruct model does not think
 
 [library]                    # changing where the library is, from the app or `biblio library set` (ADR-039)
 relocate_min_overlap = 0.5       # share of notes matching the index (path + content) to treat it as the same library moved
@@ -93,6 +94,28 @@ question_head = 6                # the question's own best hits keep their place
 fill = 2                         # then the best hits of the plan's searches the question missed
 evidence_fragments = 8           # the tutor reads them all (question_head + fill; within the token budget)
 frame_max_chars = 160            # the conversation's topic, one sentence
+
+[reason]                     # «Razonar» mode (ADR-056): marked layers, the model's own knowledge gated by topic
+model = "biblio-reason:latest"    # its own model on the same server (ADR-057); "" = the tutor's.
+                                 # Gemma 4 26B-A4B QAT, memory-mapped: scripts/Modelfile.reason
+model_digest = "0b04ee86f8cbcf07261d087a7b1831a3842677017cb1e781e5690afb1cc650dd"   # checked by doctor
+reasoning_effort = "none"        # Gemma 4 thinks by default on Ollama's OpenAI API; "none" turns it off (measured)
+subjects = 4                     # names of the question's field the LLM proposes, in Spanish and English
+subject_max_tokens = 120         # LLM output budget for them (JSON)
+gate_candidates = 10             # first-stage hits per name, reranked on CPU (10 kept all 22 covered fields of reason-v1 at ≥ 2)
+gate_score = 0.4                 # reranker score at which a section explains the field (measured: covered ≥ 0.76, absent ≤ 0.15)
+gate_min = 2                     # sections that must explain one of the names for general knowledge to be allowed
+max_answer_tokens = 1024         # the answer with its three layers (context budget + this ≤ 8192, ADR-015)
+
+[understanding]              # summaries of a chapter, note or book, made on demand and kept (ADR-056 stage E)
+db = "data/understanding.db"     # app memory, apart from the index (erased by Reset, ADR-040)
+window_tokens = 5000             # a document's sections are read in windows of this many tokens
+max_fragment_chars = 6000        # a longer section is cut to this before reading
+part_points = 6                  # key points asked of each window, each with a checked quote
+max_points = 15                  # key points kept for a whole chapter or note
+part_max_tokens = 900            # LLM output budgets
+combine_max_tokens = 500
+book_max_tokens = 900
 
 [tutor]                      # answer levels in Conversar (ADR-032)
 default_level = "intermediate"   # beginner | intermediate | advanced
@@ -151,6 +174,8 @@ partial_at = 0.4             # ...for «a medias»
 min_agreement = 0.8          # votes «¿Es justo?» agreeing less than this...
 min_samples = 20             # ...after this many votes: the page warns
 eval_match_similarity = 0.75 # `biblio eval-feynman`: an expected point is found above this cosine
+reason = true                # on the «Razonar» model (ADR-058): a topic the notes do not explain is
+                             # refused, and claims the notes do not cover get a marked general verdict
 
 [plan]                       # study plan per folder (ADR-028); kept in [practice].db
 max_guides = 30              # more guides than this: ordered by subfolder modules
@@ -264,6 +289,8 @@ settle_s = 10                # a change must stay stable this long before reinde
 [eval]
 questions = "eval/questions.jsonl"
 answers = "eval/answers.jsonl"   # answer evaluation set (key_points), `biblio ask-eval`
+reasoning = "eval/reasoning.jsonl"   # reasoning set (ADR-056), `biblio ask-eval run --reasoning`
+chains = "eval/chains.jsonl"         # chained conversations (ADR-038), `biblio eval-chains`
 feynman = "eval/feynman.jsonl"   # «Explícamelo tú» evaluation set, `biblio eval-feynman` (ADR-027)
 results_dir = "eval/results"
 ks = [1, 5, 8, 20]

@@ -376,6 +376,11 @@ pageHooks.guias = () => {
     bindPlan();
   }
   guiasHook();
+  const folder = location.hash.match(/[?&]plan=([^&]*)/); // from a topic in Biblioteca (ADR-055)
+  if (folder) {
+    openPlan(decodeURIComponent(folder[1]));
+    return;
+  }
   if (/^#\/guias\/[a-z0-9-]+$/.test(location.hash)) showGuiasScreen("write"); // a draft's link
   else if (!$("guias-plan").hidden && plan.view) openPlan(plan.view.folder); // states may have moved
   else if ($("guias-plan").hidden && $("guias-write").hidden && $("guias-spotter").hidden) showGuiasScreen("home");

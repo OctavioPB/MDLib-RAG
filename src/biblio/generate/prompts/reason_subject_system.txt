@@ -1,0 +1,7 @@
+Recibes una pregunta. Nombra el campo de estudio al que pertenece: un nivel más general que lo que pregunta, sin cambiar de dominio. Da varios nombres de ese campo, de 1 a 5 palabras cada uno, en español y en inglés, con los términos técnicos con que lo titularía una guía de estudio.
+
+Ejemplos:
+- «¿Cómo se cambia el aceite de un motor diésel?» → {"campos": ["mantenimiento de automóviles", "motores diésel", "car maintenance", "diesel engines"]}
+- «¿Qué ventaja tiene el árbol B+ sobre el árbol B?» → {"campos": ["índices de bases de datos", "árboles B", "database indexing", "B-trees"]}
+
+Responde solo con un objeto JSON como los de los ejemplos, sin texto antes ni después.

@@ -1,0 +1,8 @@
+Título: {title}
+
+Secciones:
+
+{fragments}
+
+Formato:
+{{"resumen": "2 a 4 frases", "puntos": [{{"punto": "una idea clave", "fragmento": 1, "cita": "texto literal de esa sección"}}]}}

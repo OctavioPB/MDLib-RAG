@@ -26,7 +26,7 @@ class Chapter:
 class Book:
     id: str  # the book's folder (or its single note), relative to the library
     title: str
-    area: str  # the library's top folder: «AI Engineering», «Math»…
+    area: str  # the folder that holds its «Books» folder: «AI Engineering», «Career»…
     cover: str | None  # the note named like the folder, if any
     chapters: tuple[Chapter, ...]
 
@@ -38,6 +38,13 @@ def book_id(path: str, folder: str) -> str | None:
         return None
     i = parts.index(folder)
     return "/".join(parts[: i + 2]) if i + 2 < len(parts) else path
+
+
+def book_area(key: str, folder: str) -> str:
+    """The book's area: the folder its «Books» folder is in (`Cosas/Career/Books/…` → «Career»)."""
+    parts = key.split("/")
+    i = parts.index(folder)
+    return parts[i - 1] if i > 0 else folder
 
 
 def _natural(name: str) -> list[object]:
@@ -69,5 +76,5 @@ def find_books(notes: Iterable[tuple[str, str]], folder: str) -> list[Book]:
             title = " ".join(words)[:1].upper() + " ".join(words)[1:]
         else:  # the folder, as the user named it: some covers' titles are «A» or «FPO»
             title = name
-        books.append(Book(key, title, key.split("/")[0], cover, tuple(chapters)))
+        books.append(Book(key, title, book_area(key, folder), cover, tuple(chapters)))
     return sorted(books, key=lambda b: b.title.casefold())

@@ -276,6 +276,66 @@ def test_ask_honours_scope_and_strategy(
     assert status == 400
 
 
+class _ReasonLLM:
+    """Names the field for the «Razonar» gate, answers in its layers otherwise."""
+
+    models: ClassVar[list[str]] = []
+
+    def __init__(self, model: str) -> None:
+        _ReasonLLM.models.append(model)
+
+    def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+        if "campo de estudio" in messages[0].content:
+            yield '{"campos": ["teorema de Bayes"]}'
+            return
+        yield "**Según tus notas:** invierte probabilidades [1].\n\n**Respuesta:** eso."
+
+    def close(self) -> None:
+        pass
+
+
+def test_reason_mode_runs_on_its_own_model_and_frees_the_reranker(
+    server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "llm_running", lambda: True)
+    monkeypatch.setattr(engine, "_llm_factory", lambda c: _ReasonLLM(c.llm.model))
+    engine.config = replace(engine.config, reason=replace(engine.config.reason, gate_min=1))
+    _ReasonLLM.models.clear()
+    body = {"question": "¿Qué hace Bayes?", "reason": True}
+    _, _, raw = request(server, "POST", "/api/ask", body)
+    events = _events(raw)
+    names = [name for name, _ in events]
+    assert names[:2] == ["gate", "meta"] and names[-1] == "done"
+    gate, meta, done = events[0][1], events[1][1], events[-1][1]
+    assert gate["open"] and gate["subject"] == "teorema de Bayes"
+    assert meta["strategy"] == "reason" and meta["fragments"]
+    assert done["grounded"] and done["reason"]["layers"] == ["notes", "answer"]
+    assert _ReasonLLM.models == [engine.config.reason.model]  # one model for every call
+    cpu = [r for r in _Reranker.instances if r.device == "cpu"]
+    assert cpu and all(r.closed for r in cpu)  # released before the answer (ADR-057)
+    stored = engine.conversations.get(done["conversation_id"])
+    assert stored is not None
+    payload = stored[1][-1].payload
+    assert payload["reason"] is True and payload["gate"]["open"]
+
+
+def test_reason_mode_abstains_when_the_notes_do_not_explain_the_topic(
+    server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine, "llm_running", lambda: True)
+    monkeypatch.setattr(engine, "_llm_factory", lambda c: _ReasonLLM(c.llm.model))
+    body = {"question": "¿Qué técnicas de cocina se usaban en el siglo XVII?", "reason": True}
+    _, _, raw = request(server, "POST", "/api/ask", body)
+    events = _events(raw)
+    by_name = {name: data for name, data in events}
+    gate, meta, done = by_name["gate"], by_name["meta"], by_name["done"]
+    # the fake reranker scores 0 for every section without «bayes»: the gate stays closed
+    engine_abstention = "No encuentro esto en tu biblioteca."
+    assert events[0][0] == "gate" and not gate["open"]
+    assert meta["fragments"] == [] and done["abstained"]
+    assert "".join(d["text"] for n, d in events if n == "token") == engine_abstention
+
+
 def test_ask_without_llm_server_is_unavailable(
     server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from biblio.config import PROJECT_ROOT
-from biblio.eval.questions import QuestionsError, load_questions
+from biblio.eval.questions import REASONING_TYPES, QuestionsError, load_questions
 
 
 def _write(tmp_path: Path, *rows: object) -> Path:
@@ -83,3 +83,47 @@ def test_alternatives_are_parsed_and_validated(tmp_path: Path) -> None:
     }
     with pytest.raises(QuestionsError, match="alternative"):
         load_questions(_write(tmp_path, bad))
+
+
+# --- the reasoning set (ADR-056) -----------------------------------------------------------------
+
+
+def test_reasoning_example_file_is_valid() -> None:
+    questions = load_questions(PROJECT_ROOT / "eval" / "reasoning.example.jsonl", reasoning=True)
+    assert {q.type for q in questions} == set(REASONING_TYPES)
+    assert [q.id for q in questions if q.should_abstain] == ["r06", "r07"]
+    assert {q.behavior for q in questions} == {"notes", "general", "abstain"}
+
+
+REASON = {
+    "id": "r1",
+    "type": "relation",
+    "behavior": "notes",
+    "question": "¿Qué comparten?",
+    "expected": [{"path": "a.md", "heading": "A"}, {"path": "b.md", "heading": "B"}],
+}
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"behavior": "maybe"}, "'behavior' must be one of"),
+        ({"type": "lookup"}, "is not one of inference"),
+        ({"type": "boundary"}, "must have behavior 'abstain'"),
+        ({"behavior": "abstain"}, "cannot have expected sections"),
+        ({"expected": [{"path": "a.md", "heading": "A"}]}, r"needs 2\+ expected sections"),
+        ({"type": "inference", "expected": []}, "needs its premises' sections"),
+    ],
+)
+def test_invalid_reasoning_rows_name_the_line(
+    tmp_path: Path, change: dict[str, object], message: str
+) -> None:
+    with pytest.raises(QuestionsError, match=f"questions.jsonl:1: .*{message}"):
+        load_questions(_write(tmp_path, {**REASON, **change}), reasoning=True)
+
+
+def test_the_reasoning_types_are_not_answer_set_types(tmp_path: Path) -> None:
+    with pytest.raises(QuestionsError, match="is not one of lookup"):
+        load_questions(_write(tmp_path, REASON))
+    (question,) = load_questions(_write(tmp_path, LOOKUP))
+    assert question.behavior == "" and not question.should_abstain

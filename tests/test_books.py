@@ -23,6 +23,7 @@ NOTES = [
     ("AI/Books/go-ml/02-basics.md", "Basics"),
     ("Data/Books/causality.md", "Causality"),  # one note directly in Books/
     ("AI/agentes.md", "Agentes"),  # the user's own note
+    ("Cosas/Career/Books/Brain Rush/01-start.md", "Start"),  # Books deeper than the top folder
 ]
 
 
@@ -33,6 +34,7 @@ def test_a_book_is_a_folder_in_books_with_its_chapters_in_natural_order() -> Non
         "AI/Books/hackers-delight",
         "AI/Books/go-ml",
         "Data/Books/causality.md",
+        "Cosas/Career/Books/Brain Rush",
     }
     ml = books["AI/Books/Applied ML"]
     assert ml.title == "Applied ML" and ml.area == "AI"  # the folder, not the cover's «A»
@@ -42,6 +44,8 @@ def test_a_book_is_a_folder_in_books_with_its_chapters_in_natural_order() -> Non
     assert books["AI/Books/hackers-delight"].title == "Hackers delight"  # a slug, no cover
     assert books["Data/Books/causality.md"].title == "Causality"
     assert book_id("AI/agentes.md", "Books") is None
+    # the area is the folder that holds «Books», not the library's top folder
+    assert books["Cosas/Career/Books/Brain Rush"].area == "Career"
 
 
 def test_a_books_boxes_stay_out_of_the_index_and_are_counted() -> None:

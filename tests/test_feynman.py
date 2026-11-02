@@ -4,6 +4,7 @@ import json
 import re
 import threading
 from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,107 @@ class _Nothing:
 
     def close(self) -> None:
         pass
+
+
+# --- on the «Razonar» model: the topic gate and general verdicts (ADR-058) ----------------------
+
+
+def test_general_verdicts_only_for_unsupported_claims(config: Config) -> None:
+    from biblio.practice.feynman import judge_general
+
+    claims = [
+        Claim("Bayes invierte probabilidades", "supported", 1, "invierte probabilidades"),
+        Claim("lo publicó Laplace en 1950", "unsupported", 0, ""),
+        Claim("lo usan los astrónomos", "unsupported", 0, ""),
+    ]
+
+    class _Judge:
+        def __init__(self, reply: str) -> None:
+            self.reply = reply
+            self.users: list[str] = []
+
+        def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+            self.users.append(messages[1].content)
+            yield self.reply
+
+        def close(self) -> None:
+            pass
+
+    fy = config.feynman
+    judge = _Judge(
+        '{"afirmaciones": [{"numero": 1, "veredicto": "incorrecta", "razon": "Fue en 1812."},'
+        ' {"numero": 9, "veredicto": "correcta"}]}'
+    )
+    judged = judge_general(judge, fy, "teorema de Bayes", claims)
+    assert [(c.general, c.general_note) for c in judged] == [
+        ("", ""),
+        ("false", "Fue en 1812."),
+        ("", ""),  # skipped by the model: no verdict, never a guessed one
+    ]
+    assert "1. lo publicó Laplace" in judge.users[0] and "invierte" not in judge.users[0]
+    unusable = _Judge("no es JSON")
+    assert judge_general(unusable, fy, "Bayes", claims) == claims
+    assert len(unusable.users) == 2  # one retry
+    nothing = _Judge("")
+    assert judge_general(nothing, fy, "Bayes", claims[:1]) == claims[:1] and not nothing.users
+
+
+class _ReasonChecker(_Checker):
+    """The Feynman steps, plus the field's names for the gate and the general verdicts."""
+
+    def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+        system = messages[0].content
+        if "campo de estudio" in system:
+            topic = "cocina" if "cocina" in messages[1].content else "teorema de Bayes"
+            yield json.dumps({"campos": [topic]})
+        elif "conocimiento general del tema" in system:
+            yield '{"afirmaciones": [{"numero": 1, "veredicto": "dudosa", "razon": "Depende."}]}'
+        else:
+            yield from super().stream(messages, max_tokens)
+
+
+class _BayesScore:
+    def score(self, query: str, passages: Sequence[str]) -> list[float]:
+        return [float("bayes" in query.lower() and "bayes" in p.lower()) for p in passages]
+
+    def close(self) -> None:
+        pass
+
+
+def test_reason_refuses_a_topic_the_notes_do_not_explain_and_judges_the_rest(
+    server: tuple[str, int, Engine],
+) -> None:
+    engine = server[2]
+    engine.config = replace(
+        engine.config,
+        feynman=replace(engine.config.feynman, reason=True),
+        reason=replace(engine.config.reason, gate_min=1),
+    )
+    models: list[str] = []
+
+    def factory(c: Config) -> _ReasonChecker:
+        models.append(c.llm.model)
+        return _ReasonChecker()
+
+    engine._llm_factory = factory  # type: ignore[method-assign]
+    engine._reranker_factory = lambda _c, _d: _BayesScore()  # type: ignore[assignment,return-value]
+    status, body = _call(server, "POST", "/api/feynman/start", {"concept": "cocina del siglo XVII"})
+    assert status == 400 and "no explican" in body["error"]
+    status, events = _call(server, "POST", "/api/feynman/start", {"concept": "teorema de Bayes"})
+    assert status == 200 and [n for n, _ in events] == ["ready"]
+    explanation = (
+        "Bayes invierte probabilidades cuando se conoce la otra condicionada, "
+        "y lo usan los astrónomos."
+    )
+    check = {"session_id": events[0][1]["session_id"], "explanation": explanation}
+    status, events = _call(server, "POST", "/api/feynman/check", check)
+    claims = dict(events)["claims"]["claims"]
+    assert [(c["verdict"], c["general"]) for c in claims] == [
+        ("supported", ""),
+        ("unsupported", "unsure"),
+    ]
+    assert claims[1]["general_note"] == "Depende."
+    assert set(models) == {engine.config.reason.model}  # every call on the «Razonar» model
 
 
 # --- offline evaluation (`biblio eval-feynman`) -----------------------------------------------

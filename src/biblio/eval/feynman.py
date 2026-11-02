@@ -5,7 +5,9 @@ those?
 
     {"id": "f01", "concept": "análisis PESTEL", "explanation": "…",
      "missing": ["ideas of the notes the explanation leaves out"],
-     "unsupported": ["claims of the explanation the notes do not back or contradict"]}
+     "unsupported": ["claims of the explanation the notes do not back or contradict"],
+     "general": {"an unsupported claim": "correcta" | "incorrecta"},   (optional, ADR-058)
+     "refused": true}   (optional: the notes do not explain the concept, ADR-058)
 
 A reported point counts as one of the expected ones when their embeddings are close
 (`feynman.eval_match_similarity`), or, for claims, when one is written inside the other.
@@ -28,11 +30,19 @@ from biblio.config import Config
 from biblio.eval.runner import _git_state
 from biblio.generate.llm import LLMClient
 from biblio.maps.export import numbered_fragments
-from biblio.practice.feynman import check_claims, check_coverage, contains, extract_ideas
+from biblio.practice.feynman import (
+    check_claims,
+    check_coverage,
+    contains,
+    extract_ideas,
+    judge_general,
+)
 from biblio.retrieve.types import Retriever
 
 RUNS_FILE = "feynman_runs.jsonl"
 Embed = Callable[[Sequence[str]], np.ndarray]
+Gate = Callable[[str], bool]  # whether the notes explain a concept (ADR-058)
+GENERAL_EXPECTED = {"correcta": "true", "incorrecta": "false"}
 
 
 class FeynmanSetError(ValueError):
@@ -46,6 +56,8 @@ class Item:
     explanation: str
     missing: tuple[str, ...]
     unsupported: tuple[str, ...]
+    general: tuple[tuple[str, str], ...] = ()  # (unsupported claim, true | false)
+    refused: bool = False
 
 
 def load_feynman_set(path: Path) -> list[Item]:
@@ -66,6 +78,11 @@ def load_feynman_set(path: Path) -> list[Item]:
                 str(raw["explanation"]),
                 tuple(str(x) for x in raw.get("missing", [])),
                 tuple(str(x) for x in raw.get("unsupported", [])),
+                tuple(
+                    (str(claim), GENERAL_EXPECTED[str(verdict)])
+                    for claim, verdict in raw.get("general", {}).items()
+                ),
+                bool(raw.get("refused", False)),
             )
         except (ValueError, KeyError, TypeError) as exc:
             raise FeynmanSetError(f"{path}:{n}: {exc}") from exc
@@ -128,12 +145,16 @@ def run_feynman_eval(
     items: Sequence[Item],
     tag: str,
     progress: Callable[[Item, dict[str, Any]], None] = lambda _i, _r: None,
+    gate: Gate | None = None,
 ) -> dict[str, Any]:
+    """With `gate` (ADR-058), a concept the notes do not explain is refused, and the claims the
+    notes do not cover get a general verdict, compared with the item's `general`."""
     cfg = config.feynman
     rows: list[dict[str, Any]] = []
     for item in items:
         t0 = time.perf_counter()
-        hits = retriever.search(item.concept, cfg.fragments * 2)
+        refused = gate is not None and not gate(item.concept)
+        hits = [] if refused else retriever.search(item.concept, cfg.fragments * 2)
         fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
         ideas = extract_ideas(llm, cfg, item.concept, fragments) if fragments else []
         coverage = (
@@ -142,18 +163,37 @@ def run_feynman_eval(
         claims = (
             check_claims(llm, cfg, item.concept, fragments, item.explanation) if ideas else None
         )
+        if claims and gate is not None:
+            claims = judge_general(llm, cfg, item.concept, claims)
         elapsed = time.perf_counter() - t0
         gaps = [
             i.text for i, c in zip(ideas, coverage or [], strict=False) if c.verdict == "missing"
         ]
-        flagged = [c.text for c in claims or [] if c.verdict != "supported"]
+        flagged_claims = [c for c in claims or [] if c.verdict != "supported"]
+        flagged = [c.text for c in flagged_claims]
         found_gaps = match_points(item.missing, gaps, embed, cfg.eval_match_similarity)
         found_claims = match_points(
             item.unsupported, flagged, embed, cfg.eval_match_similarity, literal=True
         )
+        # the general verdict of each expected one, when its claim was reported unsupported
+        expected_general = dict(item.general)
+        general = []
+        for e, r in found_claims:
+            want = expected_general.get(item.unsupported[e])
+            got = flagged_claims[r]
+            if want is not None and got.verdict == "unsupported":
+                general.append({"claim": got.text, "expected": want, "got": got.general})
         row = {
             "id": item.id,
             "seconds": round(elapsed, 1),
+            "refused": refused,
+            "expected_refused": item.refused,
+            "general": general,
+            "general_reported": [
+                {"claim": c.text, "verdict": c.general, "why": c.general_note}
+                for c in flagged_claims
+                if c.general
+            ],
             "ideas": len(ideas),
             "failed": coverage is None,
             "expected_missing": len(item.missing),
@@ -200,7 +240,22 @@ def run_feynman_eval(
                 total("reported_unsupported") - total("found_unsupported"),
                 total("reported_unsupported"),
             ),
-            "failed": sum(1 for r in rows if r["failed"]),
+            "failed": sum(1 for r in rows if r["failed"] and not r["refused"]),
+            # ADR-058: refusals, and the general verdicts against the expected ones
+            "refused_right": sum(1 for r in rows if r["refused"] and r["expected_refused"]),
+            "refused_expected": sum(1 for r in rows if r["expected_refused"]),
+            "refused_wrongly": sum(1 for r in rows if r["refused"] and not r["expected_refused"]),
+            "general_right": sum(
+                1 for r in rows for g in r["general"] if g["got"] == g["expected"]
+            ),
+            "general_wrong": sum(
+                1
+                for r in rows
+                for g in r["general"]
+                if g["got"] in ("true", "false") and g["got"] != g["expected"]
+            ),
+            "general_unsure": sum(1 for r in rows for g in r["general"] if g["got"] == "unsure"),
+            "general_judged": sum(len(r["general"]) for r in rows),
         },
         "latency_s": {
             "p50": round(statistics.median(seconds), 1),

@@ -731,6 +731,97 @@ async function explainPassage(passage) {
   }
 }
 
+// --- a summary of this note, or of its book, made once and kept (ADR-056 stage E) -----------
+
+function readerSummaryCard(kind) {
+  $("reader-panel").hidden = false;
+  $("reader-panel").classList.remove("empty");
+  const card = el("section", "reader-card reader-summary");
+  card.append(el("span", "eyebrow", kind));
+  $("reader-panel-list").append(card);
+  card.scrollIntoView({ block: "nearest" });
+  return card;
+}
+
+function readerSummaryNote(summary) {
+  const nodes = [el("p", "reader-summary-overview", summary.overview)];
+  if (summary.points.length) {
+    const list = el("ul", "reader-summary-points");
+    for (const p of summary.points) {
+      const item = el("li");
+      item.append(el("strong", null, p.text));
+      const source = el("a", "small muted", tx("«{0}» · {1}", p.quote, p.heading));
+      source.href = readerHref(summary.key, p.start_line);
+      source.addEventListener("click", (event) => {
+        if (summary.key !== reader.path) return;
+        event.preventDefault();
+        scrollToLine(p.start_line);
+      });
+      item.append(source);
+      list.append(item);
+    }
+    nodes.push(list);
+  }
+  return nodes;
+}
+
+function readerSummaryBook(summary) {
+  const cite = (n) => {
+    const chapter = summary.chapters[Number(n) - 1];
+    const pill = el("a", "cite", `[${n}]`);
+    if (!chapter) pill.classList.add("invalid");
+    else {
+      pill.title = chapter.title;
+      pill.href = readerHref(chapter.path);
+    }
+    return pill;
+  };
+  const nodes = [markdownNode(summary.overview, cite, "md answer")];
+  if (summary.invalid.length) {
+    nodes.push(el("p", "small error", tx("El resumen cita capítulos que no existen: {0}.", summary.invalid.join(", "))));
+  }
+  const list = el("ol", "reader-summary-chapters");
+  for (const c of summary.chapters) {
+    const item = el("li");
+    const link = el("a", null, c.title);
+    link.href = readerHref(c.path);
+    item.append(link, el("p", "small", c.overview));
+    list.append(item);
+  }
+  nodes.push(list);
+  return nodes;
+}
+
+async function readerSummarize(target, kind) {
+  const card = readerSummaryCard(kind);
+  const status = el("p", "small muted", target.book
+    ? tx("La primera vez se resumen sus capítulos uno por uno: puede tardar varios minutos.")
+    : tx("La primera vez puede tardar uno o dos minutos; después queda guardado."));
+  card.append(status);
+  if (!(await needLLM(card))) return;
+  try {
+    await streamEvents("/api/understand", target, (name, data) => {
+      if (name === "progress") {
+        status.textContent = data.chapters
+          ? tx("Capítulo {0} de {1}…", data.chapter, data.chapters)
+          : tx("Leyendo la parte {0} de {1}…", data.done, data.total);
+      } else if (name === "summary") {
+        const when = data.created ? formatWhen(data.created) : "";
+        status.textContent = data.cached ? tx("Guardado el {0} · {1}", when, data.model) : tx("Resumido con {0}", data.model);
+        card.append(...(data.kind === "book" ? readerSummaryBook(data) : readerSummaryNote(data)));
+        if (data.kind !== "book" && reader.book && reader.book.id) {
+          const whole = el("button", "btn", tx("Resumir el libro «{0}»", reader.book.title));
+          whole.type = "button";
+          whole.addEventListener("click", () => readerSummarize({ book: reader.book.id }, tx("Resumen del libro")));
+          card.append(whole);
+        }
+      }
+    });
+  } catch (error) {
+    card.append(el("p", "error", error.message));
+  }
+}
+
 function checkedKinds() {
   const kinds = [...document.querySelectorAll('input[name="practice-kind"]:checked')].map((i) => i.value).filter((k) => READER_KINDS.includes(k));
   return kinds.length ? kinds : READER_KINDS;
@@ -867,6 +958,9 @@ function bindReader() {
     const open = $("reader-nav").hidden;
     readerShowNav(open);
     if (!READER_NARROW.matches) store.set("biblio.readerToc", open);
+  });
+  $("reader-summary").addEventListener("click", () => {
+    if (reader.path) readerSummarize({ path: reader.path }, reader.book ? tx("Resumen de este capítulo") : tx("Resumen de esta nota"));
   });
   $("reader-find-open").addEventListener("click", () => {
     readerShowNav(true);

@@ -124,6 +124,18 @@ powershell scripts/serve-llm.ps1
 uv run biblio ask "¿Qué diferencia hay entre un Data Warehouse y un Data Mart?"
 ```
 
+The «Razonar» switch in Conversar (ADR-056, still being measured) reasons from your notes. On topics
+your notes explain, it may add the model's own knowledge, shaded and marked as not from your notes.
+Otherwise it abstains. It is slower (about a minute per answer) and uses a larger model on the same
+server, Gemma 4 26B-A4B, memory-mapped so that it fits in system RAM next to the app (ADR-057). Pull
+and create it once:
+
+```powershell
+ollama pull gemma4:26b-a4b-it-qat
+ollama create biblio-reason -f scripts/Modelfile.reason
+uv run biblio ask-eval run --reasoning --reason --tag mi-prueba
+```
+
 Every claim is cited as `[n]` and the cited sections are listed after the answer. If the library does
 not contain the answer, the tutor says so instead of improvising, and answers whose citations do not
 check out are flagged. `--show-context` lists every fragment the model received. `--map-reduce on`
@@ -269,6 +281,10 @@ search with both, keeping the first places for your own wording. It adds about 1
 **Books** (ADR-053): a folder inside a «Books» folder is a book. Biblioteca shows your books on a shelf,
 by area and with your progress, apart from your own notes, and «Seguir leyendo» takes you back to where you
 left a note. In the reader, a chapter shows its book, its place («13 de 17») and the chapters before and after.
+A toolbar filters the shelf by area and status, sorts it, and switches to a list that also
+says which chapter matched your search (ADR-054).
+«Mis notas» shows your topics as cards (each folder inside an area, with its subfolders), what you
+edited lately, and a list grouped by folder; a topic opens its study plan or a quiz in one click (ADR-055).
 
 **Images in the reader** (ADR-048): a note's images are shown where the note puts them, both
 Markdown references (`![](assets/figura.jpg)`) and Obsidian embeds (`![[figura.png]]`); a click opens
@@ -473,8 +489,9 @@ The model budget is under 8 GB. The GPU serves whichever workload is active, and
 | `ask`, `draft` | need the server | GPU for the LLM |
 
 Query embeddings always run on the CPU. Start Ollama with `scripts/serve-llm.ps1`: started any other
-way it uses a larger cache and may not fit (ADR-015). `biblio doctor` checks that the served model is
-the pinned one.
+way it uses a larger cache and may not fit (ADR-015). The script also loads one model at a time and
+turns off llama-server's prompt cache, which otherwise grows in RAM with every request (ADR-057).
+`biblio doctor` checks that the served models are the pinned ones and that the context is large enough.
 
 ## Evaluation
 

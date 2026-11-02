@@ -57,7 +57,13 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 050 | The reader's index shows how each section is remembered; practice placed by its heading's title | Accepted |
 | 051 | Maps and diagrams built from what explains the topic, not from what mentions it; measured stage by stage | Stages 1–3 implemented and measured for maps; diagrams pending |
 | 052 | The chat also searches the question in English; the question's own top 6 keep their places | Proposed (off until measured on book questions) |
-| 053 | Books on a shelf, chapters read in their book, and «Seguir leyendo» | Accepted |
+| 053 | Books on a shelf, chapters read in their book, and «Seguir leyendo» | Accepted (shelf's cards and area chips superseded by ADR-054) |
+| 054 | The shelf gets a toolbar (area, status, sort, grid or list) and cards that say only what tells books apart | Accepted |
+| 055 | «Mis notas» by area and topic: topic cards, a list grouped by folder, a page per topic | Accepted |
+| 056 | A «Razonar» mode: answers in three marked layers, the model's own knowledge only on topics the library explains | Proposed |
+| 057 | Memory budget: the reasoning model may use system RAM; the GPU stays first for the fast model | Proposed |
+| 058 | «Explícamelo tú» on the «Razonar» model: topics the notes do not explain are refused, unsupported claims get a marked general verdict | Proposed |
+| 059 | Conversar gives the answer the room: a compact composer, a one-line header, the sources beside it, a history by date | Accepted |
 
 ---
 
@@ -501,7 +507,7 @@ Each download asks first unless `--yes` is passed. Without Ollama, the app runs 
 
 ## ADR-027 — «Explícamelo tú»: explanations checked idea by idea against retrieved notes
 
-**Date:** 2026-10-19 · **State:** Accepted
+**Date:** 2026-10-19 · **State:** Accepted (model, topic check and unsupported claims: ADR-058, proposed)
 
 **Context.** PLAN 9.3. Explaining a concept in one's own words (the Feynman technique) tests understanding more than recognising an answer. The system must say which key ideas of the user's notes the explanation missed and which of its claims the notes do not support, each with its source (rule 2), with a 4B local model (ADR-015) that skips and invents more when asked for everything at once. The user chose: evidence from retrieval, a two-step comparison by ideas, the result counting as practice after confirmation, and evaluation by per-point votes plus a small offline set.
 
@@ -985,7 +991,7 @@ With the top 6 kept, the five book questions that failed enter the top 8 (book-q
 
 ## ADR-053 — Books on a shelf, chapters read in their book, and «Seguir leyendo»
 
-**Date:** 2026-10-26 · **State:** Accepted
+**Date:** 2026-10-26 · **State:** Accepted (the shelf's cards and area chips superseded by ADR-054)
 
 **Context.** The library grew to 9,222 notes: 316 books (6,281 chapters, 306 of them in English) and 2,723 of the user's own notes. Biblioteca was one folder tree (ADR-033) in which a book was a folder of numbered files, and the reader (ADR-049) did not know a chapter belonged to a book: no previous or next chapter, no position, and books' boxes («NOTE», «TIP») filled the chapter's index. Three designs were drawn on a canvas with the user's books; the user chose the shelf (A), with the reader in its book and «Seguir leyendo» from the study-centred one (C).
 
@@ -1000,3 +1006,295 @@ With the top 6 kept, the five book questions that failed enter the top 8 (book-q
 
 **Consequences.** (+) Books are browsed and read as books; the user's notes are no longer buried among 6,281 chapters. (+) No new store: read marks are ADR-028's, the place left is the browser's. (−) «Leídas hace poco» is replaced by «Seguir leyendo», which shows only notes left part-way. (−) The place left is per browser. (−) A book outside a «Books» folder is shown as notes.
 
+## ADR-054 — The shelf gets a toolbar (area, status, sort, grid or list) and cards that say only what tells books apart
+
+**Date:** 2026-10-27 · **State:** Accepted
+
+**Context.** With 505 books (10,163 chapters) the shelf of ADR-053 showed the same two lines on every card: «Sin empezar» on all 505 (no book had a chapter marked read) and «inglés» on 495. Colours came from a hash of the area name, so three areas shared one blue and two one purple. The 11 area chips took two rows, the order was fixed (in progress, then title) and there was no compact way to scan a long area. Three designs were drawn on a canvas with the user's books: A (the shelf refined), B (a row per area, sidebar), C (a sortable catalogue with a preview). The user chose A as the main view with C's table as its list mode.
+
+**Options.** A alone: keeps the shelf, but 505 covers are slow to scan. B: good to browse 10 areas, poor to find one book. C alone: fastest to find, loses the shelf. A with C's table: the shelf to browse, the list to scan, one toolbar for both.
+
+**Decision.**
+- **Toolbar** above the books, sticky under the top bar: area as a select (`Todas las áreas (10)`, then each area with its count); status chips «Todos», «En curso», «Terminados», «En español», each shown only when some book has it; order «Abiertos hace poco» (books whose chapters this browser opened lately, then the others in progress, then by title), «Título A–Z» (numbers in natural order), «Más capítulos», «Por área»; a grid / list switch. Sort, view and status are kept in the browser.
+- **Cards**: a book-shaped cover in the area's colour with the area and title; under it «N capítulos» (plus «español» for the books in Spanish) or, once started, a progress bar and «X de N leídos». Colours are given to areas in alphabetical order from a palette of 12 that keep white text above 4.5:1, so no two of the first 12 areas share one.
+- **List**: a table with title, area, chapters and read; with a search, a «Coincide en» column says whether the title matched or which chapter did. ↑ and ↓ move between rows, Enter opens the book's page.
+- The «Seguir leyendo» toggle says what it shows («Mostrar «Seguir leyendo»») instead of «Mostrar panel».
+- Unchanged: the book's page, the reader in a book, «Mis notas» and «Seguir leyendo» of ADR-053. No server change.
+
+**Checked** in Edge on the user's library: 505 cards, 10 distinct colours, status chips «Todos» and «En español · 10» (no book started yet, so no «En curso»); «Más capítulos»; Math 57 of 505 in the list; «object detection» lists 4 books with the matching chapter («12. Object Detection», «2. YOLOv5 Object Detection Algorithms»…); ↓ moves to the next row; view and order kept after a reload; no sideways scroll at 390 px in grid or list.
+
+**Consequences.** (+) Cards only carry what differs between books; the list scans an area of 91 books at a glance. (+) Client-only. (−) «Abiertos hace poco» knows only this browser's recent notes. (−) An area past the twelfth shares a colour. (−) Chapter counts still include notes such as «Table of Contents»; leaving them out changes the counts and is a separate decision.
+
+## ADR-055 — «Mis notas» by area and topic: topic cards, a list grouped by folder, a page per topic
+
+**Date:** 2026-10-27 · **State:** Accepted
+
+**Context.** The user's 2,723 notes sit in 14 areas, then topic folders («Data Science/Syllabus», 261 notes; «Software Engineer/Framework Engineering», 200), then up to two more levels. «Mis notas» (ADR-033, ADR-053) was a tree of closed folders: three or four clicks to reach a note, and nothing said which topics are large, what changed lately or what has practice. Three designs were drawn on a canvas with the user's folders: A (topics as cards, like the books of ADR-054), B (a two-pane explorer), C (a map of areas with topic widths by size). The user chose A, with its list grouped by folder as in B's right pane.
+
+**Decision.**
+- **A topic** is a folder inside an area (`Area/Topic/…`); an area's notes outside any folder are its «Notas sueltas», and notes at the library's root are «Raíz».
+- **«Mis notas»** shows «Editadas hace poco» (up to 4 notes whose `indexed_at` is later than the oldest one: a full rebuild dates every note alike, so the build's date says nothing), then the toolbar of ADR-054 adapted: area select, status chips «Con práctica» / «Para repasar» shown only when some note has them, order «Más notas» / «Editadas hace poco» / «A–Z», and a topics / list switch kept in the browser.
+- **Topic cards**: the area's colour with the area and topic name, the number of notes (and how many are due), and its four largest subfolders with their counts.
+- **List**: every note shown, grouped by its folder; a search always shows this list (up to 300 notes). Each note carries «Para repasar», «Practicada» and «✓ leída» marks.
+- **A topic's page** (`#/biblioteca?tema=<folder>`): path, name, counts, its notes grouped by subfolder («En esta carpeta» first), and «Plan de estudio de este tema» (`#/guias?plan=`, ADR-028) and «Practicar este tema» (`#/practicar?carpeta=`), which open those pages on the topic's folder.
+- `/api/notes` adds `changed` (`indexed_at`, written only when a note's text changes), `practiced` (any attempt on its sections) and `due` (a section in today's review queue, ADR-025).
+- Area colours are given over the areas of books and notes together, so an area has one colour on both tabs; the palette grows to 16.
+
+**Checked** in Edge on the user's library: 126 topic cards, «Syllabus · 261 notas» with Deep Learning 41, NLP 28, MLOps 25, Reinforcement Learning 25 and «+8 más»; «Editadas hace poco» with BRAND, «Claude Code Framework — Guía de uso» and two Trust Signal AI notes; status chips «Con práctica · 3» and «Para repasar · 3»; Data Science in the list: 384 notes in 37 folders; the Syllabus page grouped by subfolder, its practice link opening Practicar on the folder «Data Science/Syllabus»; «mask r-cnn» finds its note under «Data Science › Syllabus › Advanced CV › CNN»; no sideways scroll at 390 px.
+
+**Consequences.** (+) The large topics and what changed are visible without opening folders; Libros and Mis notas work alike. (+) Plan and practice are one click from a topic. (−) «Editadas hace poco» is the index's date, so a note changed while the app was off shows once it is indexed. (−) The list renders a whole area at once (Data Science: 384 notes); fine at this size. (−) A folder at the library's root with no area above it is shown as its own area.
+
+
+## ADR-056 — A «Razonar» mode: answers in three marked layers, the model's own knowledge only on topics the library explains
+
+**Date:** 2026-10-30 · **State:** Proposed
+
+**Context.** The user wants the system to reason over the notes and books, not only find and restate them. Today it cannot, for three reasons:
+
+1. **The model is small.** Qwen3-4B (ADR-015) did not relate 3 guides in one pass (ADR-017, question set v3).
+2. **The prompts forbid going beyond the evidence.** Unmarked additions produced invented citations (ADR-032, ADR-038).
+3. **It reads 6–8 fragments once.** It never reads a whole chapter or book.
+
+The user decided two things:
+- The model may use its own knowledge, but **only on subjects the library covers**. A question with nothing in the library («técnicas de cocina del siglo XVII») is still answered with an abstention.
+- System RAM may hold the model (ADR-057).
+
+**Options.**
+1. Keep the current tutor and only change the model (ADR-057). Cheapest, but the prompts would still forbid reasoning beyond the cited text.
+2. Let the model answer freely when the notes fall short. Rejected: it gives up rule 2 and the measured abstention.
+3. A separate «Razonar» mode with marked layers and a topic gate (below).
+
+**Decision.** Option 3, as a mode the user turns on per message in Conversar (and `biblio ask --reason`); the current tutor stays as it is.
+- **Three layers, each marked in the answer:**
+  - «Según tus notas» carries citations, as today.
+  - «Razonamiento» is a chain of steps. Each step names the citations of its premises, and each premise carries a quote checked with `practice.feynman.contains`.
+  - «Conocimiento general (no está en tus notas)» holds the model's own knowledge, never with a citation.
+- **Topic gate.** The general layer is allowed only when the library explains the question's subject. The test reuses ADR-051 stage 3: at least `reason.min_general` fragments score ≥ `reason.general_score` with the reranker against the definitional question of the subject the planner extracts. The subject includes its aspect, so «dosis de ibuprofeno» is not «ibuprofeno». Below the threshold the answer is an abstention, which may say what the notes do hold.
+- **Multi-round reading.** The planner of ADR-038 breaks the question into sub-questions, searches, reads, and may search again up to `reason.max_rounds`.
+- **Understanding prepared ahead.** Whole chapters and books are read through summaries built offline per section → note/chapter → book. Their quotes are checked, they are kept in `data/understanding.db` (an app-memory store, added to `reset.memory_items`) and rebuilt by hash like the index.
+
+**Measured so far** (2026-10-30, Qwen3-4B, `eval/reasoning.jsonl`; runs in `eval/results/answers.jsonl`, gate probes in `eval/results/reason_gate.jsonl`). The user approved the set as drafted. Automatic metrics only; faithfulness and coverage wait for the user's grades.
+
+- **Gate, by hand first:** the best section of 21 covered field names scored ≥ 0.76; 22 absent names scored ≤ 0.15. Wording decides the score: «optimización de carteras» 0.06, «teoría de portafolios» 0.82. That is why the LLM proposes 4 names, in Spanish and English.
+- **Gate, in the runs:** it opened on 22 of 22 covered questions and stayed closed on 5 of 5 boundary and absent questions, in both runs. With 10 candidates per name instead of 20, every covered name still had ≥ 2 sections (the fewest: 2, for «valuación de empresas» and «modelado de mercados financieros»), and absent names had 0.
+
+| | tutor (`reason-draft-tutor`) | `reason-v1` | `reason-v2` |
+|---|---|---|---|
+| abstained on boundary + absent | 5 of 5 | 2 of 5 | 5 of 5 |
+| answered the 2 «general» questions | 0 of 2 | 2 of 2 | 2 of 2 |
+| false abstentions | 2 of 22 | 0 of 22 | 0 of 22 |
+| grounded (valid citations only) | 20 of 22 | 20 of 22 | 21 of 22 |
+| answers with a general layer | — | 21 | 12 |
+| citations inside the general layer | — | 1 | 0 |
+| reasoning quotes found in their fragment | — | 53 of 110 | 52 of 114 |
+| mean seconds (open gate / closed gate) | 15 | 46 / 83 | 37 / 52 |
+
+What changed from v1 to v2:
+- A closed gate is now the fixed abstention, with no generation. Asked to abstain in its own words, the model wrote its layers to explain that nothing was found.
+- The general layer is written only for what the fragments lack.
+- Quotes are asked for at 4–12 words copied letter by letter.
+- The gate reads 10 candidates per name instead of 20.
+
+What the 4B still gets wrong:
+- More than half the quotes are paraphrased.
+- The general layer is sometimes wrong. It called the information filter a non-Gaussian generalization of Kalman, when it is the inverse-covariance form. It said Dask needs no shuffles.
+
+The general layer's errors are what stage B (a larger model, ADR-057) is for.
+
+**The page** (stage F, 2026-10-30):
+- **The switch:** a «Razonar» switch in Conversar, kept in the browser; it hides the level, which does not apply to the mode. `/api/ask` takes `reason: true`.
+- **What the engine does:** it plans the message as usual (ADR-038, the conversation's topic and turns), then runs the gate on the standalone question. Every call uses the mode's own model. The gate's CPU reranker is loaded for the gate and released before the answer.
+- **Events:** a `gate` event goes before `meta`, and `done` carries the answer's checks. Both are stored with the turn.
+- **What the answer shows:** «Cómo razoné» gives the topic and how many sections explain it, or the names tried when they do not; how many reasoning quotes were found in their fragment; and whether a general layer was added. That layer is shaded like «Relación propuesta».
+- **Passages:** a question about a passage of a note stays the tutor's.
+- **Checked live** with the user's library: the information filter answered with a marked general layer (topic «filtrado de señales», 3 sections; 2 of 3 quotes found; 90 s, the first call including the loads); 17th-century cooking abstained after four names (67 s); a follow-up answered in 70 s. The follow-up («¿qué pasa con la varianza…?») drew the bias-variance notes instead of the filter's: that is the planner's reading of a short follow-up, the subject of stage D.
+
+**Stage D, first measurement** (2026-10-30; `biblio eval-chains`, `eval/chains.draft.jsonl`: 8 conversations, 22 turns, drafted by Claude with 38 alternative sections; `eval/results/chains.jsonl`). Planning and retrieval only, without answers.
+
+| | planner on the 4B (Conversar) | on Gemma («Razonar») |
+|---|---|---|
+| relation read right (sigue / corrige / nuevo) | 22 of 22 | 22 of 22 |
+| first messages reaching an expected section | 8 of 8 | 8 of 8 |
+| follow-ups reaching one | 9 of 13 | 8 of 13 |
+
+- **First draft:** with one expected section per turn, it read 0.43 overall. The library has dedicated notes the draft had missed (`TimeSeries-Kalman.md`, `knn.md`, `LittleLaw.md`), and search was finding them.
+- **The misses are of two kinds:**
+  - *Ranking:* the right note is below the 8 the tutor reads (boosting regularization, Little's law for sizing, Black-Scholes and real options).
+  - *A follow-up's referent resolved wrongly:* «¿Cómo se calcula entonces ese valor?» became «valor del DCF» on the 4B. «¿Dask hace lo mismo?» became the shuffle on Gemma; the draft itself is ambiguous there.
+- **Reranking the turn's candidates on CPU against its standalone question** (replayed from the saved plans, no LLM) gave 9 → 10 of 13 follow-ups on the 4B and 8 → 8 on Gemma. The cost is a median 13 s per message at 20 candidates, 18 s at 30 and 24 s at 40. Not adopted.
+- **The live failure is not in the set:** a follow-up about «filtro de información», a term absent from the notes, drew the bias-variance notes. A topic the gate opens through its broader field («filtrado de señales») while the question's own term is absent is the case to collect next. Only 13 follow-ups in the set: one turn is 8 points.
+
+**Stage E, summaries** (2026-10-31; this replaces the «built offline» of the Decision, which did not survive the library's size):
+- **The library is too large to summarize ahead.** It holds 17,816 book chapters (168 M tokens) and 2,736 notes (23 M tokens). Reading it all takes ~11 h on the 4B before writing anything, and ~5 days on Gemma.
+- **The user chose summaries made on demand and kept.** Chapters and notes are summarized on Gemma. A book is summarized on the 4B.
+- **A chapter or note:**
+  - The reader's «Resumen» button sends `/api/understand {path}`.
+  - The note's content sections are read in order, in windows of `understanding.window_tokens`.
+  - Each window gives 2–4 sentences and up to `part_points` key points. Each point has its section's number and a 4–20-word literal quote, checked with `contains`; an unchecked point is dropped.
+  - Several windows are joined by one more call.
+- **A book:**
+  - `{book}` reuses its chapters' kept summaries (either model) and summarizes the missing ones on the 4B, so a first book takes minutes, not the ~40 minutes Gemma would take.
+  - It then writes an overview citing chapters as [n]; a number with no chapter is flagged.
+  - The reader offers it from any chapter of the book.
+- **Storage:** everything is kept in `data/understanding.db` (`study/summaries.py`, in `reset.memory_items`), keyed by the note's SHA-256, or a hash of the chapters' for a book. A changed text is summarized again. The chapter button asks for Gemma's version, so a chapter first summarized on the 4B, as part of a book, is redone on Gemma when opened alone.
+- **«Resúmenes» in Biblioteca** (user request), a third tab beside «Libros» and «Mis notas»:
+  - It lists every kept summary, newest first: books first, then chapters and notes grouped by book or area, each with an excerpt, model, date and «Desactualizado» when its text changed (`/api/summaries`). The page's filter searches them.
+  - One opens at `#/biblioteca?resumen=<kind>:<key>` with the reader's same rendering, read from the store without the LLM (`/api/summaries/one`).
+  - A book's page links to its summary when there is one.
+- **Not measured yet.** Measure on real chapters and books: how many points survive the quote check, the time, and the user's reading of a few summaries.
+
+**Pending.** Measure the current tutor and the new mode, with each candidate model of ADR-057, on `eval/reasoning.jsonl`. Claude drafted that set from the user's notes and the user corrects it (`eval/reasoning.draft.jsonl`, 27 questions):
+
+| Type | Questions | What it tests |
+|---|---|---|
+| inference | 5 | a conclusion that follows from the notes but is written in none |
+| relation | 6 | two or more notes put together |
+| application | 5 | a concept used on a new case |
+| comprehension | 4 | a whole chapter, book or note |
+| general | 2 | the subject is covered, the detail is not; must be marked |
+| boundary | 2 | a word of the library, a subject it lacks; must abstain |
+| absent | 3 | nothing in the library; must abstain |
+
+Measures: key points reached, premises supported by their citations, the general layer always marked, abstention on boundary and absent questions, and latency. Accepted only if «Razonar» beats the tutor on inference, relation and application, and abstains on all 5 boundary and absent questions.
+
+**Consequences.** (+) Answers can go beyond restating while every claim says where it comes from. (+) The gate keeps the abstention the user asked for. (−) CLAUDE.md rule 2 gains a clause for the marked general layer once accepted. (−) A marked general layer can still be wrong; it is not checked against anything. (−) Several model calls per answer: slower than the tutor. (−) The offline summaries take hours of LLM time on the first build. Revisit if the gate lets an absent subject through, or if the marked layers are not kept by the model.
+
+## ADR-057 — Memory budget: the reasoning model may use system RAM; the GPU stays first for the fast model
+
+**Date:** 2026-10-30 · **State:** Proposed · **Would supersede:** the < 8 GB limit of ADR-014 / CLAUDE.md rule 4, for the reasoning model only
+
+**Context.** ADR-056 needs a model that reasons better than Qwen3-4B. The reference hardware (ADR-011) is an RTX 5060 with 8 GB, ~4.2 GiB of it free on a normal desktop, and 32 GB of system RAM. A model larger than ~4B does not fit in the free VRAM. The user accepted that it use system RAM, knowing it is slower.
+
+**Options.** Weights estimated as `params × 4.8 / 8` (Q4_K_M, `memory-budget` skill). The KV cache is pending each model's `config.json`, and names and licenses must be checked on the current model cards before pinning (CLAUDE.md pitfall).
+1. **A thinking variant of the 4B** at 16k context: ~2.4 GB weights, the same GPU, about 0.6 GiB of margin left. Smallest change; same model capacity.
+2. **A dense 8B model:** ~4.9 GB weights, partly in RAM. Every token crosses to the CPU layers, so it is slower than 1.
+3. **A mixture-of-experts model of ~30B with ~3B active per token:** ~18 GB weights, mostly in RAM. Only the active experts are read per token, so it may run faster than a dense model of that size. Largest expected gain; ~18 GB of RAM while it runs.
+
+**Decision (proposed).** Keep Qwen3-4B on the GPU for fast work (maps, quizzes, plans, the tutor). The «Razonar» mode uses a second model, chosen among 1–3 by measurement on `eval/reasoning.jsonl`, with the fastest option that reaches ADR-056's acceptance bar winning. Only one model is loaded at a time (`OLLAMA_MAX_LOADED_MODELS=1`): switching unloads the other. The reasoning model may use up to `reason.ram_budget_gb` of system RAM (proposed 20 GB of 32, leaving room for the CPU embedder and reranker, ~4.6 GB, plus the OS and browser). `biblio doctor` checks the free RAM before the model is loaded.
+
+**Research** (2026-10-30, model cards on Hugging Face, Ollama's library and the Vectara hallucination leaderboard of 2026-10-22; not training memory). What the 4B gets wrong in `reason-v2` is missing knowledge (the general layer's errors) and paraphrased quotes. A thinking 4B (option 1) adds steps, not knowledge, so it is dropped. The candidates that fit the RAM budget, all Apache-2.0 and all mixture-of-experts:
+
+| | Gemma 4 26B-A4B | Qwen3.6-35B-A3B | gpt-oss-20b |
+|---|---|---|---|
+| params total / active | 25.2B / 3.8B | 35B / 3B | 21B / 3.6B |
+| Ollama Q4 size | 16 GB (`it-qat`), 18 GB (`q4_K_M`) | 23–24 GB (`q4_K_M`) | — |
+| MMLU-Pro / GPQA | 82.6 / 82.3 | 85.2 / 86.0 | — |
+| multilingual | 140+ languages, MMMLU 86.3 | 201 languages (Qwen3.5 family) | — |
+| Vectara hallucination (grounded summaries) | 5.2 % | not listed (Qwen3.5-35B-A3B: 10.5 %) | not listed (gpt-oss-120b: 14.2 %) |
+| attention | sliding window 1,024 + some global layers | 3 of 4 layers linear (Gated DeltaNet); full layers 2 KV heads × 256 | — |
+| thinking switch | a `<|think|>` token in the system prompt | `reasoning_effort: "none"` on Ollama's OpenAI API; reports that it does not always work | — |
+
+- **gpt-oss-20b is dropped:** the AA-Omniscience hallucination rate reported for it is 94 % (high effort), and RFEval puts its reasoning faithfulness at ~32 %.
+- **Proposed first choice: Gemma 4 26B-A4B (QAT).** It has the lowest grounded-hallucination rate measured among the candidates (the current 4B scores 5.7 %), knowledge close to Qwen3.6's, and the smallest footprint: ~4 GB in VRAM and ~12 GB in RAM, inside `reason.ram_budget_gb`. Its thinking switch is part of the prompt.
+- **Qwen3.6-35B-A3B is measured alongside:** it is stronger on knowledge and reasoning benchmarks, but its ~19 GB in RAM is at the budget's limit, and its thinking switch is uncertain on Ollama.
+- **Both images include vision weights** (no text-only tag), which costs memory and does nothing here.
+- **Ollama must be updated:** the installed 0.18.2 likely predates both models (April 2026). After updating, the 4B's memory and the doctor checks are measured again.
+
+**Measured** (2026-10-30, with the user's choice of Gemma 4 only; Ollama updated 0.18.2 → 0.40.13). Model `gemma4:26b-a4b-it-qat` (Q4_0 QAT, 15.6 GB, Apache-2.0, digest `2dd70431…c4e4`), served as `biblio-reason` (`scripts/Modelfile.reason`, digest `0b04ee86…50dd`).
+- **Architecture (from the GGUF):** 30 layers. 25 sliding-window layers (window 1,024; 8 KV heads × 256) and 5 global layers (2 KV heads × 512). The KV cache at 8k in q8_0 is computed at < 0.4 GiB.
+- **Speed and VRAM:** a 6,107-token prompt is read at 366 tok/s (~17 s); generation runs at 26–32 tok/s; the first load takes 3 s from the page cache and ~115 s cold. 5.1 GB sit on the GPU, which goes from 3.8 to 7.6 GB used out of 8.0 (7 % headroom, under the 10 % the skill asks: the desktop's own VRAM use varies between 1.4 and 3.9 GB).
+- **Thinking:** on Ollama's OpenAI API Gemma 4 thinks by default; only `reasoning_effort: "none"` turns it off (`think: false` does not). Set by `reason.reasoning_effort`.
+- **Three memory traps, fixed one by one:**
+  1. Ollama 0.40 copies the whole model into private memory: 18 GB at load, 27 GB under load, and ~9 GB of swap during `ask-eval`. `PARAMETER use_mmap true` (the derived model) brings it to 8 GB.
+  2. llama-server's prompt cache (`--cache-ram`, default 8 GiB) grew 0.3–0.4 GB per request (8.0 → 9.7 GB in 5 requests; one context checkpoint instead of 32 did not help). `LLAMA_ARG_CACHE_RAM=0` in `serve-llm.ps1` keeps it at a flat 8.04 GB, with no loss of speed (the prompts share little).
+  3. `OLLAMA_MAX_LOADED_MODELS=1`: the 4B and Gemma never share the GPU.
+- **On the new Ollama, the 4B** stays fully on the GPU (3.3 GB) at 85 tok/s, as before.
+
+`eval/reasoning.jsonl`, «Razonar» (automatic metrics; the grades are the user's):
+
+| | tutor (4B) | «Razonar» 4B (`reason-v2`) | «Razonar» Gemma 4 (`reason-gemma-v3`) |
+|---|---|---|---|
+| abstained on boundary + absent | 5 of 5 | 5 of 5 | 5 of 5 |
+| false abstentions | 2 of 22 | 0 of 22 | 0 of 22 |
+| grounded | 20 of 22 | 21 of 22 | 21 of 22 |
+| invalid citations | 0 | 2 | 1 |
+| reasoning quotes found in their fragment | — | 46 % | 80 % |
+| answers with a general layer | — | 12 | 4 (r10, r11, r21, r22) |
+| seconds, median / p90 (open gate) | 17 / 20 | 35 / 46 | 51 / 64 |
+| run's minimum free RAM / swap added | — | — | 5.1 GB / 0 |
+
+Gemma's general layer is right where the 4B's was wrong: it describes the information filter as Kalman's inverse-covariance form, with a sum update for many sensors, and Black-Litterman as the fix for Markowitz's sensitivity to expected returns. It adds no general layer where the notes suffice. Two earlier Gemma runs (`reason-gemma-v1`, `-v2`) gave the same quality figures; they swapped, so their times are not used.
+
+**Pending.** For each candidate:
+- Verify its architecture and license.
+- Compute weights + KV at the chosen context.
+- Measure real VRAM, RAM, prompt and generation speed at maximum context.
+
+Record the numbers here before accepting.
+
+**Consequences.** (+) A model several times larger becomes usable on the same PC. (−) Slower answers; the first switch also loads the model from disk. (−) While it runs, ~20 GB of RAM are taken, so batch indexing waits as it does for the LLM today. (−) CLAUDE.md rule 4 is amended for this model once accepted.
+
+## ADR-058 — «Explícamelo tú» on the «Razonar» model: topics the notes do not explain are refused, unsupported claims get a marked general verdict
+
+**Date:** 2026-10-30 · **State:** Proposed · **Would supersede:** ADR-027's model, its topic check («too little evidence» only) and its «sin respaldo» as the last word
+
+**Context.**
+- **The request.** The user asked for the «Razonar» mode (ADR-056, ADR-057) in «Explícamelo tú» (ADR-027).
+- **Two weaknesses of the 4B there:**
+  - *Paraphrase.* It paraphrases quotes, and the literal checks then drop its points.
+  - *No topic check.* It never refuses: the search always returns sections, so a concept the library does not cover is compared with unrelated notes.
+- **Unsupported claims.** A claim the notes do not cover ends as «sin respaldo», true or false alike.
+- **The user's choices.** Gemma with general knowledge behind the same topic gate. The evaluation set drafted by Claude, for the user to correct.
+
+**Options.**
+1. Only move the three calls to Gemma.
+2. Gemma, and also the gate and a general verdict (chosen by the user).
+3. A per-session switch on the page.
+
+**Decision.**
+- **Model.** With `feynman.reason = true`, the three calls run on the «Razonar» model.
+- **Topic gate.** Step 1 runs the gate of ADR-056 on the concept (`reason.topic_gate`, CPU reranker released at once). A closed gate ends the session: «Tus notas no explican «…», así que no puedo comparar tu explicación con ellas».
+- **General verdict.** After the claims are checked, each «sin respaldo» claim gets one verdict from the model's own knowledge (`judge_general`, prompts `feynman_general_*`): «correcta», «incorrecta» or «dudosa», with one sentence of why. It is never cited, and is shown shaded as «Conocimiento general (no está en tus notas)». An «incorrecta» claim gets the ✗ mark. The prompt asks for «dudosa» when the model is unsure. A claim the model skips gets no verdict, never a guessed one.
+- **The proposed grade does not change:** it still counts only what the notes say (ADR-027). The user decides with the general verdicts in view.
+- **Evaluation.** `eval-feynman --reason` measures refusals and general verdicts (`general` and `refused` in the set).
+
+**Measured** (2026-10-30, `eval/feynman.draft.jsonl`, 12 explanations; `eval/results/feynman_runs.jsonl`, tags `feynman-draft-4b` and `feynman-draft-gemma`):
+
+| | 4B (ADR-027) | «Razonar» model |
+|---|---|---|
+| explanations whose check failed | 4 of 12 | 0 of 12 |
+| expected unsupported/contradicting claims found | 10 of 12 | 9 of 12 |
+| flagged claims not expected | 3 of 13 | 1 of 10 |
+| general verdicts right / wrong / unsure | — | 6 / 0 / 0 of 6 |
+| absent topic refused | no (compared with unrelated notes) | yes (1 of 1, none refused wrongly) |
+| expected missing ideas found (match at 0.75 / 0.65) | 0 / 2 of 8 | 0 / 2 of 8 |
+| seconds per explanation, median | 16 | 65 |
+
+**Two measurement problems found on the way:**
+- *The matching threshold is too strict.* At `feynman.eval_match_similarity` 0.75, clear paraphrases score 0.63–0.72 with bge-m3 and go unmatched, so «missing» recall reads 0 for both models.
+- *The draft's lists are incomplete.* It lists 1–2 missing ideas per explanation, while the models report 18 (4B) and 33 (Gemma), several of them legitimate. «missing_extra» means nothing until the user completes the lists.
+
+**Pending.** The user's corrections to the set (above all the «missing» lists), and a decision on the matching threshold. Neither model catches missing ideas well, so that part of ADR-027 is no better with this ADR.
+
+**Consequences.**
+- (+) No more failed checks.
+- (+) Fewer false alarms on claims.
+- (+) True and false claims the notes do not cover are told apart, and marked as such.
+- (+) A topic the library does not explain is said plainly.
+- (−) About 4× slower per explanation (one more call, and a larger model).
+- (−) A key idea can be summarized wrongly although its quote is literal: Gemma wrote «k grande … bajo sesgo pero alta varianza» over a correct quote. The quote check does not check the summary.
+- (−) The general verdict is the model's word, unchecked.
+
+## ADR-059 — Conversar gives the answer the room: a compact composer, a one-line header, the sources beside it, a history by date
+
+**Date:** 2026-11-01 · **State:** Accepted
+
+**Context.** The user shared a screenshot of Conversar and asked how to improve it. On the ~1480 × 705 px window it implies, the answer had 18 % of the height (~130 px, about four lines): the composer took 235 px (two rows of controls, a footnote), the header 100 px (the question appeared three times, with «Borrar» in red beside «Renombrar» and «Exportar»), and the answer's own label took 92 px more. The right panel was an empty hint, the history a flat list of rows with routes as titles (with a sideways scrollbar), and «Razonar» (ADR-056) looked like a loose button whose state was unclear and that made the level choice vanish and the row jump. Three canvases were drawn (today, proposal, the proposal with «Razonar» on) on those proportions; the user chose the proposal as drawn.
+
+**Decision.**
+- **Composer:** a one-line text box that grows with what is written (up to 160 px), and one row of controls: «Explicar / Solo ubicar», the level as a select («Nivel · Intermedio»), the «Razonar» switch, «Opciones» and the send button. The footnote moved to «Opciones». It is 110 px, from 235.
+- **«Razonar»:**
+  - It is a switch with a clear state.
+  - The level stays in its place, greyed, so nothing in the row moves.
+  - The text box's placeholder says what the mode costs («más lento, ~1 min»).
+  - A short placeholder on narrow screens, where a longer one wrapped inside a one-line box.
+- **Header:** one line, «Tema: … Editar» (the title when there is no topic yet), and a «⋯» menu with «Renombrar», «Exportar» and «Borrar», closed by Escape or a click outside.
+- **An answer's header** is one line: its label, «Basada en N fragmentos · s», and the toggles «Cómo lo busqué» and «Cómo razoné», which open one panel under it. It was a label, a line and a `<details>` per aspect.
+- **The right panel** lists the sources of the latest answer (or a search's results), each with its number, section, guide and, once the answer is complete, how many times it was cited or «sin citar». A source or a citation number opens its passage in the same panel with «← Todas las fuentes». The list sticks as the thread scrolls.
+- **The history** is grouped by day and week (Hoy, Ayer, Esta semana, Semana pasada, then the month), and the conversations started from the reader (titled with their passage) are folded into «Desde el lector · N», open when one of them is the current conversation. A search shows the matches flat. The list no longer scrolls sideways.
+- **Citations:** the full stop, comma, colon or semicolon that follows a run of citation numbers goes before them, so no gap is left between a word and its mark.
+- **Client only:** no server change. Every new text goes through `tx()`.
+
+**Checked** on my own instance of the app with a copy of the user's history (their data untouched), a conversation seeded for «Razonar», in light and dark, at 1480 × 705, 1100 × 700 and 390 × 844 px: composer 110 px; with the bubble at the top, 404 px (57 %) of the height reach the answer (it was 118 px); the groups «Hoy», «Esta semana» and «Semana pasada» and «Desde el lector · 6» folded; sources listed with 2×, 2×, 1× and «sin citar»; a source opens and goes back; the menu opens with focus on the first item and closes with Escape; the composer grows to 106 px with four lines; «Razonar» greys the level and changes the placeholder; no sideways scroll at any width; no page errors.
+
+**Consequences.** (+) The answer is what the page shows first, and its sources are always at hand. (+) The history reads like a log and is no longer noisy with the reader's passages. (−) The «Opciones» and the level are one click further than the three level buttons were. (−) «Cómo lo busqué» is a toggle, not an always-visible line, so what was searched is one click away. (−) On a phone, the composer is still 206 px (three rows of controls). Not done: a header that stays on screen while the thread scrolls.

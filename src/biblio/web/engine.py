@@ -28,11 +28,11 @@ from urllib.parse import quote, unquote
 import numpy as np
 
 from biblio.books import Book, book_id, find_books
-from biblio.config import Config
+from biblio.config import Config, reason_llm
 from biblio.conversations import ConversationStore, NewTurn
-from biblio.generate.ask import Tutor
+from biblio.generate.ask import PreparedAsk, Tutor
 from biblio.generate.citations import extract_citations
-from biblio.generate.context import Fragment
+from biblio.generate.context import Context, Fragment
 from biblio.generate.draft import (
     Drafter,
     Outline,
@@ -44,6 +44,7 @@ from biblio.generate.draft import (
     slugify,
 )
 from biblio.generate.llm import LLMClient, load_llm_client
+from biblio.generate.reason import REASON, Gate, ReasonChecks, Reasoner, topic_gate
 from biblio.generate.thread import Plan, PriorTurn, gist
 from biblio.generate.translate import translate_query
 from biblio.index.embedder import (
@@ -103,6 +104,7 @@ from biblio.practice.feynman import (
     check_claims,
     check_coverage,
     extract_ideas,
+    judge_general,
     proposed_grade,
 )
 from biblio.practice.quiz import (
@@ -147,6 +149,16 @@ from biblio.study.plan import (
     plan_folder,
 )
 from biblio.study.spotter import UNEXPLAINED, Coverage, GuideCard, spot_gaps
+from biblio.study.summaries import (
+    BOOK,
+    CHAPTER,
+    ChapterLine,
+    Summary,
+    SummaryStore,
+    book_hash,
+    summarize_book,
+    summarize_document,
+)
 from biblio.web.drafts import draft_path, outline_path
 
 _EXCERPT_CHARS = 320
@@ -267,6 +279,7 @@ class Engine:
         self._map_history: MapStore | None = None
         self._gap_store: GapStore | None = None
         self._conversations: ConversationStore | None = None
+        self._summaries: SummaryStore | None = None
 
     # --- retrieval --------------------------------------------------------------------------------
 
@@ -342,11 +355,16 @@ class Engine:
         frame: str = "",
         history: Sequence[PriorTurn] = (),
         force: bool = False,
+        reason: bool = False,
     ) -> Generator[Event, None, None]:
         """UI events: ("meta", …) once, ("token", …) while generating, ("done", …) at the end.
         In a conversation (ADR-038) the message is planned first from its topic (`frame`) and
         previous turns; a message on another topic gets ("offtopic", …) instead of an answer,
-        unless `force`."""
+        unless `force`. `reason` answers in the «Razonar» mode (ADR-056), with a ("gate", …)
+        event before "meta"; a question about a passage is always the tutor's."""
+        if reason and passage is None:
+            yield from self._ask_reasoned(question, scope, frame, history, force)
+            return
         with self.lock:
             self._release_reranker()  # before the LLM loads its model on the GPU (ADR-014)
             if self._counter is None:
@@ -403,6 +421,78 @@ class Engine:
                         "abstained": v.abstained,
                         "grounded": v.grounded,
                         "seconds": round(time.perf_counter() - t0, 1),
+                    },
+                )
+            finally:
+                llm.close()
+
+    def _ask_reasoned(
+        self,
+        question: str,
+        scope: str | None,
+        frame: str,
+        history: Sequence[PriorTurn],
+        force: bool,
+    ) -> Generator[Event, None, None]:
+        """`ask` in the «Razonar» mode (ADR-056, ADR-057): the plan, the field's names and the
+        answer all on the mode's own model, so one model stays loaded; the gate's reranker runs
+        on CPU and is released before the answer, when RAM is tightest."""
+        config = replace(self.config, llm=reason_llm(self.config))
+        with self.lock:
+            counter = self._llm_turn()
+            llm = self._llm_factory(config)
+            try:
+                base = self._base(scope)
+                tutor = Tutor(config, base, llm, counter, "off")
+                t0 = time.perf_counter()
+                plan: Plan | None = None
+                if self.config.thread.plan:
+                    plan = tutor.plan(question, frame, history)
+                    if plan.relation == "nuevo" and not force:
+                        yield "offtopic", {"frame": frame, "question": question}
+                        return
+                standalone = plan.question if plan else question
+                reranker = self._reranker_factory(self.config, "cpu")
+                try:
+                    reasoner = Reasoner(config, tutor, llm, base, reranker.score)
+                    gate = reasoner.gate(standalone)
+                finally:
+                    reranker.close()
+                yield "gate", gate_json(gate)
+                if not gate.open:  # nothing searched: the library does not explain the field
+                    prepared = PreparedAsk(standalone, Context((), 0, 0), (), base.name)
+                elif plan is not None:
+                    prepared = tutor.prepare_planned(
+                        plan, () if plan.relation == "nuevo" else history
+                    )
+                else:
+                    prepared = tutor.prepare(question)
+                yield (
+                    "meta",
+                    {
+                        "retriever": prepared.retriever,
+                        "strategy": REASON,
+                        "fragments": [fragment_json(f, self) for f in prepared.context.fragments],
+                        "plan": plan_json(plan, time.perf_counter() - t0) if plan else None,
+                        "translation": None,
+                    },
+                )
+                parts = []
+                for token in reasoner.stream(prepared, gate):
+                    parts.append(token)
+                    yield "token", {"text": token}
+                answer = reasoner.finish(prepared, "".join(parts).strip(), gate)
+                v = answer.validation
+                yield (
+                    "done",
+                    {
+                        "cited": list(v.cited),
+                        "invalid": list(v.invalid),
+                        "placeholders": v.placeholders,
+                        "abstained": v.abstained,
+                        "grounded": v.grounded,
+                        "seconds": round(time.perf_counter() - t0, 1),
+                        "reason": checks_json(answer.reason) if answer.reason else None,
                     },
                 )
             finally:
@@ -853,6 +943,7 @@ class Engine:
         self._claim_generation()
         try:
             cfg = self.config.feynman
+            config = self._feynman_config()
             with self.lock:
                 hits = self._base().search(concept, cfg.fragments * 2)
             fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
@@ -860,8 +951,15 @@ class Engine:
                 raise ValueError(f"Tus notas no tienen suficiente sobre «{concept}».")
             with self.lock:
                 self._release_reranker()  # the GPU is the LLM's now (ADR-014)
-            llm = self._llm_factory(self.config)
+            llm = self._llm_factory(config)
             try:
+                if cfg.reason:  # the notes must explain the topic (ADR-058, the gate of ADR-056)
+                    gate = self._feynman_gate(llm, config, concept)
+                    if not gate.open:
+                        raise ValueError(
+                            f"Tus notas no explican «{concept}», así que no puedo comparar tu "
+                            "explicación con ellas."
+                        )
                 with self._llm_lock:
                     ideas = extract_ideas(llm, cfg, concept, fragments)
             finally:
@@ -890,7 +988,7 @@ class Engine:
             ideas = [Idea(i["text"], i["fragment"], i["quote"]) for i in session.ideas]
             with self.lock:
                 self._release_reranker()
-            llm = self._llm_factory(self.config)
+            llm = self._llm_factory(self._feynman_config())
             try:
                 with self._llm_lock:
                     coverage = check_coverage(llm, cfg, session.concept, ideas, explanation)
@@ -909,10 +1007,20 @@ class Engine:
                 yield "coverage", {"ideas": ideas_json}
                 with self._llm_lock:
                     claims = check_claims(llm, cfg, session.concept, fragments, explanation)
+                    # the session only started because the notes explain the topic (ADR-058)
+                    if claims and cfg.reason:
+                        claims = judge_general(llm, cfg, session.concept, claims)
             finally:
                 llm.close()
             claims_json = [
-                {"text": c.text, "verdict": c.verdict, "fragment": c.fragment, "quote": c.quote}
+                {
+                    "text": c.text,
+                    "verdict": c.verdict,
+                    "fragment": c.fragment,
+                    "quote": c.quote,
+                    "general": c.general,
+                    "general_note": c.general_note,
+                }
                 for c in claims or []
             ]
             yield "claims", {"claims": claims_json, "failed": claims is None}
@@ -929,6 +1037,22 @@ class Engine:
             )
         finally:
             self._generating.release()
+
+    def _feynman_config(self) -> Config:
+        """«Explícamelo tú» on the «Razonar» model when `feynman.reason` (ADR-058)."""
+        if not self.config.feynman.reason:
+            return self.config
+        return replace(self.config, llm=reason_llm(self.config))
+
+    def _feynman_gate(self, llm: LLMClient, config: Config, concept: str) -> Gate:
+        """The topic gate of ADR-056 on the concept; its CPU reranker is released at once."""
+        reranker = self._reranker_factory(self.config, "cpu")
+        try:
+            with self.lock:
+                base = self._base()
+            return topic_gate(llm, config, base, reranker.score, concept)
+        finally:
+            reranker.close()
 
     def feynman_confirm(self, session_id: int, result: str) -> dict[str, Any] | None:
         """The grade the user kept, recorded as practice on each section that gave an idea, so it
@@ -1239,6 +1363,7 @@ class Engine:
         passage: Hit | None = None,
         level: str | None = None,
         force: bool = False,
+        reason: bool = False,
     ) -> Generator[Event, None, None]:
         """`ask`, stored in the history when the answer is complete: the "done" event carries the
         conversation id. An error is stored too and sent as an ("error", …) event with the id.
@@ -1259,13 +1384,16 @@ class Engine:
                 frame=frame,
                 history=history,
                 force=force,
+                reason=reason,
             )
             for name, data in asked:
                 if name == "offtopic":  # nothing answered, nothing stored: the page asks
                     yield name, {**data, "conversation_id": conversation_id}
                     return
-                if name == "meta":
-                    meta = data
+                if name == "gate":  # the «Razonar» mode's topic gate, kept with the turn
+                    meta["gate"] = data
+                elif name == "meta":
+                    meta = {**meta, **data}
                 elif name == "token":
                     parts.append(data["text"])
                 elif name == "done":
@@ -1276,7 +1404,7 @@ class Engine:
                         strategy,
                         "done",
                         answer="".join(parts).strip(),
-                        payload={**meta, "done": data, "level": level},
+                        payload={**meta, "done": data, "level": level, "reason": reason},
                     )
                     cid, _ = self.conversations.add_turn(conversation_id, turn)
                     plan = meta.get("plan")
@@ -1887,15 +2015,237 @@ class Engine:
         return f"{slug}.md", "text/markdown; charset=utf-8", text
 
     def note_list(self) -> list[dict[str, Any]]:
-        """Every indexed note for the «Biblioteca» page (ADR-033): path, title, read mark, and
-        the book it is a chapter of, if any (ADR-053)."""
+        """Every indexed note for the «Biblioteca» page (ADR-033): path, title, read mark, the
+        book it is a chapter of, if any (ADR-053), when its text last changed, and whether it
+        has practice and sections due today (ADR-055)."""
         with self.lock:
-            rows = self._conn.execute("SELECT path, title FROM documents ORDER BY path").fetchall()
+            rows = self._conn.execute(
+                "SELECT path, title, indexed_at FROM documents ORDER BY path"
+            ).fetchall()
         reads = self.practice.reads()
+        practiced = {doc for doc, _ in self.practice.section_histories()}
+        due = {s.key[0] for s in self._today_queue()[0]}
         folder = self.config.library.books_folder
         return [
-            {"path": p, "title": t, "read": p in reads, "book": book_id(p, folder)} for p, t in rows
+            {
+                "path": p,
+                "title": t,
+                "read": p in reads,
+                "book": book_id(p, folder),
+                "changed": changed,
+                "practiced": p in practiced,
+                "due": p in due,
+            }
+            for p, t, changed in rows
         ]
+
+    # --- summaries of a chapter, note or book (ADR-056 stage E) -------------------------------
+
+    @property
+    def summaries(self) -> SummaryStore:
+        if self._summaries is None:
+            self._summaries = SummaryStore(self.config.understanding.db)
+        return self._summaries
+
+    def _document(self, path: str) -> tuple[str, str, list[Fragment]] | None:
+        """(SHA-256, title, content sections in order, numbered from 1) of an indexed note."""
+        with self.lock:
+            row = self._conn.execute(
+                "SELECT id, sha256, title FROM documents WHERE path = ?", (path,)
+            ).fetchone()
+            if row is None:
+                return None
+            chunks = self._conn.execute(
+                "SELECT heading_path, text, start_line, end_line FROM chunks "
+                "WHERE document_id = ? ORDER BY ordinal",
+                (row[0],),
+            ).fetchall()
+        fragments: list[Fragment] = []
+        for heading, text, start, end in chunks:
+            heading_path = tuple(json.loads(heading))
+            if is_content_heading(heading_path[-1]):  # tables of contents are not content
+                fragments.append(Fragment(len(fragments) + 1, path, heading_path, text, start, end))
+        return row[1], row[2], fragments
+
+    def _summarize(
+        self,
+        config: Config,
+        path: str,
+        title: str,
+        sha: str,
+        fragments: Sequence[Fragment],
+        emit: Callable[[Event], None],
+        chapter: tuple[int, int] | None = None,
+    ) -> Summary | None:
+        """One document's summary on `config`'s model, stored; progress as ("progress", …)."""
+        if self._counter is None:
+            self._counter = self._counter_factory(self.config)
+        counter = self._counter
+        llm = self._llm_factory(config)
+        try:
+
+            def progress(done: int, total: int) -> None:
+                data: dict[str, Any] = {"done": done, "total": total}
+                if chapter is not None:
+                    data["chapter"], data["chapters"] = chapter
+                emit(("progress", data))
+
+            with self._llm_lock:
+                made = summarize_document(
+                    llm, self.config.understanding, title, fragments, counter, progress
+                )
+        finally:
+            llm.close()
+        if made is None:
+            return None
+        overview, points = made
+        return self.summaries.put(
+            Summary(CHAPTER, path, title, sha, config.llm.model, overview, tuple(points))
+        )
+
+    def _stale(self, summaries: Sequence[Summary]) -> set[tuple[str, str]]:
+        """The summaries whose text changed since they were made (or is no longer indexed)."""
+        with self.lock:
+            hashes = dict(self._conn.execute("SELECT path, sha256 FROM documents").fetchall())
+        books = {b.id: b for b in self._books()} if any(s.kind == BOOK for s in summaries) else {}
+        stale = set()
+        for s in summaries:
+            if s.kind == CHAPTER:
+                current = hashes.get(s.key)
+            else:
+                found = books.get(s.key)
+                shas = [hashes[c.path] for c in found.chapters if c.path in hashes] if found else []
+                current = book_hash(shas) if found else None
+            if current != s.source_hash:
+                stale.add((s.kind, s.key))
+        return stale
+
+    def summaries_list(self) -> dict[str, Any]:
+        """Every kept summary, for the library's «Resúmenes» tab: what it is, where it sits (its
+        book or area), when and with which model, an excerpt, and whether its text changed."""
+        kept = self.summaries.all()
+        stale = self._stale(kept)
+        books = {b.id: b for b in self._books()}
+        folder = self.config.library.books_folder
+        out = []
+        for s in kept:
+            book = books.get(s.key if s.kind == BOOK else book_id(s.key, folder) or "")
+            out.append(
+                {
+                    "kind": s.kind,
+                    "key": s.key,
+                    "title": s.title,
+                    "model": s.model,
+                    "created": s.created,
+                    "overview": s.overview,
+                    "points": len(s.points),
+                    "chapters": len(s.chapters),
+                    "book": {"id": book.id, "title": book.title} if book else None,
+                    "area": book.area if book else s.key.split("/")[0] if "/" in s.key else "",
+                    "stale": (s.kind, s.key) in stale,
+                }
+            )
+        return {"summaries": out}
+
+    def summary(self, kind: str, key: str) -> dict[str, Any] | None:
+        """One kept summary as the reader shows it, without the LLM; None if there is none."""
+        found = self.summaries.get(kind, key)
+        if found is None:
+            return None
+        return {**summary_json(found, cached=True), "stale": bool(self._stale([found]))}
+
+    def understand_note(self, path: str) -> Generator[Event, None, None]:
+        """A chapter's or note's summary, on the «Razonar» model (the user's choice): the kept one
+        when its text has not changed, else ("progress", …) per window and then ("summary", …).
+        Raises ValueError (before any event) for a note that is not indexed or has no text."""
+        found = self._document(path)
+        if found is None:
+            raise ValueError("Esa nota no está en el índice.")
+        sha, title, fragments = found
+        config = replace(self.config, llm=reason_llm(self.config))
+        kept = self.summaries.get(CHAPTER, path)
+        if kept is not None and kept.source_hash == sha and kept.model == config.llm.model:
+            yield "summary", summary_json(kept, cached=True)
+            return
+        if not fragments:
+            raise ValueError("Esta nota no tiene texto que resumir.")
+        self._claim_generation()
+        try:
+            with self.lock:
+                self._release_reranker()  # the GPU is the LLM's now (ADR-014)
+            made = yield from _threaded(
+                lambda emit: self._summarize(config, path, title, sha, fragments, emit)
+            )
+            if made is None:
+                raise ValueError("No pude resumir esta nota; inténtalo otra vez.")
+            yield "summary", summary_json(made)
+        finally:
+            self._generating.release()
+
+    def understand_book(self, book: str) -> Generator[Event, None, None]:
+        """A book's overview from its chapters' summaries, all on the tutor's model (the user's
+        choice: a first book takes minutes, not the ~40 of the «Razonar» model). Chapters already
+        summarized, by either model, are reused when their text has not changed."""
+        found = next((b for b in self._books() if b.id == book), None)
+        if found is None:
+            raise ValueError("No encontré ese libro.")
+        documents = {c.path: self._document(c.path) for c in found.chapters}
+        chapters = [c for c in found.chapters if documents[c.path] is not None]
+        source = book_hash([documents[c.path][0] for c in chapters])  # type: ignore[index]
+        kept = self.summaries.get(BOOK, book)
+        if kept is not None and kept.source_hash == source:
+            yield "summary", summary_json(kept, cached=True)
+            return
+        self._claim_generation()
+        try:
+            with self.lock:
+                self._release_reranker()
+
+            def work(emit: Callable[[Event], None]) -> Summary:
+                lines: list[ChapterLine] = []
+                for n, chapter in enumerate(chapters, start=1):
+                    sha, _, fragments = documents[chapter.path]  # type: ignore[misc]
+                    summary = self.summaries.get(CHAPTER, chapter.path)
+                    if (summary is None or summary.source_hash != sha) and fragments:
+                        summary = self._summarize(
+                            self.config,
+                            chapter.path,
+                            chapter.title,
+                            sha,
+                            fragments,
+                            emit,
+                            (n, len(chapters)),
+                        )
+                    emit(("progress", {"chapter": n, "chapters": len(chapters)}))
+                    if summary is not None and summary.source_hash == sha:
+                        lines.append(ChapterLine(chapter.path, chapter.title, summary.overview))
+                if not lines:
+                    raise ValueError("No pude resumir ningún capítulo de este libro.")
+                llm = self._llm_factory(self.config)
+                try:
+                    with self._llm_lock:
+                        overview, invalid = summarize_book(
+                            llm, self.config.understanding, found.title, lines
+                        )
+                finally:
+                    llm.close()
+                return self.summaries.put(
+                    Summary(
+                        BOOK,
+                        book,
+                        found.title,
+                        source,
+                        self.config.llm.model,
+                        overview,
+                        chapters=tuple(lines),
+                        invalid=invalid,
+                    )
+                )
+
+            made = yield from _threaded(work)
+            yield "summary", summary_json(made)
+        finally:
+            self._generating.release()
 
     # --- books (ADR-053) --------------------------------------------------------------------
 
@@ -2257,7 +2607,10 @@ class Engine:
             self._conversations.close()
         if self._map_history is not None:
             self._map_history.close()
+        if self._summaries is not None:
+            self._summaries.close()
         self._practice = self._conversations = self._map_history = None
+        self._summaries = None
         self._gap_store = None  # it shares the practice connection
 
     # --- «Reset» (ADR-040) --------------------------------------------------------------------
@@ -2440,6 +2793,42 @@ def question_json(q: StoredQuestion) -> dict[str, Any]:
 
 
 _KIND_SLUGS = {"flow": "flujo", "sequence": "secuencia", "fishbone": "causa-efecto"}
+
+
+def summary_json(summary: Summary, cached: bool = False) -> dict[str, Any]:
+    """A summary as the reader shows it (ADR-056 stage E)."""
+    return {
+        "kind": summary.kind,
+        "key": summary.key,
+        "title": summary.title,
+        "model": summary.model,
+        "created": summary.created,
+        "cached": cached,
+        "overview": summary.overview,
+        "points": [asdict(p) for p in summary.points],
+        "chapters": [asdict(c) for c in summary.chapters],
+        "invalid": list(summary.invalid),
+    }
+
+
+def gate_json(gate: Gate) -> dict[str, Any]:
+    """The topic gate of the «Razonar» mode (ADR-056), as the page shows it."""
+    return {
+        "open": gate.open,
+        "subject": gate.subject,
+        "subjects": list(gate.subjects),
+        "sections": gate.sections,
+    }
+
+
+def checks_json(checks: ReasonChecks) -> dict[str, Any]:
+    return {
+        "gate": gate_json(checks.gate),
+        "layers": list(checks.layers),
+        "quotes": checks.quotes,
+        "quotes_found": checks.quotes_found,
+        "general_citations": checks.general_citations,
+    }
 
 
 def plan_json(plan: Plan, seconds: float) -> dict[str, Any]:

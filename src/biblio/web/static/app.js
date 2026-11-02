@@ -225,7 +225,7 @@ const app = {
   folders: [], // [{path, documents}]
   llmRunning: false,
   settings: Object.assign(
-    { mode: "explain", precision: "precise", k: 8, scope: "", strategy: "direct", level: "intermediate" },
+    { mode: "explain", precision: "precise", k: 8, scope: "", strategy: "direct", level: "intermediate", reason: false },
     store.get("biblio.settings", {}),
   ),
   thread: [], // the open conversation's messages, from the server (ADR-023)
@@ -242,12 +242,23 @@ const LEVEL_LABELS = { beginner: tx("Principiante"), intermediate: tx("Intermedi
 function setLevel(level) {
   if (!LEVEL_LABELS[level]) return;
   app.settings.level = level;
-  for (const radio of document.querySelectorAll('input[name="level"]')) radio.checked = radio.value === level;
+  $("set-level").value = level;
   saveSettings();
 }
 
+const COMPOSER_NARROW = window.matchMedia("(max-width: 720px)"); // a one-line box needs a short placeholder
+
+// «Razonar» (ADR-056) answers in its own layers, so the level does not apply to it: it stays
+// where it is, greyed, so that nothing in the row moves; the placeholder says what the mode costs
 function syncLevelChoice() {
-  $("level-choice").hidden = app.settings.mode !== "explain";
+  const explain = app.settings.mode === "explain";
+  const reason = explain && Boolean(app.settings.reason);
+  $("level-choice").hidden = !explain;
+  $("set-level").disabled = reason;
+  $("reason-choice").hidden = !explain;
+  $("message").placeholder = COMPOSER_NARROW.matches
+    ? (reason ? tx("Pregunta algo: razonaré con tus notas…") : tx("Pregunta algo o escribe un tema…"))
+    : (reason ? tx("Pregunta algo: razonaré con tus notas (más lento, ~1 min)…") : tx("Pregunta algo o escribe un tema para ubicarlo en tus notas…"));
 }
 
 function saveSettings() {
@@ -430,14 +441,42 @@ function citeButton(turn, number, known) {
   return button;
 }
 
+/** «…artificial [1].» reads «…artificial.[1]»: a full stop, comma, colon or semicolon that follows
+ *  a run of citation numbers goes before them, so no gap is left between a word and its mark. */
+function tidyCites(root) {
+  for (const cite of root.querySelectorAll("button.cite")) {
+    const before = cite.previousSibling;
+    if (before && before.nodeType === 1 && before.classList.contains("cite")) continue; // not the first of its run
+    let last = cite;
+    while (last.nextSibling && last.nextSibling.nodeType === 1 && last.nextSibling.classList.contains("cite")) last = last.nextSibling;
+    const after = last.nextSibling;
+    const mark = after && after.nodeType === 3 ? after.nodeValue.match(/^[.,;:]/) : null;
+    if (!mark) continue;
+    after.nodeValue = after.nodeValue.slice(1);
+    if (before && before.nodeType === 3) before.nodeValue = before.nodeValue.replace(/\s+$/, "");
+    cite.before(document.createTextNode(mark[0]));
+  }
+}
+
 function answerNode(turn) {
   const known = new Set((turn.fragments || []).map((f) => f.number));
   const node = markdownNode(turn.answer || "", (n) => citeButton(turn, Number(n), known), "md answer");
+  tidyCites(node);
   // what the model adds of its own, marked by the prompt (ADR-038): a connection between areas the
   // notes do not write, or an example they do not have
   for (const p of node.querySelectorAll("p")) {
     if (/^\s*Relación propuesta/i.test(p.textContent)) p.classList.add("proposed-relation");
     if (/^\s*Ejemplo ilustrativo/i.test(p.textContent)) p.classList.add("proposed-relation", "illustrative");
+  }
+  // «Razonar» (ADR-056): the general-knowledge layer, up to the next layer's title
+  if (turn.reason) {
+    let general = false;
+    for (const child of node.children) {
+      const text = child.textContent.trim();
+      if (/^Conocimiento general/i.test(text)) general = true;
+      else if (/^(Según tus notas|Razonamiento|Respuesta)\b/i.test(text)) general = false;
+      if (general) child.classList.add("general-knowledge");
+    }
   }
   // formulas in the answer, once it is complete (reader.js, KaTeX vendored: ADR-031)
   return turn.done && typeof renderMathIn === "function" ? renderMathIn(node) : node;
@@ -568,15 +607,35 @@ function followupsNode(turn) {
   return row;
 }
 
-/** «Entendí: …» and the searches, when the message was read with the conversation (ADR-038). */
-function planNode(turn) {
+/** «Entendí: …» and the searches, when the message was read with the conversation (ADR-038):
+ *  a toggle in the answer's header line (`label`) and what it opens (`body`). */
+function planInfo(turn) {
   const plan = turn.plan;
-  const box = el("details", "plan-note");
   const same = plan.question.trim().toLowerCase() === turn.question.trim().toLowerCase();
-  box.append(el("summary", null, same ? tx("Cómo lo busqué") : tx("Entendí: «{0}»", plan.question)));
   const searches = [plan.question, ...plan.searches];
-  box.append(el("p", "small muted", tx("Búsquedas: {0}{1}", searches.join(" · "), plan.relate ? tx(" · relacionando áreas") : "")));
-  return box;
+  const body = el("div");
+  body.append(el("p", "small muted", tx("Búsquedas: {0}{1}", searches.join(" · "), plan.relate ? tx(" · relacionando áreas") : "")));
+  return { label: same ? tx("Cómo lo busqué") : tx("Entendí: «{0}»", plan.question), body };
+}
+
+/** «Cómo razoné» (ADR-056): the topic gate and, once answered, the checks of the answer. */
+function reasonInfo(turn) {
+  const gate = turn.gate;
+  const box = el("div");
+  if (gate.open) {
+    box.append(el("p", "small muted", tx("Tema: «{0}» · tus notas lo explican ({1} secciones).", gate.subject, gate.sections)));
+  } else {
+    const tried = gate.subjects.length ? gate.subjects.join(" · ") : tx("sin tema reconocible");
+    box.append(el("p", "small muted", tx("Busqué el tema como: {0}. Tus notas no lo explican, así que no respondo con conocimiento propio.", tried)));
+  }
+  const checks = turn.done && turn.done.reason;
+  if (checks && checks.quotes) {
+    box.append(el("p", "small muted", tx("Citas del razonamiento encontradas en su fragmento: {0} de {1}.", checks.quotes_found, checks.quotes)));
+  }
+  if (checks && checks.layers.includes("general")) {
+    box.append(el("p", "small muted", tx("Incluye conocimiento general marcado: no está en tus notas ni lleva citas.")));
+  }
+  return { label: tx("Cómo razoné"), body: box };
 }
 
 function offtopicNode(turn) {
@@ -613,8 +672,11 @@ function turnNode(turn) {
   const meta = el("div", "reply-meta");
   const explain = turn.mode === "explain";
   const levelLabel = explain && turn.level ? ` · ${LEVEL_LABELS[turn.level] || turn.level}` : "";
-  meta.append(el("span", `tag ${explain ? "explain" : ""}`, explain ? tx("Explicación{0}", levelLabel) : tx("Ubicación")));
+  const label = !explain ? tx("Ubicación") : turn.reason ? tx("Razonamiento") : tx("Explicación{0}", levelLabel);
+  meta.append(el("span", `tag ${explain ? "explain" : ""}${turn.reason ? " reason" : ""}`, label));
   reply.append(meta);
+  // how the answer was reached: toggles at the end of the header line, one panel under it
+  const how = explain && !turn.offtopic && turn.status !== "error" ? [turn.plan && planInfo(turn), turn.gate && reasonInfo(turn)].filter(Boolean) : [];
 
   if (turn.status === "error") {
     reply.append(el("p", "error", turn.error));
@@ -630,13 +692,29 @@ function turnNode(turn) {
     reply.append(offtopicNode(turn));
   } else {
     const n = (turn.fragments || []).length;
-    if (!turn.fragments) meta.append(document.createTextNode(turn.planning ? tx("Entendiendo tu pregunta…") : tx("Buscando en tus notas…")));
+    // «Razonar» plans, then checks the topic (ADR-056), then searches
+    if (!turn.fragments && turn.reason) meta.append(document.createTextNode(turn.gate ? tx("Buscando en tus notas…") : tx("Entendiendo tu pregunta y comprobando si tus notas la tratan…")));
+    else if (!turn.fragments) meta.append(document.createTextNode(turn.planning ? tx("Entendiendo tu pregunta…") : tx("Buscando en tus notas…")));
     else if (!turn.done) meta.append(document.createTextNode(tx("Redactando con {0} fragmentos…", n)));
     else {
       const strategy = turn.strategy === "map-reduce" ? tx(" · por guía (experimental)") : "";
       meta.append(document.createTextNode(tx("Basada en {0} fragmentos · {1} s{2}{3}", n, turn.done.seconds, scopeLabel(turn.scope), strategy)));
     }
-    if (turn.plan) reply.append(planNode(turn));
+    how.forEach((info, i) => {
+      const toggle = el("button", "how-toggle", info.label);
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", String(turn.howOpen === i));
+      toggle.addEventListener("click", () => {
+        turn.howOpen = turn.howOpen === i ? null : i;
+        rerender(turn);
+      });
+      meta.append(toggle);
+    });
+    if (how[turn.howOpen]) {
+      const panel = el("div", "how-panel");
+      panel.append(how[turn.howOpen].body);
+      reply.append(panel);
+    }
     if (turn.plan && turn.plan.relation === "nuevo") {
       reply.append(el("p", "small muted", tx("Respondida fuera del tema de la conversación; para seguir con este tema, abre una conversación nueva.")));
     }
@@ -663,6 +741,7 @@ function rerender(turn) {
   const fresh = turnNode(turn);
   if (old) old.replaceWith(fresh);
   else $("thread").append(fresh);
+  if (!app.selection) showSource(); // the sources of the latest answer, as they arrive
 }
 
 // --- the source panel ----------------------------------------------------------------------
@@ -679,12 +758,55 @@ function sourceItems(turn) {
   return turn.mode === "explain" ? turn.fragments || [] : turn.hits || [];
 }
 
+/** The latest message that has sources to list: the answer's fragments or a search's results. */
+function latestSourceTurn() {
+  for (let i = app.thread.length - 1; i >= 0; i--) if (sourceItems(app.thread[i]).length) return app.thread[i];
+  return null;
+}
+
+/** How many times each source's number is cited in an answer. */
+function citationCounts(turn) {
+  const counts = new Map();
+  for (const match of (turn.answer || "").matchAll(/\[(\d+(?:\s*[,;]\s*\d+)*)\]/g)) {
+    for (const part of match[1].split(/[,;]/)) counts.set(Number(part), (counts.get(Number(part)) || 0) + 1);
+  }
+  return counts;
+}
+
+function renderSourceList(turn) {
+  const items = sourceItems(turn);
+  const explain = turn.mode === "explain";
+  const counts = explain ? citationCounts(turn) : new Map();
+  $("source-list-title").textContent = explain ? tx("Fuentes de esta respuesta · {0}", items.length) : tx("Resultados de esta búsqueda · {0}", items.length);
+  $("source-cards").replaceChildren(...items.map((item, index) => {
+    const number = explain ? item.number : index + 1;
+    const times = counts.get(number) || 0;
+    const judged = explain && Boolean(turn.done); // how often it was cited is known once the answer is
+    const button = el("button", `source-card${judged && !times ? " uncited" : ""}`);
+    button.type = "button";
+    button.append(el("span", "source-card-n", String(number)));
+    const body = el("span", "source-card-body");
+    body.append(el("span", "source-card-title", item.sections.at(-1) || item.guide));
+    const folder = item.doc_path.split("/").slice(-2, -1)[0] || item.guide;
+    const cited = !judged ? "" : times ? tx(" · citada {0}×", times) : tx(" · sin citar");
+    body.append(el("span", "source-card-where", tx("{0} · líneas {1}–{2}{3}", folder, item.lines[0], item.lines[1], cited)));
+    button.append(body);
+    button.addEventListener("click", () => selectSource(turn, index));
+    const row = el("li");
+    row.append(button);
+    return row;
+  }));
+}
+
 function showSource() {
   const turn = app.selection && app.thread.find((t) => t.id === app.selection.turn);
   const items = turn ? sourceItems(turn) : [];
   const item = items[app.selection ? app.selection.index : -1];
-  $("source-empty").hidden = Boolean(item);
+  const listed = item ? null : latestSourceTurn();
   $("source-view").hidden = !item;
+  $("source-list-view").hidden = !listed;
+  $("source-empty").hidden = Boolean(item || listed);
+  if (listed) renderSourceList(listed);
   if (!item) return;
   const label = turn.mode === "explain" ? tx("Fuente") : tx("Resultado");
   const number = turn.mode === "explain" ? item.number : app.selection.index + 1;
@@ -743,11 +865,13 @@ async function runExplain(turn) {
     conversation_id: app.conversationId,
     level: turn.level,
     force: Boolean(turn.force),
+    reason: Boolean(turn.reason),
   };
   turn.planning = true;
   try {
     await streamEvents("/api/ask", body, (name, data) => {
-      if (name === "meta") {
+      if (name === "gate") turn.gate = data; // «Razonar»: whether the notes explain the topic
+      else if (name === "meta") {
         turn.fragments = data.fragments;
         turn.plan = data.plan || null;
       } else if (name === "token") turn.answer += data.text;
@@ -782,6 +906,7 @@ async function send(raw, overrides = {}) {
     scope: overrides.scope !== undefined ? overrides.scope : parsed.scope ?? app.settings.scope,
     strategy: app.settings.strategy,
     level: app.settings.level,
+    reason: Boolean(app.settings.reason),
     status: "pending",
     force: Boolean(overrides.force),
   };
@@ -832,6 +957,8 @@ function turnFromRecord(record) {
   };
   if (record.mode === "explain") {
     turn.level = record.payload.level || null;
+    turn.reason = Boolean(record.payload.reason);
+    turn.gate = record.payload.gate || null;
     turn.answer = record.answer;
     turn.fragments = record.payload.fragments || [];
     turn.done = record.payload.done || null;
@@ -884,6 +1011,43 @@ async function openConversation(id) {
   if (last && last.firstElementChild) last.firstElementChild.scrollIntoView({ block: "start" });
 }
 
+// a conversation that «Explícame esto» started in the reader (ADR-031) is titled with its passage;
+// no accent in the pattern: the page keeps no accented literal outside tx()
+const READER_CHAT = /^Expl.came este pasaje de «/;
+
+function historyButton(c, title) {
+  const li = el("li");
+  const button = el("button", "history-item");
+  button.type = "button";
+  button.dataset.id = String(c.id);
+  button.append(el("strong", null, title));
+  const count = `${c.turns} ${c.turns === 1 ? tx("mensaje") : tx("mensajes")}`;
+  button.append(el("span", null, `${formatWhen(c.updated)} · ${count}`));
+  if (c.snippet) button.append(el("span", "history-snippet", c.snippet));
+  button.addEventListener("click", () => openConversation(c.id));
+  li.append(button);
+  if (c.id === app.conversationId) app.title = c.title;
+  return li;
+}
+
+/** «Hoy», «Ayer», «Esta semana», «Semana pasada», then the month. */
+function historyGroup(iso, now) {
+  const day = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const monday = (d) => {
+    const m = day(d);
+    m.setDate(m.getDate() - ((m.getDay() + 6) % 7));
+    return m;
+  };
+  const when = new Date(iso);
+  const days = Math.round((day(now) - day(when)) / 86400000);
+  if (days <= 0) return tx("Hoy");
+  if (days === 1) return tx("Ayer");
+  const weeks = Math.round((monday(now) - monday(when)) / (7 * 86400000));
+  if (weeks <= 0) return tx("Esta semana");
+  if (weeks === 1) return tx("Semana pasada");
+  return when.toLocaleDateString(i18nLocale(), { month: "long", year: "numeric" });
+}
+
 async function loadHistory() {
   const query = $("history-search").value.trim();
   let conversations = [];
@@ -893,22 +1057,35 @@ async function loadHistory() {
   } catch {
     /* keep the list empty */
   }
-  const items = conversations.map((c) => {
-    const li = el("li");
-    const button = el("button", "history-item");
-    button.type = "button";
-    button.dataset.id = String(c.id);
-    button.append(el("strong", null, c.title));
-    const count = `${c.turns} ${c.turns === 1 ? tx("mensaje") : tx("mensajes")}`;
-    button.append(el("span", null, `${formatWhen(c.updated)} · ${count}`));
-    if (c.snippet) button.append(el("span", "history-snippet", c.snippet));
-    button.addEventListener("click", () => openConversation(c.id));
-    li.append(button);
-    if (c.id === app.conversationId) app.title = c.title;
-    return li;
-  });
+  const items = [];
+  if (query) {
+    items.push(...conversations.map((c) => historyButton(c, c.title))); // a search: the matches, flat
+  } else {
+    const now = new Date();
+    let group = null;
+    for (const c of conversations.filter((x) => !READER_CHAT.test(x.title))) {
+      const name = historyGroup(c.updated, now);
+      if (name !== group) {
+        group = name;
+        items.push(el("li", "history-group", name));
+      }
+      items.push(historyButton(c, c.title));
+    }
+    const fromReader = conversations.filter((x) => READER_CHAT.test(x.title));
+    if (fromReader.length) {
+      const folded = el("details", "history-reader");
+      folded.open = fromReader.some((c) => c.id === app.conversationId);
+      folded.append(el("summary", null, tx("Desde el lector · {0}", fromReader.length)));
+      const inner = el("ul", "history-inner");
+      inner.append(...fromReader.map((c) => historyButton(c, c.title.replace(READER_CHAT, ""))));
+      folded.append(inner);
+      const row = el("li");
+      row.append(folded);
+      items.push(row);
+    }
+  }
   $("history-list").replaceChildren(...items);
-  $("history-empty").hidden = items.length > 0;
+  $("history-empty").hidden = conversations.length > 0;
   $("history-empty").textContent = query
     ? tx("Ninguna conversación contiene esas palabras.")
     : tx("Tus conversaciones aparecerán aquí.");
@@ -926,7 +1103,10 @@ function markActiveConversation() {
 function renderConversationBar() {
   $("conversation-bar").hidden = !app.conversationId;
   $("conversation-title").textContent = app.title;
-  $("conversation-frame").hidden = !app.frame || !$("conversation-frame-form").hidden;
+  // one line: the topic when there is one (and is not being edited), else the title
+  const framed = Boolean(app.frame) && $("conversation-frame-form").hidden;
+  $("conversation-frame").hidden = !framed;
+  $("conversation-title").hidden = framed;
   $("conversation-frame-text").textContent = app.frame;
 }
 
@@ -955,6 +1135,39 @@ function bindConversationFrame() {
       conversationStatus(error.message);
     }
     close();
+  });
+}
+
+/** «⋯»: renombrar, exportar y borrar, apart from the line that says what the conversation is about. */
+function bindConversationMenu() {
+  const button = $("conversation-menu-button");
+  const menu = $("conversation-menu");
+  const items = () => [...menu.querySelectorAll("button")];
+  const close = (focus = false) => {
+    menu.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    if (focus) button.focus();
+  };
+  button.addEventListener("click", () => {
+    const open = menu.hidden;
+    menu.hidden = !open;
+    button.setAttribute("aria-expanded", String(open));
+    if (open) items()[0].focus();
+  });
+  menu.addEventListener("click", () => close()); // each item then runs its own action
+  menu.addEventListener("keydown", (event) => {
+    const at = items().indexOf(document.activeElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      items()[(at + step + items().length) % items().length].focus();
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (!menu.hidden && !$("conversation-actions").contains(event.target)) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !menu.hidden) close(true);
   });
 }
 
@@ -1009,7 +1222,7 @@ function bindHistory() {
   });
   const showRename = (on) => {
     $("conversation-rename").hidden = !on;
-    $("conversation-title").hidden = on;
+    $("conversation-line").hidden = on;
     $("conversation-actions").hidden = on;
   };
   $("conversation-rename-start").addEventListener("click", () => {
@@ -1100,11 +1313,16 @@ function bindSettings() {
       syncLevelChoice();
     });
   }
-  for (const radio of document.querySelectorAll('input[name="level"]')) {
-    radio.addEventListener("change", () => setLevel(radio.value));
-  }
+  $("set-level").addEventListener("change", () => setLevel($("set-level").value));
+  $("set-reason").checked = Boolean(app.settings.reason);
+  $("set-reason").addEventListener("change", () => {
+    app.settings.reason = $("set-reason").checked;
+    saveSettings();
+    syncLevelChoice();
+  });
   setLevel(app.settings.level);
   syncLevelChoice();
+  COMPOSER_NARROW.addEventListener("change", syncLevelChoice);
   $("settings-toggle").addEventListener("click", () => {
     const open = $("settings").hidden;
     $("settings").hidden = !open;
@@ -1114,7 +1332,14 @@ function bindSettings() {
 
 function bindComposer() {
   const message = $("message");
-  message.addEventListener("input", () => message.setCustomValidity(""));
+  const fit = () => {
+    message.style.height = "auto";
+    message.style.height = `${Math.min(message.scrollHeight, 160)}px`;
+  };
+  message.addEventListener("input", () => {
+    message.setCustomValidity("");
+    fit();
+  });
   message.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
@@ -1126,6 +1351,7 @@ function bindComposer() {
     const text = message.value;
     if (!text.trim() || app.busy) return;
     message.value = "";
+    fit();
     send(text);
   });
   $("new-thread").addEventListener("click", () => {
@@ -1135,6 +1361,12 @@ function bindComposer() {
   });
   $("source-prev").addEventListener("click", () => stepSource(-1));
   $("source-next").addEventListener("click", () => stepSource(1));
+  $("source-back").addEventListener("click", () => {
+    const previous = app.selection && app.thread.find((t) => t.id === app.selection.turn);
+    app.selection = null;
+    if (previous) rerender(previous); // its number is no longer pressed
+    showSource();
+  });
 }
 
 // Sticky panels sit below the top bar, whose height changes when it wraps.
@@ -1155,6 +1387,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderThread();
   showSource();
   bindConversationFrame();
+  bindConversationMenu();
   if (app.conversationId) openConversation(app.conversationId);
   loadHistory();
   window.addEventListener("hashchange", route);

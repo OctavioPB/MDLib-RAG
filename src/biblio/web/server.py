@@ -528,6 +528,7 @@ def make_handler(
                 "/api/practice/review": self._practice_review,
                 "/api/practice/flag": self._practice_flag,
                 "/api/feynman/start": self._feynman_start,
+                "/api/understand": self._understand,
                 "/api/feynman/check": self._feynman_check,
                 "/api/feynman/confirm": self._feynman_confirm,
                 "/api/feynman/vote": self._feynman_vote,
@@ -677,6 +678,7 @@ def make_handler(
                 return
             chosen = level if isinstance(level, str) and level else None
             force = payload.get("force") is True  # «Responder aquí» to another topic (ADR-038)
+            reason = payload.get("reason") is True  # the «Razonar» mode (ADR-056)
             self._stream(
                 lambda: engine.ask_recorded(
                     question,
@@ -685,6 +687,7 @@ def make_handler(
                     conversation_id=conversation,
                     level=chosen,
                     force=force,
+                    reason=reason,
                 )
             )
 
@@ -1085,6 +1088,16 @@ def make_handler(
 
         # --- «Explícamelo tú» (ADR-027) ---------------------------------------------------------
 
+        def _understand(self, payload: dict[str, Any]) -> None:
+            """A chapter's or note's summary ({"path"}), or a book's ({"book"}) (ADR-056 E)."""
+            book = payload.get("book")
+            if isinstance(book, str) and book.strip():
+                self._stream(lambda: engine.understand_book(book))
+                return
+            path = self._text_field(payload, "path", _MAX_PATH)
+            if path is not None:
+                self._stream(lambda: engine.understand_note(path))
+
         def _feynman_start(self, payload: dict[str, Any]) -> None:
             concept = self._text_field(payload, "concept", _MAX_TITLE)
             if concept is not None:
@@ -1246,6 +1259,19 @@ def make_handler(
                 return True
             if parts.path == "/api/books":  # the shelf (ADR-053)
                 self._send_json(engine.books())
+                return True
+            if parts.path == "/api/summaries":  # kept summaries (ADR-056 stage E)
+                self._send_json(engine.summaries_list())
+                return True
+            if parts.path == "/api/summaries/one":
+                query = parse_qs(parts.query)
+                kind = query.get("kind", [""])[0]
+                one = (
+                    engine.summary(kind, query.get("key", [""])[0])
+                    if kind in ("chapter", "book")
+                    else None
+                )
+                self._send_json(one) if one is not None else self._not_found()
                 return True
             if parts.path == "/api/books/one":
                 one = engine.book(parse_qs(parts.query).get("id", [""])[0])

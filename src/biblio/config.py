@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import tomllib
 import types
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, TypeVar, Union, get_args, get_origin, get_type_hints
 
@@ -105,6 +105,7 @@ class LLMConfig:
     map_reduce_max_fragments: int
     max_answer_tokens: int
     probe_timeout_s: float
+    reasoning_effort: str  # sent as is when not empty (Ollama: "none" = no thinking)
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,7 @@ class FeynmanConfig:
     min_agreement: float
     min_samples: int
     eval_match_similarity: float
+    reason: bool  # Gemma, the topic gate and general verdicts (ADR-058)
 
 
 @dataclass(frozen=True)
@@ -299,6 +301,31 @@ class ThreadConfig:
 
 
 @dataclass(frozen=True)
+class ReasonConfig:
+    model: str  # the «Razonar» mode's own model (ADR-057); "" = the tutor's
+    model_digest: str
+    reasoning_effort: str
+    subjects: int
+    subject_max_tokens: int
+    gate_candidates: int
+    gate_score: float
+    gate_min: int
+    max_answer_tokens: int
+
+
+@dataclass(frozen=True)
+class UnderstandingConfig:
+    db: Path
+    window_tokens: int
+    max_fragment_chars: int
+    part_points: int
+    max_points: int
+    part_max_tokens: int
+    combine_max_tokens: int
+    book_max_tokens: int
+
+
+@dataclass(frozen=True)
 class DiagramsConfig:
     fragments: int
     max_fragment_chars: int
@@ -335,6 +362,8 @@ class WatchConfig:
 class EvalConfig:
     questions: Path
     answers: Path
+    reasoning: Path
+    chains: Path
     feynman: Path
     results_dir: Path
     ks: tuple[int, ...]
@@ -364,6 +393,8 @@ class Config:
     maps: MapsConfig
     diagrams: DiagramsConfig
     thread: ThreadConfig
+    reason: ReasonConfig
+    understanding: UnderstandingConfig
     library: LibraryConfig
     launcher: LauncherConfig
     watch: WatchConfig
@@ -392,6 +423,8 @@ _SECTIONS: dict[str, type[Any]] = {
     "maps": MapsConfig,
     "diagrams": DiagramsConfig,
     "thread": ThreadConfig,
+    "reason": ReasonConfig,
+    "understanding": UnderstandingConfig,
     "library": LibraryConfig,
     "launcher": LauncherConfig,
     "watch": WatchConfig,
@@ -496,6 +529,18 @@ def _convert(value: Any, hint: Any, key: str, root: Path) -> Any:
     if not isinstance(value, hint):
         raise ConfigError(f"'{key}' must be of type {hint.__name__}, got {type(value).__name__}")
     return value
+
+
+def reason_llm(config: Config) -> LLMConfig:
+    """The LLM settings of the «Razonar» mode: the tutor's server and budgets, its own model."""
+    if not config.reason.model:
+        return config.llm
+    return replace(
+        config.llm,
+        model=config.reason.model,
+        model_digest=config.reason.model_digest,
+        reasoning_effort=config.reason.reasoning_effort,
+    )
 
 
 def _validate(config: Config) -> None:

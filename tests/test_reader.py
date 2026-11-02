@@ -12,6 +12,7 @@ from test_practice import _Teacher
 from test_web import _events, engine, request, server  # noqa: F401  (fixtures used by name)
 
 from biblio.generate.llm import Message
+from biblio.practice.store import QuestionContent, Section
 from biblio.reader import note_tree
 from biblio.web.engine import Engine
 
@@ -327,3 +328,19 @@ def test_the_library_lists_every_note_with_its_read_mark(
         "alg/svd.md": ("SVD", False),
         "est/bayes.md": ("Bayes", True),
     }
+    # «Mis notas» (ADR-055): when each text changed, and which notes have practice or reviews due
+    assert all(n["changed"] for n in notes)
+    assert not any(n["practiced"] or n["due"] for n in notes)
+    store = engine.practice
+    quiz = store.new_quiz("guide", "est/bayes.md", 1)
+    section = Section("est/bayes.md", ("Bayes",), 1, 3, "Texto.")
+    qid = store.add_question(quiz, "open_self", section, QuestionContent("¿?", "", reference="r"))
+    store.record_attempt(qid, "a", "wrong", "self")
+    notes = json.loads(request(server, "GET", "/api/notes")[2])["notes"]
+    flags = {n["path"]: (n["practiced"], n["due"]) for n in notes}
+    assert flags == {"alg/svd.md": (False, False), "est/bayes.md": (True, False)}
+    month_ago = (datetime.now().astimezone() - timedelta(days=30)).isoformat(timespec="seconds")
+    with store._conn:
+        store._conn.execute("UPDATE attempts SET answered = ?", (month_ago,))
+    notes = json.loads(request(server, "GET", "/api/notes")[2])["notes"]
+    assert {n["path"]: n["due"] for n in notes} == {"alg/svd.md": False, "est/bayes.md": True}

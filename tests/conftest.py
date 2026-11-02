@@ -28,10 +28,13 @@ def project_copy(tmp_path: Path) -> Path:
 def config(project_copy: Path) -> Config:
     """The default config, with the conversation planner off (ADR-038): the fake LLMs of the
     answer tests do not speak its JSON. `tests/test_thread.py` turns it on. The maps' reranker
-    is off too (ADR-051): it would load the real model; `tests/test_maps.py` injects a fake."""
+    is off too (ADR-051): it would load the real model; `tests/test_maps.py` injects a fake.
+    «Explícamelo tú» runs without the «Razonar» gate (ADR-058), for the same two reasons;
+    `tests/test_feynman.py` turns it on with fakes."""
     loaded = load_config(project_copy)
     return replace(
         loaded,
         thread=replace(loaded.thread, plan=False),
         maps=replace(loaded.maps, rerank=False),
+        feynman=replace(loaded.feynman, reason=False),
     )

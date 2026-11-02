@@ -922,22 +922,39 @@ def ask_eval_run(
         str | None,
         typer.Option("--level", help="beginner, intermediate or advanced (default from config)."),
     ] = None,
+    reasoning: Annotated[
+        bool,
+        typer.Option("--reasoning", help="The reasoning set (ADR-056; default: eval.reasoning)."),
+    ] = False,
+    reason: Annotated[
+        bool,
+        typer.Option("--reason", help="Answer in the «Razonar» mode (ADR-056), not as the tutor."),
+    ] = False,
 ) -> None:
     """Answer every question and write a review sheet for you to grade."""
+    from dataclasses import replace
+
+    from biblio.config import reason_llm
     from biblio.eval.questions import QuestionsError, load_questions
     from biblio.eval.runner import _git_state
     from biblio.generate.answer_eval import run_answers, save_run
     from biblio.generate.ask import Tutor
     from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.generate.reason import Reasoner
     from biblio.ingest.tokens import load_token_counter_safe
     from biblio.offline import loopback_port_open
+    from biblio.retrieve.rerank import load_reranker
 
     config = _config(ctx)
+    if reason:
+        # the plan, the field's names and the answer all use the mode's model: one model loaded
+        config = replace(config, llm=reason_llm(config))
     if map_reduce not in (None, "auto", "on", "off"):
         console.print("[red]--map-reduce must be auto, on or off[/red]")
         raise typer.Exit(2)
     try:
-        questions = load_questions(questions_file or config.eval.answers)
+        default = config.eval.reasoning if reasoning else config.eval.answers
+        questions = load_questions(questions_file or default, reasoning=reasoning)
     except QuestionsError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from exc
@@ -953,12 +970,32 @@ def ask_eval_run(
         console.print(f"[red]--level must be one of {', '.join(TUTOR_LEVELS)}[/red]")
         raise typer.Exit(2)
     tutor = Tutor(config, retriever, llm, counter, map_reduce, level)
+    answerer: Tutor | Reasoner = tutor
+    reranker = None
+    if reason:
+        # the gate reranks on CPU: the LLM holds the GPU (ADR-014, ADR-056)
+        reranker = load_reranker(config, "cpu")
+        answerer = Reasoner(config, tutor, llm, retriever, reranker.score)
+    checked = False
 
     def progress(q: object, answer: object, seconds: float) -> None:
+        from biblio.doctor import llm_served_context
         from biblio.eval.questions import Question
         from biblio.generate.ask import Answer
 
+        nonlocal checked
         assert isinstance(q, Question) and isinstance(answer, Answer)
+        if not checked:
+            # the model is loaded now: a short context would make the whole run worthless (ADR-015)
+            checked = True
+            context = llm_served_context(config)
+            needed = config.llm.context_budget_tokens + config.llm.max_answer_tokens
+            if context is not None and context < needed:
+                console.print(
+                    f"[red]The LLM server gives the model {context} tokens of context, "
+                    f"{needed} are needed.[/red] Start it with scripts/serve-llm.ps1."
+                )
+                raise typer.Exit(2)
         v = answer.validation
         flag = (
             "abstained" if v.abstained else ("grounded" if v.grounded else "[red]ungrounded[/red]")
@@ -966,13 +1003,15 @@ def ask_eval_run(
         console.print(f"  {q.id:6s} {answer.strategy:10s} {seconds:5.1f}s  {flag}")
 
     try:
-        records = run_answers(tutor, questions, progress)
+        records = run_answers(answerer, questions, progress)
     except LLMError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(1) from exc
     finally:
         retriever.close()
         llm.close()
+        if reranker is not None:
+            reranker.close()
     commit, dirty = _git_state(config.root)
     meta = {
         "commit": commit,
@@ -981,6 +1020,8 @@ def ask_eval_run(
         "map_reduce": map_reduce or config.llm.map_reduce,
         "retriever": retriever.name,
         "level": tutor.level,
+        "set": "reasoning" if reasoning else "answers",
+        "mode": "reason" if reason else "tutor",
     }
     review_dir = config.eval.results_dir.parent / "review"
     _, sheet = save_run(review_dir, tag, meta, records)
@@ -1022,6 +1063,10 @@ def ask_eval_score(
         "placeholder_citations",
         "mean_seconds",
         "map_reduce_share",
+        "gate_open",
+        "quotes_found",
+        "general_citations",
+        "general_used",
     ):
         if key in m:
             table.add_row(key, str(m[key]))
@@ -1041,11 +1086,19 @@ def eval_feynman(
     items_file: Annotated[
         Path | None, typer.Option("--set", help="Default: eval.feynman in config.")
     ] = None,
+    reason: Annotated[
+        bool | None,
+        typer.Option(
+            "--reason/--no-reason", help="On the «Razonar» model with the gate (ADR-058)."
+        ),
+    ] = None,
 ) -> None:
     """Measure «Explícamelo tú» on eval/feynman.jsonl: how many expected gaps and unsupported
     claims it reports, and how many it reports beyond them (ADR-027). Needs the LLM server."""
+    from dataclasses import replace
     from datetime import datetime
 
+    from biblio.config import reason_llm
     from biblio.eval.feynman import (
         FeynmanSetError,
         append_feynman_run,
@@ -1053,13 +1106,18 @@ def eval_feynman(
         run_feynman_eval,
     )
     from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.generate.reason import topic_gate
     from biblio.index.embedder import load_query_embedder
     from biblio.models import ModelNotAvailableError
     from biblio.offline import loopback_port_open
     from biblio.retrieve.pipeline import build_retriever
+    from biblio.retrieve.rerank import load_reranker
     from biblio.retrieve.store import IndexNotFoundError, QueryEmbedderMismatchError
 
     config = _config(ctx)
+    use_reason = config.feynman.reason if reason is None else reason
+    if use_reason:
+        config = replace(config, llm=reason_llm(config))
     try:
         items = load_feynman_set(items_file or config.eval.feynman)
     except FeynmanSetError as exc:
@@ -1088,6 +1146,13 @@ def eval_feynman(
             f"{row['seconds']}s[/dim]"
         )
 
+    # the gate reranks on CPU: the LLM holds the GPU (ADR-014, ADR-058)
+    reranker = load_reranker(config, "cpu") if use_reason else None
+
+    def gate(concept: str) -> bool:
+        assert reranker is not None
+        return topic_gate(llm, config, retriever, reranker.score, concept).open
+
     try:
         record = run_feynman_eval(
             config,
@@ -1097,6 +1162,7 @@ def eval_feynman(
             items,
             tag or f"feynman-{datetime.now():%Y%m%d-%H%M%S}",
             show,
+            gate if use_reason else None,
         )
     except LLMError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -1104,6 +1170,8 @@ def eval_feynman(
     finally:
         retriever.close()
         llm.close()
+        if reranker is not None:
+            reranker.close()
     path = append_feynman_run(config.eval.results_dir, record)
     table = Table("metric", "value", title=f"{record['tag']} · {record['n_items']} explanations")
     for key, value in record["metrics"].items():
@@ -1114,6 +1182,71 @@ def eval_feynman(
     for row in record["items"]:
         for point in row["not_found"]:
             console.print(f"[yellow]not reported[/yellow] {row['id']}: {point}")
+    console.print(f"[dim]Saved to {path}[/dim]")
+
+
+@app.command("eval-chains")
+def eval_chains(
+    ctx: typer.Context,
+    tag: Annotated[
+        str | None, typer.Option("--tag", help="Name of this run (default: chains-<time>).")
+    ] = None,
+    chains_file: Annotated[
+        Path | None, typer.Option("--set", help="Default: eval.chains in config.")
+    ] = None,
+    reason: Annotated[
+        bool, typer.Option("--reason", help="Plan on the «Razonar» model (ADR-056).")
+    ] = False,
+) -> None:
+    """Measure conversations (ADR-038): for each message, planned with the topic and previous
+    turns, whether its expected sections reach the tutor. Needs the LLM server."""
+    from dataclasses import replace
+    from datetime import datetime
+
+    from biblio.config import reason_llm
+    from biblio.eval.chains import append_chains_run, load_chains, run_chains
+    from biblio.eval.questions import QuestionsError
+    from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.offline import loopback_port_open
+
+    config = _config(ctx)
+    if reason:
+        config = replace(config, llm=reason_llm(config))
+    try:
+        chains = load_chains(chains_file or config.eval.chains)
+    except QuestionsError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from exc
+    if not loopback_port_open(config.llm.base_url, config.llm.probe_timeout_s):
+        console.print(
+            f"[red]No LLM server on {config.llm.base_url}.[/red] Start scripts/serve-llm.ps1."
+        )
+        raise typer.Exit(2)
+    retriever = _open_retriever(config, config.retrieval.default_mode)
+    llm = load_llm_client(config.llm)
+
+    def show(chain: str, row: dict[str, object]) -> None:
+        mark = "" if row["relation_ok"] else f" [yellow]≠ {row['planned_relation']}[/yellow]"
+        console.print(
+            f"[dim]{chain}.{row['turn']} {row['relation']}{mark} · "
+            f"{row['found']}/{row['expected']} · {row['seconds']}s · «{row['question']}»[/dim]"
+        )
+
+    try:
+        record = run_chains(
+            config, retriever, llm, chains, tag or f"chains-{datetime.now():%Y%m%d-%H%M%S}", show
+        )
+    except LLMError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    finally:
+        retriever.close()
+        llm.close()
+    path = append_chains_run(config.eval.results_dir, record)
+    table = Table("metric", "value", title=f"{record['tag']} · {record['turns']} turns")
+    for key, value in record["metrics"].items():
+        table.add_row(key, "—" if value is None else str(value))
+    console.print(table)
     console.print(f"[dim]Saved to {path}[/dim]")
 
 

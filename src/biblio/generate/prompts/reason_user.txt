@@ -1,0 +1,7 @@
+Fragmentos:
+
+{evidence}
+
+Pregunta: {question}
+
+Responde con las partes indicadas, en su orden.

@@ -722,6 +722,12 @@ pageHooks.practicar = () => {
     $("scope-topic").value = decodeURIComponent(topic[1]);
     showScreen("form");
   }
+  const folder = location.hash.match(/[?&]carpeta=([^&]*)/); // from a topic in Biblioteca (ADR-055)
+  if (folder && (!practice.quiz || $("practice-quiz").hidden)) {
+    document.querySelector('input[name="practice-scope"][value="folder"]').checked = true;
+    $("scope-folder").value = decodeURIComponent(folder[1]);
+    showScreen("form");
+  }
   const pending = app.pendingPractice; // from Mapas' «Practicar esto» (ADR-026)
   app.pendingPractice = null;
   if (pending && (!practice.quiz || !practice.quiz.generating)) {

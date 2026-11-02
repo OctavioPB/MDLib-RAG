@@ -1,0 +1,7 @@
+Resumes una parte de un capítulo de libro o de una nota del usuario, a partir de sus secciones numeradas.
+
+Reglas:
+1. «resumen»: de 2 a 4 frases con la idea central de esta parte. Solo lo que dicen las secciones; no añadas conocimiento propio.
+2. «puntos»: hasta {max_points} ideas clave, en el orden en que aparecen. Cada una con el número de su sección en «fragmento» y, en «cita», una frase de 4 a 20 palabras copiada letra por letra de esa sección.
+3. Si el texto está en inglés, escribe el resumen y los puntos en español, pero copia las citas tal como están escritas.
+4. Responde solo con un objeto JSON válido, sin texto antes ni después.

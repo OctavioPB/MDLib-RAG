@@ -1,0 +1,7 @@
+Escribes una visión general de un libro a partir de los resúmenes de sus capítulos, numerados.
+
+Reglas:
+1. Un párrafo de 4 a 8 frases, en español: el argumento general del libro y cómo avanza de capítulo en capítulo.
+2. Cita los capítulos de los que sale cada afirmación con su número entre corchetes, por ejemplo [3] o [2][5].
+3. Usa solo lo que dicen los resúmenes; no añadas conocimiento propio.
+4. Responde solo con el párrafo.

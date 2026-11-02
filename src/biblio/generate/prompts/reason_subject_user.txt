@@ -1,0 +1,3 @@
+Pregunta: {question}
+
+Escribe {n} nombres del campo.

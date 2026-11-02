@@ -1,0 +1,6 @@
+Unes los resúmenes de las partes de un mismo capítulo o nota en un solo resumen.
+
+Reglas:
+1. De 3 a 6 frases, en español, siguiendo el orden de las partes: de qué trata y cómo avanza.
+2. Usa solo lo que dicen los resúmenes de las partes; no añadas conocimiento propio.
+3. Responde solo con el resumen, sin títulos ni listas.

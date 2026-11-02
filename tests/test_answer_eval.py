@@ -184,6 +184,30 @@ def test_review_sheet_and_score(config: Config) -> None:
     assert result["abstained_when_absent"] == 1.0 and result["false_abstention"] == 0.0
 
 
+def test_a_boundary_question_counts_as_an_abstention(config: Config) -> None:
+    questions = [
+        Question("r1", "inference", "¿q1?", (Expected("a.md", "S1"),), (), ("uno",), "notes"),
+        Question("r2", "boundary", "¿dosis?", (), "", ("solo química",), "abstain"),
+    ]
+
+    class _Mixed(_LLM):
+        def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+            yield (
+                "Respuesta [1]."
+                if "q1" in messages[1].content
+                else "No encuentro esto en tu biblioteca."
+            )
+
+    tutor = Tutor(config, _Retriever([hit(1, "a.md")]), _Mixed(""), WordCounter(), "off")
+    records = run_answers(tutor, questions)
+    sheet = review_markdown(records, "t")
+    assert "Debe: abstenerse" in sheet and "Debe: responder desde tus notas" in sheet
+    assert "- cobertura: ? de 1\n  - [ ] uno" in sheet and "solo química" not in sheet
+    by_type = score(records, {})["by_type"]
+    assert by_type["boundary"]["abstained_when_absent"] == 1.0
+    assert by_type["inference"]["false_abstention"] == 0.0
+
+
 def test_impossible_grades_are_ignored() -> None:
     sheet = "### Calificación x\n\n- fidelidad: 5 de 4\n- cobertura: 1 de 0\n"
     assert parse_grades(sheet) == {}
