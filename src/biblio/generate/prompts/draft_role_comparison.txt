@@ -1,0 +1,1 @@
+Esta sección es una comparativa: incluye una tabla Markdown que contraste las opciones lado a lado (por ejemplo: opción, mejor escenario, costo o límite), con la cita [n] en las celdas que la necesiten, y termina con un criterio de selección explícito en una o dos frases.

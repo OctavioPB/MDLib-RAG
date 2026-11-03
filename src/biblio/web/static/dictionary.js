@@ -9,7 +9,7 @@
 
 const DICT_KINDS = [["concept", tx("Conceptos"), tx("Concepto")], ["function", tx("Funciones"), tx("Función")], ["formula", tx("Fórmulas"), tx("Fórmula")]];
 const DICT_MARKS = { correct: tx("La sabías"), partial: tx("A medias"), wrong: tx("No la sabías") };
-const dict = { list: [], view: null, kind: "concept", filter: "", selected: null, building: false, cards: null };
+const dict = { list: [], view: null, kind: "concept", filter: "", selected: null, building: false, cards: null, scope: null };
 
 function dictSetStatus(text) {
   $("dict-status").hidden = !text;
@@ -66,7 +66,7 @@ async function dictOpen(id) {
   $("dict-select").value = String(id);
 }
 
-async function dictBuild(kind, value) {
+async function dictBuild(kind, value, within = null) {
   if (dict.building) return;
   showError("dict-error", "");
   await loadStatus();
@@ -86,7 +86,7 @@ async function dictBuild(kind, value) {
   $("dict-filter").value = "";
   dictShowNew(false);
   try {
-    await streamEvents("/api/dictionary", { kind, value }, (name, data) => {
+    await streamEvents("/api/dictionary", { kind, value, ...(within ? { within } : {}) }, (name, data) => {
       if (name === "start") {
         view.title = data.title;
         view.fragments = data.fragments;
@@ -427,24 +427,30 @@ function dictBind() {
     dictRender();
     dictLoadList();
   });
-  for (const radio of document.querySelectorAll('input[name="dict-kind"]')) {
-    radio.addEventListener("change", () => {
-      const guide = radio.value === "guide" && radio.checked;
-      $("dict-value").placeholder = guide ? tx("Escribe parte del título de la guía…") : tx("p. ej. regresión logística");
-      if (guide) $("dict-value").setAttribute("list", "guide-options");
-      else $("dict-value").removeAttribute("list");
-    });
-  }
+  // a topic, or the whole of a guide, a book or a chapter (ADR-063)
+  dict.scope = scopePickerCreate($("dict-scope"), ["guide", "book", "chapter", "library"], (source) => {
+    const whole = source && source.kind !== "library";
+    $("dict-value").placeholder = whole
+      ? tx("Tema (vacío: todo el libro, capítulo o guía elegido)")
+      : tx("Tema, p. ej. regresión logística");
+  });
   $("dict-form").addEventListener("submit", (event) => {
     event.preventDefault();
-    const kind = document.querySelector('input[name="dict-kind"]:checked').value;
-    const raw = $("dict-value").value.trim();
-    if (!raw) {
-      showError("dict-error", kind === "guide" ? tx("Elige una guía.") : tx("Escribe un tema."));
+    let source;
+    try {
+      source = dict.scope.get();
+    } catch (error) {
+      showError("dict-error", error.message);
       return;
     }
-    const value = kind === "guide" ? practice.guides.get(raw) || raw : raw;
-    dictBuild(kind, value);
+    const topic = $("dict-value").value.trim();
+    if (topic) {
+      dictBuild("topic", topic, source.kind === "library" ? null : { kind: source.kind, value: source.value });
+    } else if (source.kind === "library") {
+      showError("dict-error", tx("Escribe un tema, o elige un libro, un capítulo o una guía."));
+    } else {
+      dictBuild(source.kind, source.value);
+    }
   });
 }
 

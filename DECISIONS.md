@@ -64,6 +64,11 @@ States: **Proposed** · **Accepted** · **Superseded by ADR-NNN** · **Rejected*
 | 057 | Memory budget: the reasoning model may use system RAM; the GPU stays first for the fast model | Proposed |
 | 058 | «Explícamelo tú» on the «Razonar» model: topics the notes do not explain are refused, unsupported claims get a marked general verdict | Proposed |
 | 059 | Conversar gives the answer the room: a compact composer, a one-line header, the sources beside it, a history by date | Accepted |
+| 060 | A topic quiz keeps only sections that write the topic's words | Proposed (until the user tries it) |
+| 061 | Guides from the books in the user's series: its shape, book evidence, the reasoning model writes | Proposed (until the user grades the drafts) |
+| 062 | A general topic in Practicar, «Explícamelo tú», the dictionary and the Gap Spotter reads the sections that explain it, not those that apply it | Proposed (until the user tries it) |
+| 063 | Practicar chooses where to read from lists: a guide, a book, a chapter, the whole library or a folder | Accepted |
+| 064 | The dense stage could use binary quantization with float rescoring (not adopted yet) | Proposed |
 
 ---
 
@@ -1298,3 +1303,107 @@ Record the numbers here before accepting.
 **Checked** on my own instance of the app with a copy of the user's history (their data untouched), a conversation seeded for «Razonar», in light and dark, at 1480 × 705, 1100 × 700 and 390 × 844 px: composer 110 px; with the bubble at the top, 404 px (57 %) of the height reach the answer (it was 118 px); the groups «Hoy», «Esta semana» and «Semana pasada» and «Desde el lector · 6» folded; sources listed with 2×, 2×, 1× and «sin citar»; a source opens and goes back; the menu opens with focus on the first item and closes with Escape; the composer grows to 106 px with four lines; «Razonar» greys the level and changes the placeholder; no sideways scroll at any width; no page errors.
 
 **Consequences.** (+) The answer is what the page shows first, and its sources are always at hand. (+) The history reads like a log and is no longer noisy with the reader's passages. (−) The «Opciones» and the level are one click further than the three level buttons were. (−) «Cómo lo busqué» is a toggle, not an always-visible line, so what was searched is one click away. (−) On a phone, the composer is still 206 px (three rows of controls). Not done: a header that stays on screen while the thread scrolls.
+
+---
+
+## ADR-060 — A topic quiz keeps only sections that write the topic's words
+
+**Date:** 2026-11-02 · **State:** Proposed (until the user tries it on their own topics)
+
+**Context.** In Practicar, the user asked for the topic «AWS Basico» and was asked about mathematical
+optimisation. `candidate_sections(kind="topic")` took the first stage's top 60 chunks
+(`max_questions × 3`) with no relevance cut and asked about them in rank order. A two-word topic
+whose second word is common («basico») drifts: of those 60 hits, 20 did not write «aws» at all (a
+«Teorema básico» in a maths book, `Math-sim.md`, a vendor-management note, Jupyter, MariaDB), and
+every one became a candidate. Reranking does not fix it: the CPU reranker scored the 60 against
+«¿Qué es AWS Basico?» between 0.00 and 0.11, the right and the wrong sections alike (a vague topic
+is not a definable question, unlike the maps' topics, ADR-051), and against the bare topic its best
+section was a DevOps checklist.
+
+**Options.** (1) Do nothing: the quiz fills its quota with whatever ranks. (2) Rerank and cut at a
+score, as the maps do: measured above, the scores do not separate. (3) Require the rarest word of
+the topic by its count in the FTS index: tried, and it picked «basico» over «aws» because the library
+holds more AWS than basics, which is the opposite of the point. (4) Require that a section write a
+share of the topic's words (`topic_match` = 0.6, at least 2 of 2, 2 of 3, 3 of 4), each cut to a stem
+that survives a plural and the other language («optimización» → «optimiz», «básico» → «basi» matches
+«basic»); those whose guide or heading write them go first.
+
+**Decision.** Option 4, in `practice.quiz.candidate_sections` for the topic scope only (guides,
+folders, reviews and the maps are untouched). `practice.topic_match = 0` turns it off.
+
+**Consequences.** (+) «AWS Basico»: 44 candidate sections → 24, and the maths and vendor ones are
+gone; nothing is added to the latency (no model, no query). A topic with few matching sections now
+gives fewer questions, not unrelated ones. (−) Two costs. Cognates that differ in spelling were dropped (51 → 31 candidates on «optimización matemática»:
+«matemática» did not match «mathematical»); matching now makes `th`, `ph` and `y` alike on both sides
+(`_spelled`: «matematical» both ways), which brings it to 36. A section that writes one of the two words, like «Optimization» in a maths book, was also dropped
+(an earlier line of this ADR wrongly said such sections write neither word). The retrieval's first
+`practice.topic_head` (20) now need only one word, as they rank for the topic as a whole while the tail
+drifts to the common word: 36 → 39 and «AWS Basico» 24 → 29, the recovered ones about AWS or
+optimisation, none off-topic. The rest dropped is mostly weak or unrelated (not counted one by one); other cognates were not bridged by spelling («estadística»/«statistics» do not look alike), so
+the topic is also translated by the LLM, once per quiz (`translate_query`, ADR-052), a section may write
+either form, and the English search joins the pool with equal weight (RRF; the chat's «own top 6 kept»
+rule filled the pool with books and pushed the user's notes out). «estadística»: 37 candidates, 1 from
+a book → 41, 22 from books; «optimización matemática» 42 → 37 with 21 from books (the pool is shared,
+so notes give room to chapters); «AWS Basico» 29 → 36. (−) One short LLM call before the first
+question (the quiz needs the server anyway), and a bad translation widens or narrows the match. And sections that write both words by chance stay (a GCP
+note comparing providers): the filter removes the off-topic ones, not the weak ones. The pool of 60 is still the first stage's.
+**Pending.** The user's own topics, to see whether the balance of notes and books suits them. No labelled set exists for this selection, so
+the figures above count candidates by hand from `biblio search`-style listings, not a score.
+
+---
+
+## ADR-061 — Guides from the books in the user's series: its shape, book evidence, the reasoning model writes
+
+**Date:** 2026-11-02 · **State:** Proposed (the structure is measured; fidelity to the books and likeness to the user's style wait for their grading of four drafts)
+
+**Context.** `biblio draft` (ADR-008) produced a plain skeleton: an outline imitating the headings of the two closest guides, sections written by the 4B from the top 8 fragments of the whole library, a list of sources. The user asked to make it better at creating new guides *from the books*, whose style they have already set: the OPB Reference Series (header, epigraph, table of contents, 10–13 numbered sections that follow an arc, closing decision tree, footer). Measured on four topics the user chose from their books (Sistemas de recomendación, Cloud FinOps, Apache Kafka, Streaming databases; `eval/results/guides.jsonl`, tag `baseline-draft-v1`): 0.09–0.18 of 11 structural checks (mean 0.11): no header, epigraph, contents, comparison, limitations, decision tree or footer; unnumbered sections; 8 of 37 sections with no citation; only 56 of 80 sources from books (the rest were the user's own notes, so the draft restated them); about 97 s per guide. Two things also cut against each other: rule 2 asks every claim to be cited, and the user's published guides carry no `[n]`.
+
+**Options.** (1) Prompts only: ask the 4B for the style. The 4B copies the arc's wording and loses numbering. (2) Generate the fixed blocks in code and the sections by role (chosen). (3) Fine-tune on the user's guides: rejected by ADR-001. For citations: (a) `[n]` in the draft plus a command that removes them (chosen by the user), (b) no `[n]`, only per-section references, (c) no citations (breaks rule 2). For the writer: the 4B (3 s a section, simplifies), or the «Razonar» model (≈1 min a section, 80 % literal quotes in ADR-057) (the user chose the second for sections, the 4B for the outline).
+
+**Decision.** `generate/guide_style.py` renders what is fixed (header with the author from `config/local.toml`, epigraph block, contents with anchors, `Referencias`, footer) and checks it (`check_structure`, eleven yes/no checks). The outline asks for the arc in `draft_outline_system`, its sibling guides are the user's own notes only (never books), and `ensure_closing_sections` adds the comparison, the limitations and the summary when the model leaves them out (the 4B did, in the first run: structure 0.91, no decision tree). Each section is written under the prompt of its role (`role_of(title)` → `draft_role_*`: a table for the comparison and the costs, a two-column table for the applications, honest limits, a decision tree and a reflective close), from evidence that is only book chapters (`draft.evidence`), the topic searched in Spanish and in English fused by RRF, at most two fragments per chapter. After the sections one short call writes the epigraph and the key concepts; the area of the sources names the track. `biblio draft-clean` takes an accepted draft to the published form (no `[n]`, flags or banner; the chapters used as references). The Guías page reads `Referencias` and skips the contents list.
+
+**Consequences.** (+) Structure 0.11 → 1.00 on the four topics (all eleven checks); sections without a citation 8 → 0; sources from books 56/80 → 145/145; 11–13 numbered sections against 7–10 unnumbered; the closing decision tree is built from conditions the books state. (−) Time per guide ≈97 s → ≈737 s (495–875 s), 12 minutes during which the GPU is the reasoning model's, plus the swap of models between the outline and the sections. The structure score is of the shape alone and the generator was written to pass it: it says nothing about whether a section is faithful to its chapter or sounds like the user. Two sections of the four guides cited a fragment that does not exist (marked `[?]`) and two sections of Kafka found no evidence in the books; the epigraphs are the model's and need the user's eye. The reasoning model translates the topic for the English search, an extra call per section. A topic the books do not cover gives sections that say so, not a guide.
+**Pending.** The user grades the four drafts in `drafts/` (faithfulness to the books and likeness to their guides, as in ADR-056's sheets); if the fidelity is below the tutor's, the sections go back to a role-by-role review. Not measured: the 4B writing the sections with the same prompts (one run would settle whether the model or the prompts did the work).
+
+---
+
+## ADR-062 — A general topic in Practicar, «Explícamelo tú», the dictionary and the Gap Spotter reads the sections that explain it, not those that apply it
+
+**Date:** 2026-11-02 · **State:** Proposed (until the user tries it on their own topics)
+
+**Context.** The user asked Practicar for «dirección IP» and was asked about specific configurations; «Explícamelo tú» did the same. Both took the first stage's top hits for the bare topic, and a general topic has far more sections that *use* it (a router's DHCP settings, a static address, NAT) than sections that define it. For «dirección IP» the first ten candidates were the protocol's heading, a fixed IP, obtaining an address, a dynamic IP twice, NAT, DHCP, a netmask; the article's own opening, the definition, ranked eighth and was never asked about because `candidate_sections` required two heading levels and dropped the text before a note's first heading. ADR-051 had met this in the maps (a one-word topic attracts sections that only mention it) and solved it there: fuse the bare topic with a definitional question, rerank on CPU against that question, keep what explains the topic.
+
+**Options.** (1) Leave it: the quiz asks about whatever ranks. (2) Order by the reranker only (the maps' `order_sections`): the specific sections still fill the quota after the general ones. (3) Keep only the sections the reranker scores at `maps.general_score` (0.4) or more when there are at least `maps.min_general` (3), and fall back to the score order when there are fewer, because a vague topic scores everything near zero (ADR-060: «AWS Basico» scored 0.00–0.11 for all).
+
+**Decision.** Option 3, as `maps.select.general_first`, used by `Engine._general_hits` for the topic scope of Practicar (`practice.topic_general`), the notes «Explícamelo tú» is compared with (`feynman.general`), the sections a topic's dictionary is built from (`dictionary.general`) and the sections the Gap Spotter reads for unexplained terms (`spotter.general`; the search that judges each subtopic stays specific, since it looks for evidence of that subtopic). In those three, `numbered_fragments(..., openings=True)` also takes the text before a note's first heading, which it dropped like the quiz did (the maps and diagrams keep their rule: they were measured with it). The candidates are the maps' (`maps.candidates` per query, bare and definitional, fused); the reranker runs on CPU and is released. In the topic scope a section may now be the opening of a note (the text before its first heading); guide, folder and review scopes keep their rule.
+
+**Consequences.** (+) «dirección IP»: the article's definition, the protocol's «Dirección IP» section and the cloud networking «¿Qué es una dirección IP?» come first; the fixed/dynamic IP and DHCP sections stop filling the quota. «Apache Kafka»: the first candidate was «Installing Kafka › How to do it…» and «Kafka installation on Linux»; now the chapters' «Apache Kafka» overviews, «Kafka in a nutshell» and the architecture. Measured on the labelled pool of the maps (`eval/maps_centrality.jsonl`, 8 topics, the first 10 sections of each; most of what a method selects has no label, so the shares are lower bounds): sections labelled general 0.20 (plain hybrid) → 0.31 (ADR-051's order) → 0.40 (this), coverage of the general ones 0.18 → 0.29 → 0.33, incidental 0.04 → 0.00 → 0.04. (−) +10–17 s and +2.5 GiB RAM while the reranker runs at the start of a quiz or an explanation; fewer candidates than before (a topic with few general sections gives fewer questions, not specific ones); the labels of the pool were written by Claude (`labeler`), not by the user, and the pool predates this selection, so the improvement is indicative. The «Explícamelo tú» metric itself (`biblio eval-feynman`) was not rerun: its ideas-found measure is known to be weak (ADR-058) and a run takes about 13 minutes of the reasoning model.
+A dictionary reads fewer sections than before when few explain the topic («dirección IP»: the article's openings, the protocol's section and the networking «¿Qué es…?» now come first), so it can have fewer entries. **Pending.** The user's own general topics in Practicar, «Explícamelo tú», the dictionary and the Gap Spotter. Not changed, same cause possible: the maps and diagrams still leave out a note's opening (`numbered_fragments` default; they need their own measurement, ADR-051), the diagram's search, the gap detector's records (ADR-029/030, which read no sections) and the tutor's retrieval for a general question (there the reranker runs when the GPU is free, ADR-014).
+
+---
+
+## ADR-063 — Practicar chooses where to read from lists: a guide, a book, a chapter, the whole library or a folder
+
+**Date:** 2026-11-02 · **State:** Accepted
+
+**Context.** Practicar, «Explícamelo tú» and the dictionary found their material by typing: a guide's title into a `datalist` of every indexed note (25,160 entries, the user's 2,736 guides and 22,424 book chapters mixed), a folder path, or a topic searched in the whole library. With several books on the same subject (seven on Kafka, 943 books in all) a text search cannot say *which* book, and a title typed into a 25,000-entry list is not a way to find a chapter.
+
+**Options.** (1) A better text search over titles: it still cannot tell «Kafka in Action» from «Kafka for Architects» by words alone. (2) Lists with filters that show what tells the books apart (area, chapters, how many are read), a second step for chapters (book first, then its chapters in order), and the topic as an optional second input that narrows inside the choice (chosen). (3) A tree of the whole library: the folders already existed as a source and a tree of 943 books is as long as the list.
+
+**Decision.** A source is one of `library`, `guide` (one of the user's own notes), `book` (a folder under `Books/`, or a one-note book), `chapter` (a note of a book) or `folder`. `static/scope.js` draws the picker (tabs, a filter by title, an area selector for books, a list with the area, chapters, chapters read and language, a chapter list in book order with its read marks) and is used by the quiz form, «Explícamelo tú» (`scope`) and the dictionary (`kind` book or chapter, `within`). Server-side: the quiz scope kinds `book`, `chapter` and `library` (a random sample, fresh sections first) join `guide` and `folder`; with a topic, `within` limits the retrieval to the chosen source (`Engine.source_scope`: a folder, a book or a note path, which the index already scoped, ADR-019/045); `Engine.valid_source` checks that the source exists, so the page cannot send a path outside the library; the Feynman gate also looks only inside the source. A book's dictionary reads `dictionary.guide_max_fragments` sections taken evenly across its chapters, not the first chapters. `/api/practice/guides` now lists only the user's own notes (with their folder); books come from `/api/books` and `/api/books/one`.
+
+**Consequences.** (+) Picking one of seven Kafka books is a click on its title with its area and chapter count; a chapter is two clicks; a topic can be asked about inside one book; the same picker in three places. A folder quiz no longer scans 700 000 chunks (a range on the path index: 1.2 s → 0.0 s). Checked in a browser on the real index (headless Edge, a scratch copy of the history, a fake model): 7 Kafka books listed by filtering, a quiz by book asks only about it (4 of 4 questions from that book), 11 chapters listed in order, the three screens and a 390 px phone width. 12 new tests (`tests/test_sources.py`). (−) «Toda la biblioteca» is a random sample, dominated by the books (22,424 of 25,160 notes), so a quiz on it is rarely about the user's own notes; the area of a book comes from its folder, so a book filed under a wrong area is found under it; the lists load all 943 books at once (small, but it would not scale to thousands); the first load of the books list is slow on a cold database (a few seconds) because it checks each book's language. Not changed: the Biblioteca page's own folder and book browsers, the maps and the study plan, which still take a topic or a folder by text.
+
+## ADR-064 — The dense stage could search 1-bit vectors and rescore with the floats (not adopted yet)
+
+**Date:** 2026-11-02 · **State:** Proposed
+
+**Context.** ADR-005 chose the exact sqlite-vec scan and said to revisit it past ~200,000 chunks. The index now holds 696,649 chunks (1024 float32 dimensions): the dense scan takes 2.3 s per query (BM25 0.06 s, CPU query embedding 0.10 s), so a hybrid search takes ~3.0 s p50 and a hybrid-rerank search ~3.9 s. The scan grows linearly with the library.
+
+**Options.** (1) Keep the exact scan (no change, no risk). (2) A `bit[1024]` vec0 table (`vec_quantize_binary`) searched for `k × 10` candidates, rescored with the stored float vectors (3-4× faster on the dense stage, +106 MB, a second table the indexer must keep in step, a schema migration). (3) An approximate graph index: not available in sqlite-vec 0.1.9.
+
+**Evidence** (prototype on a scratch bit table, real index read-only; `biblio eval` questions, 64, `eval/results/runs.jsonl` tags `bq-before-*` / `bq-after-x10-*`). Overlap with the exact top-10: 0.950 (×5), 0.977 (×10), 0.991 (×20); same top-1 0.99-1.00. Retrieval, exact → binary ×10: hybrid recall@8 0.638 → 0.638, MRR 0.4800 → 0.4834, p50 2,978 → 1,478 ms; dense recall@8 0.401 → 0.401, p50 2,803 → 911 ms; hybrid-rerank recall@1 0.4349, recall@8 0.7227, MRR 0.5727, nDCG@8 0.5872 in both, p50 3,946 → 2,594 ms. No quality change; the differences in MRR/nDCG of a few thousandths are inside what 64 questions can tell apart.
+
+**Decision.** Not adopted now: it buys speed, not quality, and costs a schema change and a second table to maintain in the most delicate layer. Kept as the prepared option.
+
+**Consequences.** (+) The numbers are recorded. (−) A search stays ~3-4 s. Adopt it (superseding ADR-005 for the dense stage) when a search passes ~4 s, the index nears ~1.5 M chunks, or the user finds the wait a problem; the work is the `vec_bits` table kept by the indexer, a migration, the exact scan kept for scoped searches, the oversample factor in `config/default.toml`, and tests.

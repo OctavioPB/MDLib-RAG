@@ -70,6 +70,7 @@ from biblio.library import (
 from biblio.maps.build import (
     CachedEmbed,
     ConceptMap,
+    fold,
     fragment_focus,
     generate_map,
     in_english,
@@ -95,7 +96,13 @@ from biblio.maps.drawing import (
 )
 from biblio.maps.export import map_fragments, numbered_fragments, to_canvas, to_markdown
 from biblio.maps.history import MapStore, concept_map_from_page, fragment_from_page
-from biblio.maps.select import count_general, map_candidates, order_sections, rerank_scores
+from biblio.maps.select import (
+    count_general,
+    general_first,
+    map_candidates,
+    order_sections,
+    rerank_scores,
+)
 from biblio.offline import loopback_port_open
 from biblio.practice.dictionary import Entry, build_dictionary, to_anki
 from biblio.practice.dictionary import to_markdown as dictionary_markdown
@@ -179,6 +186,21 @@ class BusyError(RuntimeError):
 
 class _Cancelled(Exception):
     """The page that asked for a stream went away."""
+
+
+class _FixedHits:
+    """A search whose answer is already known: the topic's general sections (ADR-062)."""
+
+    name = "general"
+
+    def __init__(self, hits: Sequence[Hit]) -> None:
+        self._hits = list(hits)
+
+    def search(self, query: str, k: int) -> list[Hit]:
+        return self._hits[:k]
+
+    def close(self) -> None:
+        pass
 
 
 class _LockedRetriever:
@@ -522,7 +544,14 @@ class Engine:
                 counter = self._llm_turn()
                 llm = self._llm_factory(self.config)
                 try:
-                    drafter = Drafter(self.config, self._base(), llm, counter, self._conn)
+                    drafter = Drafter(
+                        self.config,
+                        self._base(),
+                        llm,
+                        counter,
+                        self._conn,
+                        lambda q: translate_query(llm, self.config.retrieval, q),
+                    )
                     outline = yield from _streamed(
                         lambda on_token: drafter.propose_outline(topic, on_token),
                         lambda text: ("token", {"text": text}),
@@ -554,10 +583,21 @@ class Engine:
             slug = self._save_outline(outline)  # the outline as edited in the page
             with self.lock:
                 counter = self._llm_turn()
-            llm = self._llm_factory(self.config)
+            # the sections are written by the «Razonar» model (ADR-057, ADR-061)
+            config = (
+                replace(self.config, llm=reason_llm(self.config))
+                if self.config.draft.reason_sections
+                else self.config
+            )
+            llm = self._llm_factory(config)
             try:
                 drafter = Drafter(
-                    self.config, _LockedRetriever(self._base(), self.lock), llm, counter, self._conn
+                    config,
+                    _LockedRetriever(self._base(), self.lock),
+                    llm,
+                    counter,
+                    self._conn,
+                    lambda q: translate_query(llm, config.retrieval, q),
                 )
                 registry = SourceRegistry()
                 results = []
@@ -587,9 +627,10 @@ class Engine:
                             "cited": sorted(extract_citations(result.body)),
                         },
                     )
+                meta = drafter.frame(outline, results, registry)
             finally:
                 llm.close()
-            markdown = render_draft(topic, results, registry, date.today())
+            markdown = render_draft(topic, results, registry, date.today(), meta)
             target = draft_path(self.config.paths.drafts_dir, slug)
             target.write_text(markdown, encoding="utf-8", newline="\n")
             sources = []
@@ -608,14 +649,75 @@ class Engine:
             self._practice = PracticeStore(self.config.practice.db)
         return self._practice
 
+    def source_scope(self, kind: str | None, value: str) -> str | None:
+        """Where retrieval looks for a source chosen on a page (ADR-063): None is the whole
+        library; a folder, a book (a folder) or a note (a path ending in `.md`) limits it."""
+        if kind in ("guide", "chapter", "book", "folder") and value.strip("/"):
+            return value.strip("/")
+        return None
+
+    def valid_source(self, kind: str, value: str) -> bool:
+        """Whether a source named by a page exists: a note, a book or a folder of the library."""
+        if kind == "library":
+            return True
+        if kind in ("guide", "chapter"):
+            return value in dict(self.practice_guides())
+        if kind == "book":
+            return any(b.id == value for b in self._books())
+        return kind == "folder" and value.strip("/") in dict(self.folders())
+
+    def own_guides(self) -> list[dict[str, str]]:
+        """The user's own notes (not book chapters) for the «Una guía» picker, by title."""
+        folder = self.config.library.books_folder
+        return [
+            {"path": p, "title": t, "folder": p.rpartition("/")[0]}
+            for p, t in self.practice_guides()
+            if book_id(p, folder) is None
+        ]
+
     def practice_guides(self) -> list[tuple[str, str]]:
         """(path, title) of every indexed guide, by title."""
         with self.lock:
             rows = self._conn.execute("SELECT path, title FROM documents ORDER BY title").fetchall()
         return [(str(path), str(title)) for path, title in rows]
 
+    def _general_hits(
+        self, topic: str, search: Callable[[str, int], list[Hit]], limit: int
+    ) -> list[Hit]:
+        """The sections that explain a general topic first (ADR-062): the bare topic's and the
+        definitional question's hits fused, scored against that question by the reranker on CPU
+        (the LLM may hold the GPU), the ones that explain it kept when there are enough. «dirección
+        IP» had brought a router's DHCP settings before its definition."""
+        cfg = self.config.maps
+        with self.lock:
+            hits = map_candidates(search, topic, cfg, self.config.retrieval.rrf_k)
+        if not cfg.rerank or not hits:
+            return hits[:limit]
+        scores = self._map_rerank(topic, hits)
+        return general_first(hits, scores, cfg.general_score, cfg.min_general)[:limit]
+
+    def _topic_in_english(self, topic: str) -> str | None:
+        """A quiz topic translated by the LLM (ADR-060): «estadística» is not written «statistics»
+        and most of the library is English. None when it already is English or nothing came back."""
+        if not self.config.practice.topic_match or in_english(topic):
+            return None
+        with self.lock:
+            self._release_reranker()  # the GPU is the LLM's (ADR-014)
+        llm = self._llm_factory(self.config)
+        try:
+            with self._llm_lock:
+                text = translate_query(llm, self.config.retrieval, topic)
+        finally:
+            llm.close()
+        return text if text and fold(text) != fold(topic) else None
+
     def start_quiz(
-        self, kind: str, value: str, count: int, kinds: Sequence[str]
+        self,
+        kind: str,
+        value: str,
+        count: int,
+        kinds: Sequence[str],
+        within: tuple[str, str] | None = None,
     ) -> Generator[Event, None, None]:
         """Events: ("quiz", …), then ("question", …) or ("skipped", …) per section as each is
         generated, then ("done", …). Raises ValueError before the first event if there is nothing
@@ -643,10 +745,24 @@ class Engine:
                 review = [k for k, (result, _) in latest.items() if result != "correct"]
                 if kind != "review":
                     review = []
+                english = self._topic_in_english(value) if kind == "topic" else None
                 with self.lock:
-                    retriever = self._base() if kind == "topic" else None
+                    where = self.source_scope(*within) if within else None
+                    retriever: Retriever | None = self._base(where) if kind == "topic" else None
+                    if retriever is not None and english:  # the English search joins the pool
+                        r = self.config.retrieval
+                        # both searches with equal weight: a quiz wants notes and books alike
+                        retriever = BilingualRetriever(retriever, lambda _q: english, r.rrf_k)
+                if retriever is not None and self.config.practice.topic_general:
+                    # the sections that explain the topic, not those that only apply it (ADR-062)
+                    retriever = _FixedHits(
+                        self._general_hits(
+                            value, retriever.search, self.config.practice.max_questions * 3
+                        )
+                    )
+                with self.lock:
                     candidates = candidate_sections(
-                        self._conn, self.config, kind, value, retriever, review
+                        self._conn, self.config, kind, value, retriever, review, english
                     )
                 sections = choose_sections(
                     candidates, latest, flagged, count, rng, keep_order=kind == "topic"
@@ -936,7 +1052,9 @@ class Engine:
 
     # --- «Explícamelo tú» (ADR-027) -------------------------------------------------------------
 
-    def feynman_start(self, concept: str) -> Generator[Event, None, None]:
+    def feynman_start(
+        self, concept: str, within: tuple[str, str] | None = None
+    ) -> Generator[Event, None, None]:
         """Step 1, while the user writes: find the notes and take their key ideas. One event,
         ("ready", {session_id, …}); the ideas stay on the server until the explanation arrives.
         Raises ValueError (before any event) when the notes say too little."""
@@ -944,9 +1062,15 @@ class Engine:
         try:
             cfg = self.config.feynman
             config = self._feynman_config()
-            with self.lock:
-                hits = self._base().search(concept, cfg.fragments * 2)
-            fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+            where = self.source_scope(*within) if within else None  # ADR-063
+            if cfg.general:  # what explains the concept, not where it is configured (ADR-062)
+                hits = self._general_hits(concept, self._base(where).search, cfg.fragments * 2)
+            else:
+                with self.lock:
+                    hits = self._base(where).search(concept, cfg.fragments * 2)
+            fragments = numbered_fragments(
+                hits, cfg.fragments, cfg.max_fragment_chars, openings=cfg.general
+            )
             if len(fragments) < cfg.min_fragments:
                 raise ValueError(f"Tus notas no tienen suficiente sobre «{concept}».")
             with self.lock:
@@ -954,7 +1078,7 @@ class Engine:
             llm = self._llm_factory(config)
             try:
                 if cfg.reason:  # the notes must explain the topic (ADR-058, the gate of ADR-056)
-                    gate = self._feynman_gate(llm, config, concept)
+                    gate = self._feynman_gate(llm, config, concept, where)
                     if not gate.open:
                         raise ValueError(
                             f"Tus notas no explican «{concept}», así que no puedo comparar tu "
@@ -1044,12 +1168,15 @@ class Engine:
             return self.config
         return replace(self.config, llm=reason_llm(self.config))
 
-    def _feynman_gate(self, llm: LLMClient, config: Config, concept: str) -> Gate:
-        """The topic gate of ADR-056 on the concept; its CPU reranker is released at once."""
+    def _feynman_gate(
+        self, llm: LLMClient, config: Config, concept: str, where: str | None = None
+    ) -> Gate:
+        """The topic gate of ADR-056 on the concept, in the part of the library the user chose
+        (ADR-063); its CPU reranker is released at once."""
         reranker = self._reranker_factory(self.config, "cpu")
         try:
             with self.lock:
-                base = self._base()
+                base = self._base(where)
             return topic_gate(llm, config, base, reranker.score, concept)
         finally:
             reranker.close()
@@ -1775,6 +1902,36 @@ class Engine:
 
     # --- «Diccionario» (ADR-034) ------------------------------------------------------------
 
+    def _book_fragments(self, book: Book) -> tuple[list[Fragment], int]:
+        """A book's content sections, chapter after chapter, numbered from 1; when it has more than
+        `guide_max_fragments` they are taken evenly across the whole book (ADR-063), so the
+        dictionary of a book is of the book and not of its first chapters. Also how many it has."""
+        cfg = self.config.dictionary
+        sections: list[tuple[str, tuple[str, ...], str, int, int]] = []
+        for chapter in book.chapters:
+            with self.lock:
+                rows = self._conn.execute(
+                    "SELECT c.heading_path, c.text, c.start_line, c.end_line FROM chunks c "
+                    "JOIN documents d ON d.id = c.document_id WHERE d.path = ? "
+                    "ORDER BY c.start_line",
+                    (chapter.path,),
+                ).fetchall()
+            for heading_json, text, start, end in rows:
+                heading = tuple(json.loads(heading_json))
+                if len(heading) >= 2 and is_content_heading(heading[-1]):
+                    sections.append((chapter.path, heading, text, start, end))
+        cap = cfg.guide_max_fragments
+        if len(sections) > cap:
+            picks = sorted({round(i * (len(sections) - 1) / (cap - 1)) for i in range(cap)})
+            chosen = [sections[i] for i in picks]
+        else:
+            chosen = sections
+        fragments = [
+            Fragment(n, path, heading, text[: cfg.max_fragment_chars], start, end)
+            for n, (path, heading, text, start, end) in enumerate(chosen, start=1)
+        ]
+        return fragments, len(sections)
+
     def _guide_fragments(self, doc_path: str) -> tuple[list[Fragment], int]:
         """A guide's content sections in order, numbered from 1 (navigation sections skipped),
         at most `guide_max_fragments`; and how many content sections it has in all."""
@@ -1815,9 +1972,14 @@ class Engine:
         self._claim_generation()
         try:
             cfg = self.config.spotter
-            with self.lock:
-                hits = self._base().search(topic, cfg.sections * 2)
-            fragments = numbered_fragments(hits, cfg.sections, cfg.max_fragment_chars)
+            if cfg.general:  # the topic's own sections are read for what they leave unexplained
+                hits = self._general_hits(topic, self._base().search, cfg.sections * 2)
+            else:
+                with self.lock:
+                    hits = self._base().search(topic, cfg.sections * 2)
+            fragments = numbered_fragments(
+                hits, cfg.sections, cfg.max_fragment_chars, openings=cfg.general
+            )
             if not fragments:
                 raise ValueError(
                     "No encontré secciones sobre ese tema en tus notas: no hay nada que completar."
@@ -1880,13 +2042,23 @@ class Engine:
         detail = " · ".join(g["name"] for g in guide["gaps"])
         return self._record_gap(guide["title"], "spotter", run["topic"], detail)
 
-    def build_dictionary(self, kind: str, value: str) -> Generator[Event, None, None]:
+    def build_dictionary(
+        self, kind: str, value: str, within: tuple[str, str] | None = None
+    ) -> Generator[Event, None, None]:
         """Events: ("start", {fragments}), ("entries", …) after each fragment with the entries so
         far, then ("done", {id}). Raises ValueError before any event when nothing is found."""
         self._claim_generation()
         try:
             cfg = self.config.dictionary
-            if kind == "guide":
+            where = self.source_scope(*within) if within else None  # ADR-063
+            if kind == "book" and not value.endswith(".md"):
+                book = next((b for b in self._books() if b.id == value), None)
+                if book is None:
+                    raise ValueError("Ese libro no está en tu biblioteca indexada.")
+                fragments, available = self._book_fragments(book)
+                title = book.title
+                focus = f"Libro: {title}. Incluye las entradas importantes del fragmento."
+            elif kind in ("guide", "chapter", "book"):
                 titles = dict(self.practice_guides())
                 if value not in titles:
                     raise ValueError("Esa guía no está en tu biblioteca indexada.")
@@ -1894,9 +2066,14 @@ class Engine:
                 title = titles[value]
                 focus = f"Guía: {title}. Incluye las entradas importantes del fragmento."
             else:
-                with self.lock:
-                    hits = self._base().search(value, cfg.fragments * 2)
-                fragments = numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
+                if cfg.general:  # the sections that explain the topic first (ADR-062)
+                    hits = self._general_hits(value, self._base(where).search, cfg.fragments * 2)
+                else:
+                    with self.lock:
+                        hits = self._base(where).search(value, cfg.fragments * 2)
+                fragments = numbered_fragments(
+                    hits, cfg.fragments, cfg.max_fragment_chars, openings=cfg.general
+                )
                 available = len(fragments)
                 title = value
                 focus = (

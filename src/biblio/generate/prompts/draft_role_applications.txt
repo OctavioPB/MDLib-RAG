@@ -1,0 +1,1 @@
+Esta sección son las aplicaciones: preséntalas en una tabla de dos columnas, dominio y aplicación concreta, cada fila con su cita [n]. Solo aplicaciones que los fragmentos mencionen.

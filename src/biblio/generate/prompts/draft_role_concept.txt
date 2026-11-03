@@ -1,0 +1,1 @@
+Esta sección es el marco conceptual: define el problema en términos generales antes de nombrar la solución, di de qué tipo de problema se trata y por qué importa. No entres aún en la mecánica.

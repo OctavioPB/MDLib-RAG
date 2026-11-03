@@ -823,6 +823,7 @@ def draft(
     section by section with citations. A skeleton to edit, not a finished guide (ADR-008)."""
     from datetime import date
 
+    from biblio.config import reason_llm
     from biblio.generate.draft import (
         Drafter,
         SourceRegistry,
@@ -832,6 +833,7 @@ def draft(
         slugify,
     )
     from biblio.generate.llm import LLMError, load_llm_client
+    from biblio.generate.translate import translate_query
     from biblio.ingest.tokens import load_token_counter_safe
     from biblio.offline import loopback_port_open
     from biblio.retrieve.store import open_index
@@ -848,8 +850,17 @@ def draft(
     drafts.mkdir(parents=True, exist_ok=True)
     counter = load_token_counter_safe(config, console)
     retriever = _open_retriever(config, config.retrieval.default_mode)
-    llm = load_llm_client(config.llm)
-    drafter = Drafter(config, retriever, llm, counter, open_index(config))
+    # the outline by the tutor's model, the sections by the «Razonar» one (ADR-057, ADR-061)
+    writing = outline_file is not None and config.draft.reason_sections
+    llm = load_llm_client(reason_llm(config) if writing else config.llm)
+    drafter = Drafter(
+        config,
+        retriever,
+        llm,
+        counter,
+        open_index(config),
+        lambda q: translate_query(llm, config.retrieval, q),
+    )
     try:
         if outline_file is None:
             console.print(f"[bold]Outline for:[/bold] {topic}\n")
@@ -883,6 +894,7 @@ def draft(
                 flags.append("[red]invalid citations[/red]")
             console.print("   " + (", ".join(flags) if flags else "[green]ok[/green]"))
             results.append(result)
+        meta = drafter.frame(outline, results, registry)
     except LLMError as exc:
         console.print(f"\n[red]{exc}[/red]")
         raise typer.Exit(1) from exc
@@ -892,13 +904,33 @@ def draft(
 
     target = out or drafts / f"{slug}.md"
     target.write_text(
-        render_draft(topic, results, registry, date.today()), encoding="utf-8", newline="\n"
+        render_draft(topic, results, registry, date.today(), meta),
+        encoding="utf-8",
+        newline="\n",
     )
     missing = sum(r.missing_evidence for r in results)
     console.print(
         f"\nDraft → [bold]{target}[/bold] · {len(results)} sections "
         f"({missing} without evidence) · {len(registry.fragments)} sources"
     )
+
+
+@app.command("draft-clean")
+def draft_clean(
+    file: Annotated[
+        Path, typer.Argument(exists=True, dir_okay=False, help="A draft written by `biblio draft`.")
+    ],
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Output file (default: <draft>.limpio.md).")
+    ] = None,
+) -> None:
+    """Take a draft you accepted to the series' form: no [n] citations, no review flags and the
+    references as a list of the chapters used (ADR-061). The draft itself is not changed."""
+    from biblio.generate.draft import clean_draft
+
+    target = out or file.with_suffix(".limpio.md")
+    target.write_text(clean_draft(file.read_text(encoding="utf-8")), encoding="utf-8", newline="\n")
+    console.print(f"Clean guide → [bold]{target}[/bold]")
 
 
 ask_eval_app = typer.Typer(

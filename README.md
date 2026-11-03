@@ -142,6 +142,15 @@ check out are flagged. `--show-context` lists every fragment the model received.
 summarizes each guide separately before answering; it is off by default because its measured
 faithfulness is lower (ADR-017).
 
+## Where Practicar reads from
+
+The quiz form, «Explícamelo tú» and the dictionary choose their source from lists, not by typing a title
+(ADR-063): **a guide** (one of your own notes), **a book**, **a chapter** (pick the book, then the chapter
+from its list, in order) or **the whole library**; the quiz also takes **a folder**. Books show their area,
+chapters and how many you have read, and can be filtered by title and area, so several books on one subject
+are told apart. A topic typed next to the choice narrows inside it («consumer groups» inside one book). The
+dictionary of a book reads sections taken evenly from all its chapters.
+
 ## Writing assistant (`biblio draft`)
 
 Two steps, with you in between (ADR-008: the result is a skeleton to edit, not a finished guide):
@@ -152,9 +161,17 @@ uv run biblio draft "Validación cruzada en machine learning"
 uv run biblio draft "Validación cruzada en machine learning" --outline drafts/validacion-cruzada-en-machine-learning.outline.md
 ```
 
-The outline imitates the structure of your closest guides. Each section retrieves its own evidence,
-cites it with `[n]`, and says so when the library has nothing for it; the draft ends with the list of
-sources used. Drafts are written to `drafts/`, outside the library, so they are never indexed.
+The draft has the shape of your series (ADR-061): header, epigraph, table of contents, 10 to 13
+numbered sections that follow its arc (conceptual frame, foundations, mechanics, complexity, a
+comparison, applications, limitations and a closing decision tree), references and footer. The
+outline imitates your own guides (never the books), and each section is written from book chapters
+only (`draft.evidence`), searched in Spanish and in English. The outline is proposed by the tutor's
+model and the sections are written by the «Razonar» one (`draft.reason_sections`), so the second
+step loads it. Each claim cites its source with `[n]`, and a section says so when the books have
+nothing for it. Set your name for the header and footer in `config/local.toml` (`[draft] author`).
+When you accept a draft, `biblio draft-clean drafts/<tema>.md` writes the same guide without the
+`[n]`, the review flags and the banner, with the chapters used as its references. Drafts are
+written to `drafts/`, outside the library, so they are never indexed.
 
 ## Web interface (`biblio serve`)
 

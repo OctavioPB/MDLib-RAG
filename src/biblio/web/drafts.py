@@ -16,7 +16,11 @@ from biblio.generate.draft import OUTLINE_SECTION_PREFIX, Outline, parse_outline
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,59}$")
 OUTLINE_SUFFIX = ".outline.md"
 _OUTLINE_TITLE = "# Esquema: "
-_SOURCES_HEADING = "## Fuentes"
+_SOURCES_HEADINGS = (
+    "## Fuentes",
+    "## Referencias",
+)  # the series calls them «Referencias» (ADR-061)
+_CONTENTS_HEADING = "## 0. Tabla de Contenidos"  # the guide's own index: not a section
 _SOURCE_LINE_RE = re.compile(r"^\d+\. ")
 
 
@@ -67,8 +71,8 @@ def draft_counts(markdown: str) -> tuple[int, int]:
     in_sources = False
     for line in markdown.splitlines():
         if line.startswith(OUTLINE_SECTION_PREFIX):
-            in_sources = line.strip() == _SOURCES_HEADING
-            sections += not in_sources
+            in_sources = line.strip() in _SOURCES_HEADINGS
+            sections += not in_sources and line.strip() != _CONTENTS_HEADING
         elif in_sources and _SOURCE_LINE_RE.match(line):
             sources += 1
     return sections, sources

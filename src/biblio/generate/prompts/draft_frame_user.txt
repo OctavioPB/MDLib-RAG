@@ -1,0 +1,6 @@
+Tema de la guía: {topic}
+
+Resumen de sus secciones:
+{gist}
+
+JSON:

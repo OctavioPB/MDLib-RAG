@@ -1,0 +1,1 @@
+Esta sección analiza costos y complejidad: presenta una tabla con el costo por fase o componente que digan los fragmentos y señala los casos especiales. Si los fragmentos no dan costos, usa la frase de falta de evidencia indicada arriba.

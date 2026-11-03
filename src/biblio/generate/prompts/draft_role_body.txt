@@ -1,0 +1,1 @@
+Esta sección es de desarrollo: explica con precisión lo que dicen los fragmentos. Usa listas o tablas cuando aclaren, y diagramas ASCII genéricos (con símbolos como A, B, C) si ayudan. No inventes cifras ni ejemplos numéricos resueltos.

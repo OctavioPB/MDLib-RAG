@@ -7,6 +7,7 @@ JSON and are validated; an invalid reply is asked once more and then skipped.
 from __future__ import annotations
 
 import json
+import math
 import random
 import re
 import sqlite3
@@ -21,7 +22,9 @@ from biblio.practice.store import KINDS, QuestionContent, Section, StoredQuestio
 from biblio.retrieve.store import scope_prefix
 from biblio.retrieve.types import Retriever
 
-SCOPE_KINDS = ("guide", "folder", "topic", "review", "srs", "sections")
+SCOPE_KINDS = (
+    "guide", "chapter", "book", "folder", "library", "topic", "review", "srs", "sections"
+)  # fmt: skip
 # "srs": today's spaced-repetition reviews (ADR-025); "sections": given sections (ADR-026)
 _MAX_TEXT = 500  # characters of a question, statement or option
 _MAX_EXPLANATION = 1200
@@ -40,6 +43,11 @@ _NON_CONTENT = {
     "recursos",
     "enlaces",
 }
+# words that never name a topic; the rest compete by how rare they are in the library
+_TOPIC_STOPWORDS = {
+    "de", "del", "la", "las", "el", "los", "un", "una", "y", "o", "en", "con", "por", "para",
+    "the", "of", "and", "to", "in", "for", "on", "a", "an", "que", "sobre", "como",
+}  # fmt: skip
 _VERDICTS = {"correcta": "correct", "parcial": "partial", "incorrecta": "wrong"}
 _OPTION_LETTER_RE = re.compile(r"^\s*[A-Da-d]\s*[).:\-]\s+")  # "B) texto" → "texto"
 
@@ -67,8 +75,49 @@ class Candidate:
 _SELECT = (
     "SELECT c.id, d.path, c.heading_path, c.start_line, c.end_line, c.text FROM chunks c "
     "JOIN documents d ON d.id = c.document_id "
-    "WHERE c.token_count BETWEEN ? AND ? AND json_array_length(c.heading_path) >= 2 "
+    "WHERE c.token_count BETWEEN ? AND ? "
 )
+_UNDER_A_HEADING = (
+    "AND json_array_length(c.heading_path) >= 2 "  # not the text before the first one
+)
+
+
+def _fold(text: str) -> str:
+    plain = unicodedata.normalize("NFKD", text.casefold())
+    return "".join(ch for ch in plain if not unicodedata.combining(ch))
+
+
+_COGNATE = (("th", "t"), ("ph", "f"), ("y", "i"))
+
+
+def _spelled(text: str) -> str:
+    """Folded, with the spellings English and Spanish part ways on made alike: «matemática» and
+    «mathematical» both become «matematical», «analisis» and «analysis» both «analisis»."""
+    folded = _fold(text)
+    for old, new in _COGNATE:
+        folded = folded.replace(old, new)
+    return folded
+
+
+def topic_stems(topic: str) -> list[str]:
+    """The topic's words cut to a stem that also matches the other language and the plural:
+    «optimización» → «optimiz» (optimization too), «básico» → «basi» (basic), «AWS» whole."""
+    words = [w for w in re.findall(r"\w+", _spelled(topic)) if w not in _TOPIC_STOPWORDS]
+    return list(dict.fromkeys(w if len(w) <= 4 else w[: max(4, len(w) // 2 + 1)] for w in words))
+
+
+def _matched(stems: Sequence[str], text: str, share: float) -> bool:
+    """Whether the text writes at least `share` of the topic's words (a stem starting a word)."""
+    if not stems:
+        return True
+    folded = _spelled(text)
+    found = sum(re.search(rf"(?<!\w){re.escape(stem)}", folded) is not None for stem in stems)
+    return found >= math.ceil(share * len(stems) - 1e-9)
+
+
+def _named(names: Sequence[Sequence[str]], text: str, share: float) -> bool:
+    """`_matched` for the topic as written or as translated: either one is enough."""
+    return any(_matched(stems, text, share) for stems in names)
 
 
 def candidate_sections(
@@ -78,33 +127,65 @@ def candidate_sections(
     value: str,
     retriever: Retriever | None = None,
     review: Sequence[tuple[str, str]] = (),
+    english: str | None = None,
 ) -> list[Candidate]:
-    """Content sections of a guide, a folder, a topic (through retrieval) or the review list."""
+    """Content sections of a guide or chapter, a book, a folder, the whole library, a topic
+    (through retrieval) or the review list (ADR-063). `english`: the topic translated, whose words
+    also count as the topic's (ADR-060)."""
     p = config.practice
     bounds = (p.min_section_tokens, p.max_section_tokens)
-    if kind == "guide":
-        rows = conn.execute(_SELECT + "AND d.path = ? ORDER BY c.id", (*bounds, value)).fetchall()
+    if kind == "book":  # a book is a folder; a book of one note is that note
+        kind = "guide" if value.endswith(".md") else "folder"
+    if kind == "chapter":
+        kind = "guide"
+    if kind == "library":
+        rows = conn.execute(
+            _SELECT + _UNDER_A_HEADING + "ORDER BY random() LIMIT ?",
+            (*bounds, p.max_questions * p.library_pool),
+        ).fetchall()
+    elif kind == "guide":
+        rows = conn.execute(
+            _SELECT + _UNDER_A_HEADING + "AND d.path = ? ORDER BY c.id", (*bounds, value)
+        ).fetchall()
     elif kind == "folder":
         prefix = scope_prefix(value)
+        # a range on the path uses its index: a scan with substr() took 1.2 s over 700 000 chunks
+        end = prefix[:-1] + chr(ord("/") + 1)  # the first path after every one under the folder
         rows = conn.execute(
-            _SELECT + "AND substr(d.path, 1, ?) = ? ORDER BY c.id", (*bounds, len(prefix), prefix)
+            _SELECT + _UNDER_A_HEADING + "AND d.path >= ? AND d.path < ? ORDER BY c.id",
+            (*bounds, prefix, end),
         ).fetchall()
     elif kind == "topic":
         if retriever is None:
             raise ValueError("a topic needs a retriever")
         ids = [h.chunk_id for h in retriever.search(value, p.max_questions * 3)]
+        # the opening of a note, before its first heading, is where a topic is defined (ADR-062)
         rows = conn.execute(
             _SELECT + "AND c.id IN (SELECT value FROM json_each(?))", (*bounds, json.dumps(ids))
         ).fetchall()
         order = {cid: i for i, cid in enumerate(ids)}  # keep the retrieval's relevance order
         rows.sort(key=lambda r: order.get(r[0], len(order)))
+        if p.topic_match > 0:  # ADR-060: a section must write the topic's words, not only rank
+            names = [topic_stems(value)] + ([topic_stems(english)] if english else [])
+            text = [f"{r[1]} {r[2]} {r[5]}" for r in rows]
+            # the retrieval's best `topic_head` need only one of the words: they rank for the topic
+            # as a whole («Optimization» in a maths book), while the tail drifts to the common word
+            keep = [
+                _named(names, t, p.topic_match) or (i < p.topic_head and _named(names, t, 0.01))
+                for i, t in enumerate(text)
+            ]
+            rows = [r for r, k in zip(rows, keep, strict=True) if k]
+            # …and those whose guide or heading write them come first (stable inside each group)
+            rows.sort(key=lambda r: not _named(names, f"{r[1]} {r[2]}", p.topic_match))
     elif kind == "review":
         wanted = set(review)
         rows = []
         for path in sorted({path for path, _ in wanted}):
             rows += [
                 r
-                for r in conn.execute(_SELECT + "AND d.path = ? ORDER BY c.id", (*bounds, path))
+                for r in conn.execute(
+                    _SELECT + _UNDER_A_HEADING + "AND d.path = ? ORDER BY c.id", (*bounds, path)
+                )
                 if (r[1], r[2]) in wanted
             ]
     else:

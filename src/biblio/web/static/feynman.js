@@ -8,10 +8,17 @@ const COVERAGE_MARKS = { covered: ["✓", "correct"], partial: ["~", "partial"],
 const CLAIM_MARKS = { supported: ["✓", "correct"], contradicts: ["✗", "wrong"], unsupported: ["?", "partial"] };
 const FEYNMAN_GENERAL = { true: tx("parece correcta"), false: tx("parece incorrecta"), unsure: tx("no estoy seguro") };
 
-const feynman = { session: null };
+const feynman = { session: null, scope: null }; // scope: the picker of where to look (scope.js)
 
 async function startFeynman(concept) {
   showError("feynman-error", "");
+  let source;
+  try {
+    source = feynman.scope ? feynman.scope.get() : { kind: "library" };
+  } catch (error) {
+    showError("feynman-error", error.message);
+    return;
+  }
   if (feynman.session) feynman.session.controller.abort();
   $("feynman-concept").value = concept;
   const s = {
@@ -32,7 +39,7 @@ async function startFeynman(concept) {
   try {
     await streamEvents(
       "/api/feynman/start",
-      { concept },
+      { concept, ...(source.kind === "library" ? {} : { scope: { kind: source.kind, value: source.value } }) },
       (name, data) => {
         if (name !== "ready") return;
         s.id = data.session_id;
@@ -321,6 +328,10 @@ function gradeCard(s) {
 }
 
 function bindFeynman() {
+  // where to look for the concept: the whole library, a guide, a book or a chapter (ADR-063)
+  feynman.scope = scopePickerCreate($("feynman-scope"), ["library", "guide", "book", "chapter"], (source) => {
+    $("feynman-scope-label").textContent = source ? source.label : tx("falta elegir");
+  });
   $("feynman-form").addEventListener("submit", async (event) => {
     event.preventDefault();
     const concept = $("feynman-concept").value.trim();

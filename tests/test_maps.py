@@ -754,3 +754,23 @@ def test_a_fragment_explains_the_topic_by_score_or_by_heading_and_the_llm() -> N
     scores = {("a.md", 1): 0.9, ("b.md", 1): 0.1, ("c.md", 1): 0.1}
     assert count_general("webhook", [scored, named, other], scores, 0.4, focus) == 2
     assert asked == [2]  # the LLM is asked only about a low score whose heading names the topic
+
+
+def test_general_first_keeps_what_explains_the_topic_best_first() -> None:
+    from biblio.maps.select import general_first
+
+    hits = [Hit(i, f"d{i}.md", ("T",), "x", 1, 2, i, 0.0, "t") for i in range(1, 5)]
+    scores = [0.1, 0.9, 0.5, 0.45]
+    assert [h.chunk_id for h in general_first(hits, scores, 0.4, 3)] == [2, 3, 4]
+    # fewer than the minimum: a vague topic scores everything low, so all stay, best first
+    assert [h.chunk_id for h in general_first(hits, scores, 0.4, 4)] == [2, 3, 4, 1]
+
+
+def test_numbered_fragments_take_a_notes_opening_only_when_asked() -> None:
+    from biblio.maps.export import numbered_fragments
+
+    opening = Hit(1, "ip.md", ("Dirección IP",), "Identifica un equipo.", 3, 4, 1, 0.0, "t")
+    section = Hit(2, "ip.md", ("Dirección IP", "Tipos"), "Fija o dinámica.", 9, 12, 2, 0.0, "t")
+    assert [f.start_line for f in numbered_fragments([opening, section], 5, 100)] == [9]
+    taken = numbered_fragments([opening, section], 5, 100, openings=True)
+    assert [f.start_line for f in taken] == [3, 9] and taken[0].number == 1

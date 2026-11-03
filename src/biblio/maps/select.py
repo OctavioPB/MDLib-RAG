@@ -44,6 +44,20 @@ def order_sections(topic: str, hits: Sequence[Hit], scores: Sequence[float] | No
     return named + [h for h in ranked if h not in named]
 
 
+def general_first(
+    hits: Sequence[Hit], scores: Sequence[float], threshold: float, min_general: int
+) -> list[Hit]:
+    """The sections that explain the topic in general (ADR-062): those the reranker scores against
+    the definitional question at `threshold` or more, best first. With fewer than `min_general` of
+    them the topic is too vague for the score to tell (a short «AWS Basico» scores everything near
+    zero), and every candidate stays, in score order."""
+    ranked = [h for _, h in sorted(zip(scores, hits, strict=True), key=lambda p: -p[0])]
+    general = [h for s, h in zip(scores, hits, strict=True) if s >= threshold]
+    if len(general) < min_general:
+        return ranked
+    return [h for h in ranked if h in general]
+
+
 def rerank_scores(score: Score, topic: str, hits: Sequence[Hit], cfg: MapsConfig) -> list[float]:
     return score(definitional_query(topic, cfg), [passage(h) for h in hits])
 

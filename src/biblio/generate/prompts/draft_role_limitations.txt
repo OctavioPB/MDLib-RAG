@@ -1,0 +1,1 @@
+Esta sección es la más honesta de la guía: di dónde falla la técnica, qué errores de generalización son comunes, contraejemplos y cuándo NO usarla, sin rodeos y solo con lo que dicen los fragmentos. Si los fragmentos no mencionan limitaciones, usa la frase de falta de evidencia indicada arriba.

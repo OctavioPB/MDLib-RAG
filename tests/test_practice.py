@@ -6,6 +6,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -15,11 +16,13 @@ from biblio.generate.llm import Message
 from biblio.index.indexer import index_library
 from biblio.practice.quiz import (
     Candidate,
+    _matched,
     assign_kinds,
     candidate_sections,
     choose_sections,
     parse_grade,
     parse_question,
+    topic_stems,
 )
 from biblio.practice.store import PracticeStore, QuestionContent, Section
 from biblio.retrieve.bm25 import BM25Retriever
@@ -179,6 +182,79 @@ def test_candidate_sections_per_scope(cfg: Config) -> None:
     assert topic[0].section.doc_path == "alg/svd.md"
     review = candidate_sections(conn, cfg, "review", "", review=[guide[1].key])
     assert [c.section.title for c in review] == ["2. Aplicaciones"]
+
+
+def test_topic_stems_match_the_other_language_and_plurals() -> None:
+    assert topic_stems("AWS Básico") == ["aws", "basi"]
+    assert topic_stems("optimización matemática") == ["optimiz", "matema"]
+    assert topic_stems("optimización de carteras") == ["optimiz", "carte"]
+    assert topic_stems("de la") == []
+
+
+def test_matched_needs_a_share_of_the_topic_words() -> None:
+    stems = topic_stems("AWS Basico")
+    assert _matched(stems, "AWS Support Plans: the Basic Support Plan", 0.6)
+    assert not _matched(stems, "Teorema básico de la optimización", 0.6)  # no «aws»
+    assert not _matched(stems, "AWS Lambda y funciones", 0.6)  # no «basico»
+    assert _matched(topic_stems("regresión lineal múltiple"), "regresion lineal", 0.6)
+    assert _matched([], "cualquier cosa", 0.6)
+    # cognates that differ in spelling (ADR-060)
+    assert _matched(topic_stems("optimización matemática"), "Mathematical Optimization", 0.6)
+    assert _matched(topic_stems("análisis"), "Principal component analysis", 1.0)
+
+
+def test_topic_scope_drops_sections_that_only_rank(cfg: Config) -> None:
+    """ADR-060: «AWS Basico» once brought a maths book's «Teorema básico» as a question."""
+    conn = open_index(cfg)
+    everything = [
+        SimpleNamespace(chunk_id=cid)
+        for (cid,) in conn.execute("SELECT id FROM chunks ORDER BY id")
+    ]
+
+    class All:
+        def search(self, query: str, k: int) -> list[Any]:
+            return everything
+
+    tail = replace(cfg, practice=replace(cfg.practice, topic_head=0))
+    for word, kept in (("svd", True), ("zzzz", False)):
+        found = candidate_sections(conn, tail, "topic", f"{word} valores", All())  # type: ignore[arg-type]
+        assert bool(found) == kept, word
+    # the retrieval's first `topic_head` need only one of the words; the tail needs the share
+    one = "svd zzzz"  # «svd» is written by the SVD guide only
+    assert candidate_sections(conn, cfg, "topic", one, All())  # type: ignore[arg-type]
+    assert not candidate_sections(conn, tail, "topic", one, All())  # type: ignore[arg-type]
+    # the topic translated counts too: «estadística» is written «statistics» in an English book
+    assert not candidate_sections(conn, tail, "topic", "zzzz", All())  # type: ignore[arg-type]
+    assert candidate_sections(conn, tail, "topic", "zzzz", All(), english="svd")  # type: ignore[arg-type]
+    off = replace(cfg, practice=replace(cfg.practice, topic_match=0.0))
+    assert candidate_sections(conn, off, "topic", "zzzz valores", All())  # type: ignore[arg-type]
+
+
+def test_topic_in_english_asks_the_llm_once_and_skips_english(
+    server: tuple[str, int, Engine],
+) -> None:
+    engine = server[2]
+
+    class Translator:
+        def __init__(self) -> None:
+            self.asked: list[str] = []
+
+        def stream(self, messages: Sequence[Message], max_tokens: int) -> Iterator[str]:
+            self.asked.append(messages[1].content)
+            yield "statistics"
+
+        def close(self) -> None:
+            pass
+
+    llm = Translator()
+    engine._llm_factory = lambda _c: llm  # type: ignore[assignment]
+    assert engine._topic_in_english("estadística") == "statistics"
+    english = "the use of the regression of data"  # already English: not asked
+    assert engine._topic_in_english(english) is None
+    assert llm.asked == ["estadística"]
+    off = replace(engine.config, practice=replace(engine.config.practice, topic_match=0.0))
+    engine.config = off
+    assert engine._topic_in_english("estadística") is None  # the filter is off
 
 
 # --- the history --------------------------------------------------------------------------------
@@ -440,3 +516,57 @@ def test_the_daily_limit_and_nothing_due(
     as_the_page = {**review, "count": today["today"]}  # the page asks for today's number
     _, events = _call(server, "POST", "/api/practice/start", as_the_page)
     assert events[0][1]["planned"] == 1
+
+
+# --- the sections that explain a topic come first (ADR-062) -----------------------------------
+
+
+class _SvdScore:
+    """A reranker that finds the SVD guide the one that explains «valores singulares»."""
+
+    def score(self, query: str, passages: Sequence[str]) -> list[float]:
+        return [0.9 if "valores singulares" in p else 0.1 for p in passages]
+
+    def close(self) -> None:
+        pass
+
+
+def test_general_hits_keep_what_explains_the_topic(server: tuple[str, int, Engine]) -> None:
+    engine = server[2]
+    maps = replace(engine.config.maps, rerank=True, min_general=1, general_score=0.5)
+    engine.config = replace(engine.config, maps=maps)
+    engine._reranker_factory = lambda _c, _d: _SvdScore()  # type: ignore[assignment,return-value]
+    hits = engine._general_hits("valores singulares", engine._base().search, 10)
+    assert hits and {h.doc_path for h in hits} == {"alg/svd.md"}
+    # too few that explain it: the topic is too vague for the score, every candidate stays
+    engine.config = replace(engine.config, maps=replace(maps, min_general=50))
+    assert len(engine._general_hits("valores singulares", engine._base().search, 10)) >= len(hits)
+    # reranking off: the search as it came
+    engine.config = replace(engine.config, maps=replace(maps, rerank=False))
+    assert engine._general_hits("valores singulares", engine._base().search, 10)
+
+
+def test_the_opening_of_a_note_can_be_asked_about_by_topic(config: Config, tmp_path: Path) -> None:
+    """The definition of a topic is often the text before a note's first heading."""
+    library = tmp_path / "library"
+    library.mkdir()
+    opening = "Una dirección IP identifica un equipo en una red. " * 4
+    (library / "ip.md").write_text(f"# Dirección IP\n\n{opening}", encoding="utf-8")
+    cfg = replace(
+        config,
+        chunking=replace(config.chunking, min_tokens=5, target_tokens=40, max_tokens=60),
+        paths=replace(config.paths, library=library, index_db=tmp_path / "index.db"),
+        practice=replace(config.practice, db=tmp_path / "practice.db", min_section_tokens=5),
+    )
+    index_library(
+        cfg,
+        library,
+        full=True,
+        dtype="float32",
+        embedder_factory=FakeEmbedder,
+        counter_factory=WordCounter,
+    )
+    conn = open_index(cfg)
+    topic = candidate_sections(conn, cfg, "topic", "dirección IP", BM25Retriever(conn))
+    assert topic and all(len(c.section.heading_path) == 1 for c in topic)
+    assert candidate_sections(conn, cfg, "guide", "ip.md") == []  # a guide keeps its rule

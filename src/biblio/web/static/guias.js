@@ -276,8 +276,10 @@ function parseDraft(markdown) {
   let inSources = false;
   for (const line of markdown.split("\n")) {
     if (line.startsWith("## ")) {
-      inSources = line.trim() === "## Fuentes";
-      current = inSources ? null : { title: line.slice(3).trim(), lines: [], flags: [] };
+      const heading = line.trim();
+      inSources = heading === "## Fuentes" || heading === "## Referencias";
+      // the guide's own contents list (the series' «0.») is not a section to review
+      current = inSources || heading.startsWith("## 0.") ? null : { title: line.slice(3).trim(), lines: [], flags: [] };
       if (current) sections.push(current);
     } else if (inSources) {
       const m = line.match(/^(\d+)\. (.*)$/);

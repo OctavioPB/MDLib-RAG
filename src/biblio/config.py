@@ -114,6 +114,12 @@ class DraftConfig:
     max_sections: int
     sibling_guides: int
     sibling_outline_lines: int
+    author: str
+    level: str
+    evidence: str
+    per_document: int
+    reason_sections: bool
+    frame_max_tokens: int
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,10 @@ class ConversationsConfig:
 class PracticeConfig:
     db: Path
     max_questions: int
+    topic_match: float
+    topic_general: bool
+    library_pool: int
+    topic_head: int
     min_section_tokens: int
     max_section_tokens: int
     question_max_tokens: int
@@ -168,6 +178,7 @@ class FeynmanConfig:
     min_samples: int
     eval_match_similarity: float
     reason: bool  # Gemma, the topic gate and general verdicts (ADR-058)
+    general: bool  # the sections that explain the concept first (ADR-062)
 
 
 @dataclass(frozen=True)
@@ -225,11 +236,13 @@ class DictionaryConfig:
     max_entries: int
     definition_max_chars: int
     history_limit: int
+    general: bool  # a topic's entries come from the sections that explain it (ADR-062)
 
 
 @dataclass(frozen=True)
 class SpotterConfig:  # «Gap Spotter» in Guías (ADR-047)
     sections: int
+    general: bool  # the sections read are those that explain the topic (ADR-062)
     max_fragment_chars: int
     batch: int
     terms_per_batch: int
@@ -565,6 +578,8 @@ def _validate(config: Config) -> None:
     d = config.draft
     if not 0 < d.min_sections <= d.max_sections:
         raise ConfigError("draft: expected 0 < min_sections <= max_sections")
+    if d.evidence not in ("books", "library") or d.per_document < 1:
+        raise ConfigError("draft: evidence is 'books' or 'library' and per_document >= 1")
     p = config.practice
     if not (0 < p.min_section_tokens < p.max_section_tokens and p.max_questions > 0):
         raise ConfigError("practice: expected 0 < min_section_tokens < max_section_tokens")

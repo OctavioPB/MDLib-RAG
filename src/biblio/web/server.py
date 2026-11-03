@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import sys
 from collections.abc import Callable, Generator
 from dataclasses import asdict
 from datetime import date
@@ -46,6 +47,7 @@ _STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
     "/static/guias.js": ("guias.js", "text/javascript; charset=utf-8"),
     "/static/practicar.js": ("practicar.js", "text/javascript; charset=utf-8"),
+    "/static/scope.js": ("scope.js", "text/javascript; charset=utf-8"),  # ADR-063
     "/static/theme.js": ("theme.js", "text/javascript; charset=utf-8"),
     "/static/mapas.js": ("mapas.js", "text/javascript; charset=utf-8"),
     "/static/feynman.js": ("feynman.js", "text/javascript; charset=utf-8"),
@@ -473,8 +475,7 @@ def make_handler(
                 return
             drafts_dir = engine.config.paths.drafts_dir
             if self.path == "/api/practice/guides":
-                guides = [{"path": p, "title": t} for p, t in engine.practice_guides()]
-                self._send_json({"guides": guides})
+                self._send_json({"guides": engine.own_guides()})
                 return
             if self.path == "/api/practice/today":
                 self._send_json(engine.practice_today())
@@ -971,6 +972,29 @@ def make_handler(
         def _not_found(self) -> None:
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+        def _source_field(
+            self, raw: object, allowed: tuple[str, ...]
+        ) -> tuple[str, str] | bool | None:
+            """A {kind, value} naming where to look (ADR-063): None when absent or the whole
+            library, a (kind, value) pair when it names one that exists, False (and a 400
+            sent) when it does not."""
+            if raw is None:
+                return None
+            kind = raw.get("kind") if isinstance(raw, dict) else None
+            value = raw.get("value", "") if isinstance(raw, dict) else None
+            if not (
+                kind in allowed
+                and isinstance(value, str)
+                and len(value) <= _MAX_QUERY
+                and engine.valid_source(str(kind), value)
+            ):
+                self._send_json(
+                    {"error": f"expected a source of kind {'|'.join(allowed)} that exists"},
+                    HTTPStatus.BAD_REQUEST,
+                )
+                return False
+            return None if kind == "library" else (str(kind), value)
+
         def _practice_start(self, payload: dict[str, Any]) -> None:
             scope = payload.get("scope")
             kind = scope.get("kind") if isinstance(scope, dict) else None
@@ -983,7 +1007,7 @@ def make_handler(
                 kind in SCOPE_KINDS
                 and isinstance(value, str)
                 and len(value) <= _MAX_QUERY
-                and (kind in ("review", "srs") or value.strip())
+                and (kind in ("review", "srs", "library") or value.strip())
                 and isinstance(count, int)
                 and not isinstance(count, bool)
                 and 1 <= count <= limit
@@ -1001,12 +1025,27 @@ def make_handler(
                 )
                 return
             assert isinstance(value, str) and isinstance(count, int) and isinstance(kinds, list)
-            if kind == "folder" and value.strip("/") not in dict(engine.folders()):
-                self._send_json({"error": "unknown folder"}, HTTPStatus.BAD_REQUEST)
+            if kind in ("guide", "chapter", "book", "folder") and not engine.valid_source(
+                str(kind), value.strip()
+            ):
+                self._send_json({"error": f"unknown {kind}"}, HTTPStatus.BAD_REQUEST)
                 return
+            within = None
+            if kind == "topic":  # a topic looked for in one guide, book or chapter (ADR-063)
+                within = self._source_field(
+                    payload.get("within"), ("library", "guide", "chapter", "book", "folder")
+                )
+                if within is False:
+                    return
             # a review can reuse stored questions when the LLM is off (ADR-025)
             self._stream(
-                lambda: engine.start_quiz(str(kind), value.strip(), count, kinds),
+                lambda: engine.start_quiz(
+                    str(kind),
+                    value.strip(),
+                    count,
+                    kinds,
+                    within or None,  # type: ignore[arg-type]
+                ),
                 needs_llm=kind != "srs",
             )
 
@@ -1100,8 +1139,19 @@ def make_handler(
 
         def _feynman_start(self, payload: dict[str, Any]) -> None:
             concept = self._text_field(payload, "concept", _MAX_TITLE)
-            if concept is not None:
-                self._stream(lambda: engine.feynman_start(" ".join(concept.split())))
+            if concept is None:
+                return
+            within = self._source_field(
+                payload.get("scope"), ("library", "guide", "chapter", "book")
+            )
+            if within is False:
+                return
+            self._stream(
+                lambda: engine.feynman_start(
+                    " ".join(concept.split()),
+                    within or None,  # type: ignore[arg-type]
+                )
+            )
 
         def _feynman_check(self, payload: dict[str, Any]) -> None:
             sid = self._id_field(payload, "session_id")
@@ -1453,15 +1503,33 @@ def make_handler(
 
         def _dictionary_build(self, payload: dict[str, Any]) -> None:
             kind, value = payload.get("kind"), payload.get("value")
-            if kind not in ("topic", "guide") or not isinstance(value, str) or not value.strip():
+            kinds = ("topic", "guide", "chapter", "book")
+            if kind not in kinds or not isinstance(value, str) or not value.strip():
                 self._send_json(
-                    {"error": "expected kind topic or guide and a value"}, HTTPStatus.BAD_REQUEST
+                    {"error": f"expected kind {', '.join(kinds)} and a value"},
+                    HTTPStatus.BAD_REQUEST,
                 )
                 return
             if len(value) > _MAX_QUERY:
                 self._send_json({"error": "value too long"}, HTTPStatus.BAD_REQUEST)
                 return
-            self._stream(lambda: engine.build_dictionary(str(kind), value.strip()))
+            within = None
+            if kind == "topic":  # a topic looked for in one guide, book or chapter (ADR-063)
+                within = self._source_field(
+                    payload.get("within"), ("library", "guide", "chapter", "book")
+                )
+                if within is False:
+                    return
+            elif kind == "book" and not engine.valid_source("book", value.strip()):
+                self._send_json({"error": "unknown book"}, HTTPStatus.BAD_REQUEST)
+                return
+            self._stream(
+                lambda: engine.build_dictionary(
+                    str(kind),
+                    value.strip(),
+                    within or None,  # type: ignore[arg-type]
+                )
+            )
 
         def _dictionary_delete(self, payload: dict[str, Any]) -> None:
             did = self._id_field(payload, "id")
@@ -1536,6 +1604,17 @@ def make_handler(
     return Handler
 
 
+class _QuietServer(ThreadingHTTPServer):
+    """A device that closes its connection (a phone that locks its screen, a browser tab that
+    goes away, a speculative connection) is not an error of the server: the stdlib would print a
+    traceback for each one. Anything else is still reported."""
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        if isinstance(sys.exc_info()[1], ConnectionError):  # reset, aborted, broken pipe
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(
     engine: Engine,
     host: str,
@@ -1548,7 +1627,7 @@ def make_server(
     the home network (ADR-035)."""
     require_loopback_host(host)
     bind = lan_bind if lan is not None else host  # tests bind LAN mode to loopback
-    server = ThreadingHTTPServer((bind, port), make_handler(engine, set(), lan, lan_ip))
+    server = _QuietServer((bind, port), make_handler(engine, set(), lan, lan_ip))
     server.daemon_threads = True
     bound = server.server_address[1]
     hosts = {f"{host}:{bound}"}

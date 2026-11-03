@@ -27,13 +27,18 @@ def map_fragments(hits: Sequence[Hit], cfg: MapsConfig) -> list[Fragment]:
     return numbered_fragments(hits, cfg.fragments, cfg.max_fragment_chars)
 
 
-def numbered_fragments(hits: Sequence[Hit], count: int, max_chars: int) -> list[Fragment]:
-    """Up to `count` distinct content sections, numbered from 1 (maps, ADR-022; ADR-027)."""
+def numbered_fragments(
+    hits: Sequence[Hit], count: int, max_chars: int, openings: bool = False
+) -> list[Fragment]:
+    """Up to `count` distinct content sections, numbered from 1 (maps, ADR-022; ADR-027).
+    `openings` also takes the text before a note's first heading, where a topic is often
+    defined (ADR-062); the maps and diagrams keep leaving it out."""
     fragments: list[Fragment] = []
     seen: set[tuple[str, int]] = set()
     for hit in hits:
         key = (hit.doc_path, hit.start_line)
-        if key in seen or len(hit.heading_path) < 2 or not is_content_heading(hit.heading_path[-1]):
+        deep_enough = len(hit.heading_path) >= (1 if openings else 2)
+        if key in seen or not deep_enough or not is_content_heading(hit.heading_path[-1]):
             continue
         seen.add(key)
         fragments.append(

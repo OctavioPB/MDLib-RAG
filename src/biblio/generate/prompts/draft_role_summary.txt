@@ -1,0 +1,1 @@
+Esta sección cierra la guía: escribe 2 a 4 viñetas de síntesis; luego un árbol de decisión ASCII dentro de un bloque de código (preguntas con ramas SÍ y NO que terminan en una recomendación), usando solo condiciones que los fragmentos respalden; y termina con un párrafo breve de cierre reflexivo, no un resumen mecánico.

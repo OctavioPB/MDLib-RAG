@@ -13,8 +13,7 @@ const RESULT_LABELS = { correct: tx("Correcta"), partial: tx("A medias"), wrong:
 const RESULT_MARKS = { correct: "✓", partial: "~", wrong: "✗" };
 
 const practice = {
-  guides: new Map(), // datalist value → path
-  folders: new Set(),
+  scope: null, // the picker of the quiz form (scope.js)
   quiz: null,
 };
 
@@ -53,48 +52,19 @@ function plainText(text) {
 
 // --- setup ---------------------------------------------------------------------------------
 
-async function loadScopes() {
-  try {
-    const guides = (await (await fetch("/api/practice/guides")).json()).guides;
-    const options = guides.map((g) => {
-      const value = `${g.title} (${g.path})`;
-      practice.guides.set(value, g.path);
-      practice.guides.set(g.path, g.path);
-      const option = el("option");
-      option.value = value;
-      return option;
-    });
-    $("guide-options").replaceChildren(...options);
-  } catch {
-    /* typing a path still works */
-  }
-  const folders = app.folders.length ? app.folders : (await (await fetch("/api/folders")).json()).folders;
-  $("folder-options").replaceChildren(
-    ...folders.map((f) => {
-      practice.folders.add(f.path);
-      const option = el("option");
-      option.value = f.path;
-      option.label = tx("{0} notas", f.documents);
-      return option;
-    }),
-  );
+function loadScopes() {
+  // where the questions come from: a guide, a book, a chapter, the whole library or a folder (ADR-063)
+  practice.scope = scopePickerCreate($("quiz-scope"), ["guide", "book", "chapter", "library", "folder"]);
 }
 
 function selectedScope() {
-  const kind = document.querySelector('input[name="practice-scope"]:checked').value;
-  const raw = $(`scope-${kind}`).value.trim();
-  if (!raw) throw new Error(tx("Escribe la guía, la carpeta o el tema que quieres practicar."));
-  if (kind === "guide") {
-    const path = practice.guides.get(raw);
-    if (!path) throw new Error(tx("Elige una guía de la lista que aparece al escribir."));
-    return { kind, value: path, label: raw.replace(/ \([^()]*\)$/, "") };
-  }
-  if (kind === "folder") {
-    const folder = raw.replace(/^\/+|\/+$/g, "");
-    if (!practice.folders.has(folder)) throw new Error(tx("Esa carpeta no existe en tu biblioteca."));
-    return { kind, value: folder, label: folder };
-  }
-  return { kind, value: raw, label: raw };
+  const source = practice.scope.get(); // throws the message of what is still to choose
+  const topic = $("scope-topic").value.trim();
+  if (!topic) return { kind: source.kind, value: source.value, label: source.label };
+  // a topic looked for inside the chosen guide, book or chapter, or in the whole library
+  const within = source.kind === "library" ? null : { kind: source.kind, value: source.value };
+  const label = within ? `${topic} · ${source.label}` : topic;
+  return { kind: "topic", value: topic, within, label };
 }
 
 async function renderProgress() {
@@ -181,7 +151,7 @@ async function startQuiz(scope, count, origin = "setup") {
     renderQuiz();
     await streamEvents(
       "/api/practice/start",
-      { scope: { kind: scope.kind, value: scope.value }, count, kinds },
+      { scope: { kind: scope.kind, value: scope.value }, ...(scope.within ? { within: scope.within } : {}), count, kinds },
       (name, data) => {
         if (practice.quiz !== quiz) return;
         if (name === "quiz") {
@@ -671,7 +641,7 @@ function bindPracticar() {
   const openForm = () => {
     showError("hub-error", "");
     showScreen("form");
-    $("scope-guide").focus();
+    document.querySelector("#quiz-scope .scope-tab")?.focus();
   };
   $("tile-quiz").addEventListener("click", openForm);
   $("tile-feynman").addEventListener("click", () => {
@@ -701,11 +671,6 @@ function bindPracticar() {
     }
     startQuiz({ kind: "srs", value: "", label: tx("Repaso de hoy") }, data.today);
   });
-  for (const kind of ["guide", "folder", "topic"]) {
-    $(`scope-${kind}`).addEventListener("focus", () => {
-      document.querySelector(`input[name="practice-scope"][value="${kind}"]`).checked = true;
-    });
-  }
 }
 
 let practicarStarted = false;
@@ -718,14 +683,16 @@ pageHooks.practicar = () => {
   }
   const topic = location.hash.match(/[?&]tema=([^&]*)/); // from Conversar's «Practicar este tema»
   if (topic && (!practice.quiz || $("practice-quiz").hidden)) {
-    document.querySelector('input[name="practice-scope"][value="topic"]').checked = true;
+    practice.scope.reset();
+    practice.scope.set({ kind: "library", value: "", label: SCOPE_LABELS.library });
     $("scope-topic").value = decodeURIComponent(topic[1]);
     showScreen("form");
   }
   const folder = location.hash.match(/[?&]carpeta=([^&]*)/); // from a topic in Biblioteca (ADR-055)
   if (folder && (!practice.quiz || $("practice-quiz").hidden)) {
-    document.querySelector('input[name="practice-scope"][value="folder"]').checked = true;
-    $("scope-folder").value = decodeURIComponent(folder[1]);
+    const path = decodeURIComponent(folder[1]);
+    $("scope-topic").value = "";
+    practice.scope.set({ kind: "folder", value: path, label: path });
     showScreen("form");
   }
   const pending = app.pendingPractice; // from Mapas' «Practicar esto» (ADR-026)

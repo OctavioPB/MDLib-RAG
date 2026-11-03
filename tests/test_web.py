@@ -38,6 +38,7 @@ ASSETS = (
     "theme.js",
     "guias.js",
     "practicar.js",
+    "scope.js",
     "feynman.js",
     "plan.js",
     "reader.js",
@@ -417,10 +418,10 @@ def test_outline_is_streamed_and_saved(
     assert status == 200 and [n for n, _ in events].count("token") == 2
     outline = events[-1][1]
     assert events[-1][0] == "outline" and outline["slug"] == "bayes"
-    assert outline["sections"] == [
-        {"title": "Teorema", "notes": "la fórmula"},
-        {"title": "Aplicaciones", "notes": ""},
-    ]  # the navigation section was dropped
+    titles = [s["title"] for s in outline["sections"]]
+    assert titles[:2] == ["Teorema", "Aplicaciones"]  # the navigation section was dropped
+    assert outline["sections"][0]["notes"] == "la fórmula"
+    assert len(titles) == 5  # …and the series' closing sections were added (ADR-061)
     assert "est/bayes.md" in outline["siblings"]
     _, _, body = request(server, "GET", "/api/drafts")
     listed = json.loads(body)["drafts"]
@@ -433,6 +434,8 @@ def test_draft_is_written_section_by_section(
     server: tuple[str, int], engine: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _llm_on(engine, monkeypatch, "Invierte probabilidades condicionadas [1].")
+    # the test library has no books: its notes are the evidence (ADR-061)
+    engine.config = replace(engine.config, draft=replace(engine.config.draft, evidence="library"))
     sections = [{"title": "Teorema", "notes": "con la fórmula"}, {"title": "  Usos \n "}]
     status, _, raw = request(
         server, "POST", "/api/drafts/write", {"topic": "Bayes", "sections": sections}
@@ -444,7 +447,7 @@ def test_draft_is_written_section_by_section(
     assert [d["title"] for d in done_sections] == ["Teorema", "Usos"]
     assert done_sections[0]["cited"] == [1] and not done_sections[0]["uncited"]
     done = events[-1][1]
-    assert done["markdown"].startswith("# Bayes\n") and "## Usos" in done["markdown"]
+    assert done["markdown"].startswith("# Bayes\n") and "## 2. Usos" in done["markdown"]
     assert done["sources"][0]["number"] == 1 and done["sources"][0]["text"]
     _, _, body = request(server, "GET", "/api/drafts/bayes")
     detail = json.loads(body)
@@ -969,3 +972,27 @@ def test_the_bilingual_search_is_switched_from_ajustes_and_kept(
     assert "bilingual = false" in local.read_text(encoding="utf-8")
     assert local.read_text(encoding="utf-8").count("bilingual") == 1  # replaced, not added
     assert request(server, "POST", "/api/settings/bilingual", {"on": "sí"})[0] == 400
+
+
+def test_a_client_that_hangs_up_is_not_reported_as_a_server_error(
+    server: tuple[str, int], capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A phone that drops its connection used to print a traceback per connection."""
+    from biblio.web.server import _QuietServer
+
+    quiet = object.__new__(_QuietServer)
+    for error in (
+        ConnectionResetError(10054, "reset"),
+        BrokenPipeError(),
+        ConnectionAbortedError(),
+    ):
+        try:
+            raise error
+        except ConnectionError:
+            quiet.handle_error(None, ("192.168.100.15", 63562))
+    assert capsys.readouterr().err == ""
+    try:
+        raise ValueError("a real bug")
+    except ValueError:
+        quiet.handle_error(None, ("127.0.0.1", 1))
+    assert "a real bug" in capsys.readouterr().err

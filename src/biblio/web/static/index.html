@@ -11,6 +11,7 @@
   <script src="/static/i18n.js" defer></script>
   <script src="/static/app.js" defer></script>
   <script src="/static/guias.js" defer></script>
+  <script src="/static/scope.js" defer></script>
   <script src="/static/practicar.js" defer></script>
   <script src="/static/feynman.js" defer></script>
   <script src="/static/plan.js" defer></script>
@@ -753,26 +754,12 @@
 
         <fieldset class="scope-options">
           <legend>De dónde salen las preguntas</legend>
-          <label class="scope-option">
-            <input type="radio" name="practice-scope" value="guide" checked>
-            <span class="scope-name">Una guía</span>
-            <input id="scope-guide" type="text" list="guide-options" maxlength="300"
-              placeholder="Escribe parte del título…" aria-label="Guía">
-          </label>
-          <label class="scope-option">
-            <input type="radio" name="practice-scope" value="folder">
-            <span class="scope-name">Una carpeta del temario</span>
-            <input id="scope-folder" type="text" list="folder-options" maxlength="300"
-              placeholder="p. ej. Data Science/Syllabus/LLMs" aria-label="Carpeta">
-          </label>
-          <label class="scope-option">
-            <input type="radio" name="practice-scope" value="topic">
-            <span class="scope-name">Un tema</span>
+          <div id="quiz-scope" class="scope-picker"></div>
+          <label class="scope-topic">
+            <span>Sobre un tema (opcional)</span>
             <input id="scope-topic" type="text" maxlength="300"
-              placeholder="p. ej. regularización L1 y L2" aria-label="Tema">
+              placeholder="p. ej. regularización L1 y L2; vacío: todo lo elegido" aria-label="Tema">
           </label>
-          <datalist id="guide-options"></datalist>
-          <datalist id="folder-options"></datalist>
         </fieldset>
 
         <fieldset>
@@ -810,6 +797,10 @@
             aria-label="Concepto que vas a explicar">
           <button class="btn-primary btn-big" type="submit">Empezar</button>
         </form>
+        <details id="feynman-scope-box" class="scope-more">
+          <summary>Dónde buscar: <span id="feynman-scope-label">Toda la biblioteca</span></summary>
+          <div id="feynman-scope" class="scope-picker"></div>
+        </details>
         <p id="feynman-error" class="error" hidden></p>
       </section>
     </div>
@@ -835,16 +826,13 @@
 
       <section id="dict-new" class="practice-card dict-new" aria-labelledby="dict-new-title" hidden>
         <h1 id="dict-new-title">Nuevo diccionario</h1>
-        <p class="muted">Los conceptos principales de un tema o de una guía, con una definición breve y la cita
-          de tus notas que la respalda. Si hay código o fórmulas, también sus funciones y fórmulas.</p>
+        <p class="muted">Los conceptos principales de un tema, una guía, un libro o un capítulo, con una definición
+          breve y la cita de tus notas que la respalda. Si hay código o fórmulas, también sus funciones y fórmulas.</p>
         <form id="dict-form" class="dict-form" autocomplete="off">
-          <div class="segmented" role="radiogroup" aria-label="De dónde sale">
-            <label><input type="radio" name="dict-kind" value="topic" checked><span>Un tema</span></label>
-            <label><input type="radio" name="dict-kind" value="guide"><span>Una guía</span></label>
-          </div>
+          <div id="dict-scope" class="scope-picker"></div>
           <div class="feynman-form">
-            <input id="dict-value" type="text" maxlength="300" placeholder="p. ej. regresión logística"
-              aria-label="Tema o guía">
+            <input id="dict-value" type="text" maxlength="300"
+              placeholder="Tema (vacío: todo el libro, capítulo o guía elegido)" aria-label="Tema">
             <button id="dict-create" class="btn-primary" type="submit">Crear diccionario</button>
           </div>
         </form>

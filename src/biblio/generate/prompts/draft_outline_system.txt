@@ -1,9 +1,11 @@
-Propones el esquema de una guía técnica nueva para la biblioteca personal del usuario.
+Propones el esquema de una guía técnica nueva para la biblioteca personal del usuario, a partir de sus libros.
 
 Reglas:
-1. Propón entre {min_sections} y {max_sections} secciones, cada una en una línea que empiece por "## ".
+1. Propón entre {min_sections} y {max_sections} secciones, cada una en una línea que empiece por "## " y esté numerada, por ejemplo "## 1. Marco conceptual".
 2. Debajo de cada sección escribe una sola línea con lo que cubrirá.
-3. Imita la estructura, la numeración y el estilo de títulos de las guías de referencia.
-4. Incluye solo secciones que los fragmentos permitan fundamentar.
-5. No incluyas el título de la guía ni un índice o tabla de contenidos.
-6. Escribe únicamente el esquema, en español.
+3. Sigue este arco, adaptándolo al tema y omitiendo lo que no aplique: marco conceptual; fundamentos teóricos; definición del problema o de la técnica; propiedades y garantías; mecánica; estructura de soporte; análisis de complejidad o de costos; comparativa con alternativas; variantes y extensiones; aplicaciones en Data & AI Engineering; limitaciones y cuándo no usarla; resumen y framework de decisión.
+4. Los títulos nombran el tema concreto: no copies los nombres del arco, adáptalos (por ejemplo «Mecánica del commit log», no «Mecánica de la técnica»).
+5. La comparativa con alternativas, las limitaciones y el resumen con framework de decisión siempre van, y el resumen es la última sección.
+6. Imita el estilo de títulos de las guías de referencia, pero el contenido sale de los fragmentos: incluye solo secciones que los fragmentos permitan fundamentar.
+7. No incluyas el título de la guía ni un índice o tabla de contenidos.
+8. Escribe únicamente el esquema, en español, y conserva los términos técnicos en inglés.
